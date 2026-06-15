@@ -14,7 +14,10 @@ See `Cloud9-OS-Architecture.md` for the full design and build plan.
 | Customers (list + record + activity feed) | 🟢 Done |
 | Notification Center + per-customer thread | 🟢 Done |
 | Purchase Order page (list + detail + lines) | 🟢 Done |
+| Returns view + return-created webhook | 🟢 Built (best-guess shape, refine after live fire) |
+| Picks-completed metric (picks/day on dashboard) | 🟢 Built (best-guess shape) |
 | Webhook capture log (`/api/v1/webhooks/log`) for parser-locking | 🟢 Done |
+| GitHub + Railway deploy | 🟡 Repo committed locally; see `DEPLOY.md` to push + deploy |
 | Webhook pipework (PO created, tracking, shipment, inbound, cancel) | 🟢 Endpoints live (payloads to validate vs real Helm fires) |
 | Helm API client — auth + customer sync | 🟢 Built (Helm `fulfilment_clients` → Cloud9 customers) |
 | Helm dispatch-volume sync — parcels + items/day per customer | 🟢 Built + on the dashboard & customer record |
