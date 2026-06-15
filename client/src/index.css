@@ -1,0 +1,239 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-primary:     #F1F5F9;   /* deeper warm beige — page background */
+  --bg-secondary:   #FFFFFF;   /* white — cards */
+  --bg-surface:     #F1F5F9;   /* same as primary */
+  --accent-green:   #00C853;   /* brand green — keep for status indicators */
+  --accent-purple:  #7B2FBE;
+  --accent-magenta: #E91E8C;
+  --accent-amber:   #F59E0B;
+  --accent-teal:    #00BCD4;
+  --text-primary:   #0F172A;
+  --text-secondary: #334155;
+  --text-muted:     #94A3B8;
+  --border-subtle:  rgba(0,0,0,0.06);
+  --border-medium:  rgba(0,0,0,0.10);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  overflow: hidden;
+  height: 100%;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.12); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.20); }
+
+/* ── Card ────────────────────────────────────────────────────────────────────── */
+/* Clean white card — no green border, no shadow */
+.moov-card {
+  background: #FFFFFF;
+  border-radius: 12px;
+  border: 0.5px solid rgba(0,0,0,0.08);
+}
+
+/* ── Table ───────────────────────────────────────────────────────────────────── */
+.moov-table { width: 100%; border-collapse: collapse; }
+
+.moov-table thead tr {
+  background: #F1F5F9;
+  border-bottom: 0.5px solid rgba(0,0,0,0.08);
+}
+.moov-table thead th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.moov-table tbody tr {
+  border-bottom: 0.5px solid rgba(0,0,0,0.05);
+  transition: background 0.08s;
+}
+.moov-table tbody tr:hover { background: rgba(0,0,0,0.02); cursor: pointer; }
+.moov-table tbody td { padding: 12px 16px; font-size: 13px; color: var(--text-primary); }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────────── */
+.btn-primary {
+  background: #0F172A;
+  color: #FFFFFF;
+  font-weight: 500;
+  border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  transition: opacity 0.12s;
+}
+.btn-primary:hover { opacity: 0.82; }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 400;
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  border: 0.5px solid rgba(0,0,0,0.14);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  transition: background 0.1s;
+}
+.btn-ghost:hover { background: rgba(0,0,0,0.04); }
+
+.btn-danger {
+  background: #991B1B;
+  color: #FFFFFF;
+  font-weight: 500;
+  border-radius: 8px;
+  padding: 7px 16px;
+  font-size: 13px;
+  border: none;
+  cursor: pointer;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-danger:hover { opacity: 0.85; }
+
+/* ── Status badge ────────────────────────────────────────────────────────────── */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* ── Form elements ───────────────────────────────────────────────────────────── */
+/* Rectangular inputs — no more pill shape */
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  background: #FFFFFF;
+  border: 0.5px solid rgba(0,0,0,0.12);
+  border-radius: 8px;
+  color: var(--text-primary);
+  outline: none;
+  font-family: inherit;
+  font-size: 13px;
+}
+input:not([type="checkbox"]):not([type="radio"])::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
+}
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  border-color: rgba(0,0,0,0.28);
+}
+textarea {
+  border-radius: 8px;
+}
+
+/* Option elements */
+option {
+  background: #FFFFFF;
+  color: var(--text-primary);
+}
+
+/* ── Search / pill input wrap ────────────────────────────────────────────────── */
+/* Kept for backward compat — now rectangular not pill */
+.pill-input-wrap {
+  display: flex;
+  align-items: center;
+  background: #FFFFFF;
+  border-radius: 8px;
+  border: 0.5px solid rgba(0,0,0,0.12);
+  overflow: hidden;
+  transition: border-color 0.12s;
+}
+.pill-input-wrap:focus-within { border-color: rgba(0,0,0,0.28); }
+.pill-input-wrap input,
+.pill-input-wrap select {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  outline: none;
+  color: var(--text-primary);
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.pill-input-wrap input::placeholder { color: var(--text-muted); }
+.pill-input-wrap input:focus,
+.pill-input-wrap select:focus {
+  border-color: transparent;
+}
+.pill-input-wrap .green-cap {
+  background: #0F172A;
+  color: #FFFFFF;
+  padding: 0 14px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  min-height: 36px;
+}
+
+/* ── Pill-select (standalone) ────────────────────────────────────────────────── */
+.pill-select {
+  background: #FFFFFF !important;
+  border: 0.5px solid rgba(0,0,0,0.12) !important;
+  border-radius: 8px !important;
+  color: var(--text-primary) !important;
+  padding: 7px 12px !important;
+  height: 36px;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-block;
+  vertical-align: middle;
+  font-family: inherit;
+}
+.pill-select:focus { border-color: rgba(0,0,0,0.28) !important; }
+
+/* ── Calendar / time picker ──────────────────────────────────────────────────── */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: none;
+  opacity: 0.4;
+  cursor: pointer;
+}
+
+/* ── Focus ring ──────────────────────────────────────────────────────────────── */
+.focus-green:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.12);
+}

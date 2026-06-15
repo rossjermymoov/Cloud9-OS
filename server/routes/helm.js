@@ -1,0 +1,123 @@
+/**
+ * Cloud9 OS — Helm sync API
+ *
+ * GET  /api/helm/status          — is Helm configured? + live auth check
+ * POST /api/helm/sync/customers  — pull fulfilment clients from Helm and upsert
+ *                                  as Cloud9 customers (matched on helm_customer_id).
+ */
+
+import express from 'express';
+import { query } from '../db/index.js';
+import {
+  fetchFulfilmentClients, helmConfigured, verify, fetchDispatchedOrders,
+} from '../services/helmClient.js';
+import { normaliseOrder, upsertOrder } from '../services/volumeService.js';
+
+const router = express.Router();
+
+router.get('/status', async (_req, res) => {
+  if (!helmConfigured()) return res.json({ configured: false });
+  try {
+    const me = await verify();
+    res.json({ configured: true, authenticated: true, user: me });
+  } catch (err) {
+    res.json({ configured: true, authenticated: false, error: err.message });
+  }
+});
+
+router.post('/sync/customers', async (_req, res, next) => {
+  try {
+    if (!helmConfigured()) {
+      return res.status(503).json({ error: 'Helm API not configured — set HELM_API_BASE / HELM_EMAIL / HELM_PASSWORD in server/.env' });
+    }
+
+    const clients = await fetchFulfilmentClients();
+    let inserted = 0, updated = 0;
+
+    for (const c of clients) {
+      if (!c.helm_customer_id) continue;
+      const r = await query(`
+        INSERT INTO customers
+          (business_name, helm_customer_id, helm_accounts_id, primary_email, accounts_email, phone_number, account_status)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::account_status)
+        ON CONFLICT (helm_customer_id) DO UPDATE SET
+          business_name  = EXCLUDED.business_name,
+          helm_accounts_id = EXCLUDED.helm_accounts_id,
+          primary_email  = EXCLUDED.primary_email,
+          accounts_email = EXCLUDED.accounts_email,
+          phone_number   = EXCLUDED.phone_number,
+          updated_at     = NOW()
+        RETURNING (xmax = 0) AS was_insert
+      `, [c.business_name, c.helm_customer_id, c.helm_accounts_id, c.primary_email, c.accounts_email, c.phone_number, c.account_status]);
+      if (r.rows[0]?.was_insert) inserted++; else updated++;
+    }
+
+    await query(
+      `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('customers','ok',$1,$2)`,
+      [clients.length, `${inserted} inserted, ${updated} updated`]
+    );
+    res.json({ ok: true, total: clients.length, inserted, updated });
+  } catch (err) {
+    await query(
+      `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('customers','error',0,$1)`,
+      [err.message]
+    ).catch(() => {});
+    next(err);
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/helm/sync/volume?days=30
+// Pull despatched orders per customer and upsert daily parcels + items into
+// customer_volume_snapshots. Run customer sync first so customers carry
+// helm_customer_id (= Helm fulfilment_client id).
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/sync/volume', async (req, res, next) => {
+  try {
+    if (!helmConfigured()) {
+      return res.status(503).json({ error: 'Helm API not configured — set HELM_API_BASE / HELM_EMAIL / HELM_PASSWORD in server/.env' });
+    }
+
+    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
+    const to   = new Date();
+    const from = new Date(Date.now() - (days - 1) * 86400000);
+
+    const { rows: customers } = await query(
+      `SELECT id, helm_customer_id FROM customers WHERE helm_customer_id IS NOT NULL`
+    );
+    if (!customers.length) {
+      return res.status(409).json({ error: 'No customers with a Helm id — run POST /api/helm/sync/customers first.' });
+    }
+
+    let customersProcessed = 0, ordersWritten = 0;
+
+    // Backfill: upsert each despatched order into the orders table. Parcel counts
+    // come from the order's shipment data where present; webhooks (order-created /
+    // order-updated) are the authoritative source and will correct any estimates.
+    // parcelFloor:1 ensures a despatched order counts as at least one parcel when
+    // the pull response carries no parcel detail.
+    for (const c of customers) {
+      const orders = await fetchDispatchedOrders({ helmClientId: c.helm_customer_id, from, to });
+      for (const raw of orders) {
+        const n = normaliseOrder(raw, { helmClientId: c.helm_customer_id, parcelFloor: 1 });
+        await upsertOrder(n);
+        ordersWritten++;
+      }
+      customersProcessed++;
+    }
+
+    await query(
+      `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('volume','ok',$1,$2)`,
+      [ordersWritten, `${customersProcessed} customers, ${ordersWritten} orders over ${days}d`]
+    );
+    res.json({ ok: true, days, customers: customersProcessed, orders: ordersWritten });
+  } catch (err) {
+    await query(
+      `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('volume','error',0,$1)`,
+      [err.message]
+    ).catch(() => {});
+    next(err);
+  }
+});
+
+export default router;
