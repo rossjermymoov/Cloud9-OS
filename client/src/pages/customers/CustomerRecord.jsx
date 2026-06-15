@@ -45,7 +45,7 @@ export default function CustomerRecord() {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0F172A', margin: 0 }}>{c.business_name}</h1>
-        <span style={{ fontSize: 12, color: '#64748B', background: '#F1F5F9', borderRadius: 6, padding: '3px 8px' }}>{c.account_number}</span>
+        <span style={{ fontSize: 12, color: '#64748B', background: '#F1F5F9', borderRadius: 6, padding: '3px 8px' }}>{c.helm_accounts_id || c.account_number}</span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#334155' }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: RAG[c.health_score] }} />
           {HEALTH[c.health_score]}
@@ -66,7 +66,8 @@ export default function CustomerRecord() {
           <Field label="Outstanding balance" value={`£${Number(c.outstanding_balance || 0).toLocaleString()}`} />
           <Field label="Payment terms" value={`${c.payment_terms_days} days`} />
           <Field label="Billing cycle" value={c.billing_cycle} />
-          <Field label="Helm customer ID" value={c.helm_customer_id} />
+          <Field label="Account ID (Helm / Xero)" value={c.helm_accounts_id} />
+          <Field label="Helm client ID" value={c.helm_customer_id} />
         </Card>
 
         {/* Dispatch volume */}

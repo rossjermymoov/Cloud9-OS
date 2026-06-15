@@ -115,6 +115,11 @@ export async function fetchFulfilmentClients() {
   return list.map(mapFulfilmentClient);
 }
 
+// Raw, unmapped fulfilment-client response (for inspecting Helm's real fields).
+export async function rawFulfilmentClients(page = 1) {
+  return authedGet('/fulfilment_clients', { page });
+}
+
 // ─── Purchase orders (pull side — webhooks are the primary path) ─────────────
 export async function fetchPurchaseOrders() {
   return fetchAllPages('/purchase_orders');

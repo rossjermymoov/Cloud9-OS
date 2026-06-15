@@ -34,7 +34,8 @@ router.get('/', async (req, res, next) => {
 
     const [rows, countResult] = await Promise.all([
       query(`
-        SELECT c.id, c.account_number, c.business_name, c.primary_email, c.phone_number,
+        SELECT c.id, c.account_number, c.helm_accounts_id, c.helm_customer_id,
+               c.business_name, c.primary_email, c.accounts_email, c.phone_number,
                c.postcode, c.city, c.county, c.country, c.tier, c.account_status,
                c.health_score, c.is_on_stop, c.outstanding_balance, c.credit_limit,
                c.billing_cycle, c.payment_terms_days, c.date_onboarded,

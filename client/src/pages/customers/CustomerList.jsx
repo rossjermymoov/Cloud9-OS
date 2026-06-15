@@ -36,7 +36,7 @@ export default function CustomerList() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ background: '#F8FAFC', color: '#64748B', textAlign: 'left' }}>
-              <th style={th}>Business</th><th style={th}>Account</th><th style={th}>Tier</th>
+              <th style={th}>Fulfilment Client</th><th style={th}>Account</th><th style={th}>Tier</th>
               <th style={th}>Status</th><th style={th}>Health</th><th style={th}>Postcode</th>
             </tr>
           </thead>
@@ -51,7 +51,7 @@ export default function CustomerList() {
                 onMouseEnter={e => e.currentTarget.style.background = '#F8FAFC'}
                 onMouseLeave={e => e.currentTarget.style.background = '#fff'}>
                 <td style={{ ...td, fontWeight: 600, color: '#0F172A' }}>{c.business_name}</td>
-                <td style={td}>{c.account_number}</td>
+                <td style={td}>{c.helm_accounts_id || c.account_number}</td>
                 <td style={{ ...td, textTransform: 'capitalize' }}>{c.tier}</td>
                 <td style={td}>
                   <span style={{ color: STATUS[c.account_status] || '#64748B', textTransform: 'capitalize', fontWeight: 600 }}>

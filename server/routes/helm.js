@@ -9,7 +9,7 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import {
-  fetchFulfilmentClients, helmConfigured, verify, fetchDispatchedOrders,
+  fetchFulfilmentClients, helmConfigured, verify, fetchDispatchedOrders, rawFulfilmentClients,
 } from '../services/helmClient.js';
 import { normaliseOrder, upsertOrder } from '../services/volumeService.js';
 
@@ -23,6 +23,17 @@ router.get('/status', async (_req, res) => {
   } catch (err) {
     res.json({ configured: true, authenticated: false, error: err.message });
   }
+});
+
+// GET /api/helm/raw/fulfilment-clients?limit=1 — inspect a real Helm payload.
+router.get('/raw/fulfilment-clients', async (req, res, next) => {
+  try {
+    if (!helmConfigured()) return res.status(503).json({ error: 'Helm API not configured' });
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 1, 1), 10);
+    const data = await rawFulfilmentClients(1);
+    const sample = Array.isArray(data?.data) ? data.data.slice(0, limit) : data;
+    res.json({ count: data?.total ?? (Array.isArray(sample) ? sample.length : 1), sample });
+  } catch (err) { next(err); }
 });
 
 router.post('/sync/customers', async (_req, res, next) => {
