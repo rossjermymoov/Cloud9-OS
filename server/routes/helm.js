@@ -226,22 +226,24 @@ router.post('/sync/purchase-orders', async (_req, res, next) => {
 
             const ins = await query(`
               INSERT INTO purchase_orders
-                (helm_po_id, po_number, customer_id, customer_name, status, expected_date, total_lines, total_units, raw_payload)
-              VALUES ($1,$2,$3,$4,$5::po_status,$6,$7,$8,$9)
+                (helm_po_id, po_number, customer_id, customer_name, status, helm_status_id, expected_date, total_lines, total_units, raw_payload)
+              VALUES ($1,$2,$3,$4,$5::po_status,$6,$7,$8,$9,$10)
               ON CONFLICT (helm_po_id) DO UPDATE SET
-                po_number     = EXCLUDED.po_number,
-                customer_id   = COALESCE(EXCLUDED.customer_id, purchase_orders.customer_id),
-                customer_name = COALESCE(EXCLUDED.customer_name, purchase_orders.customer_name),
-                status        = EXCLUDED.status,
-                expected_date = EXCLUDED.expected_date,
-                total_lines   = EXCLUDED.total_lines,
-                total_units   = EXCLUDED.total_units,
-                raw_payload   = EXCLUDED.raw_payload,
-                updated_at    = NOW()
+                po_number      = EXCLUDED.po_number,
+                customer_id    = COALESCE(EXCLUDED.customer_id, purchase_orders.customer_id),
+                customer_name  = COALESCE(EXCLUDED.customer_name, purchase_orders.customer_name),
+                status         = EXCLUDED.status,
+                helm_status_id = EXCLUDED.helm_status_id,
+                expected_date  = EXCLUDED.expected_date,
+                total_lines    = EXCLUDED.total_lines,
+                total_units    = EXCLUDED.total_units,
+                raw_payload    = EXCLUDED.raw_payload,
+                updated_at     = NOW()
               RETURNING id
             `, [
               String(po.id), (po.purchase_order_id || '').slice(0, 80) || null, customerId, customerName,
-              status, po.expected_delivery_date || null, lines.length, totalUnits, JSON.stringify(po).slice(0, 200000),
+              status, po.status_id != null ? parseInt(po.status_id) : null, po.expected_delivery_date || null,
+              lines.length, totalUnits, JSON.stringify(po).slice(0, 200000),
             ]);
             const poId = ins.rows[0].id;
             await query(`DELETE FROM purchase_order_lines WHERE po_id = $1`, [poId]);

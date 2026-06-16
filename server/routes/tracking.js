@@ -29,7 +29,7 @@ router.post('/webhook', async (req, res, next) => {
 // ─── GET /api/tracking/stats ─────────────────────────────────────────────────
 router.get('/stats', async (req, res, next) => {
   try {
-    const [counts, delivered_today, by_courier, by_customer] = await Promise.all([
+    const [counts, delivered_today, by_courier, by_customer, pending_by_courier] = await Promise.all([
       query(`SELECT status, COUNT(*)::int AS count FROM parcels GROUP BY status`),
       query(`SELECT COUNT(*)::int AS count FROM parcels
              WHERE status = 'delivered' AND last_event_at >= CURRENT_DATE
@@ -41,6 +41,9 @@ router.get('/stats', async (req, res, next) => {
              FROM parcels p
              WHERE p.customer_id IS NOT NULL AND p.customer_name IS NOT NULL
              ORDER BY p.customer_id, p.customer_name`),
+      query(`SELECT courier_name, courier_code, COUNT(*)::int AS count FROM parcels
+             WHERE status = 'booked' AND courier_name IS NOT NULL
+             GROUP BY courier_name, courier_code ORDER BY count DESC`),
     ]);
 
     const statusMap = {};
@@ -54,6 +57,7 @@ router.get('/stats', async (req, res, next) => {
         .reduce((a,[,c]) => a + c, 0),
       by_courier:      by_courier.rows,
       by_customer:     by_customer.rows,
+      pending_by_courier: pending_by_courier.rows,
     });
   } catch (err) { next(err); }
 });

@@ -1,9 +1,16 @@
 /**
  * Cloud9 OS — Purchase Orders API
  *
- * GET /api/purchase-orders             — list (filters: status, customer_id, search)
- * GET /api/purchase-orders/stats       — counts by status
- * GET /api/purchase-orders/:id         — PO detail + lines
+ * Operational views driven by Helm's status_id:
+ *   inbound     → Submitted (13) + Partially Completed (14)
+ *   exceptions  → On Hold (12) OR overdue (expected_date passed, still inbound)
+ *   historical  → Draft (11), Completed (15), Cancelled (16), Archived (25)
+ *
+ * POs belonging to deactivated customers (account_status != 'active') are hidden.
+ *
+ * GET /api/purchase-orders?view=inbound        — list
+ * GET /api/purchase-orders/stats               — KPI counts
+ * GET /api/purchase-orders/:id                 — detail + lines
  */
 
 import express from 'express';
@@ -11,33 +18,53 @@ import { query } from '../db/index.js';
 
 const router = express.Router();
 
+// Effective Helm status id (falls back to the coarse status enum pre-resync).
+const EFF = `COALESCE(po.helm_status_id, CASE po.status
+  WHEN 'open' THEN 13 WHEN 'partially_received' THEN 14
+  WHEN 'received' THEN 15 WHEN 'cancelled' THEN 16 ELSE 11 END)`;
+
+// Hide POs whose linked customer is deactivated (only active clients shown).
+const ACTIVE_ONLY = `(po.customer_id IS NULL OR c.account_status = 'active')`;
+
+function viewClause(view) {
+  switch (view) {
+    case 'exceptions':
+      return `(${EFF} = 12 OR (${EFF} IN (13,14) AND po.expected_date IS NOT NULL AND po.expected_date < CURRENT_DATE))`;
+    case 'historical':
+      return `${EFF} IN (11,15,16,25)`;
+    case 'inbound':
+    default:
+      return `${EFF} IN (13,14)`;
+  }
+}
+
 router.get('/', async (req, res, next) => {
   try {
-    const { status, customer_id, search, limit = 50, offset = 0 } = req.query;
-    const conditions = [];
+    const view = ['inbound', 'exceptions', 'historical'].includes(req.query.view) ? req.query.view : 'inbound';
+    const { customer_id, search, limit = 500, offset = 0 } = req.query;
+
+    const conditions = [ACTIVE_ONLY, viewClause(view)];
     const values = [];
     let idx = 1;
-
-    if (status)      { conditions.push(`po.status = $${idx++}::po_status`); values.push(status); }
-    if (customer_id) { conditions.push(`po.customer_id = $${idx++}`);        values.push(customer_id); }
-    if (search) {
-      conditions.push(`(po.po_number ILIKE $${idx} OR po.customer_name ILIKE $${idx})`);
-      values.push(`%${search}%`); idx++;
-    }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    if (customer_id) { conditions.push(`po.customer_id = $${idx++}`); values.push(customer_id); }
+    if (search) { conditions.push(`(po.po_number ILIKE $${idx} OR po.customer_name ILIKE $${idx})`); values.push(`%${search}%`); idx++; }
+    const where = `WHERE ${conditions.join(' AND ')}`;
 
     const [dataRes, countRes] = await Promise.all([
       query(`
         SELECT po.id, po.po_number, po.customer_id, po.customer_name, po.status,
-               po.expected_date, po.total_lines, po.total_units, po.created_at
-        FROM purchase_orders po ${where}
-        ORDER BY po.created_at DESC
+               ${EFF} AS eff_status, po.expected_date, po.total_lines, po.total_units, po.created_at,
+               (po.expected_date IS NOT NULL AND po.expected_date < CURRENT_DATE AND ${EFF} IN (13,14)) AS overdue
+        FROM purchase_orders po
+        LEFT JOIN customers c ON c.id = po.customer_id
+        ${where}
+        ORDER BY po.expected_date ASC NULLS LAST, po.created_at DESC
         LIMIT $${idx} OFFSET $${idx + 1}
       `, [...values, parseInt(limit), parseInt(offset)]),
-      query(`SELECT COUNT(*)::int AS total FROM purchase_orders po ${where}`, values),
+      query(`SELECT COUNT(*)::int AS total FROM purchase_orders po LEFT JOIN customers c ON c.id = po.customer_id ${where}`, values),
     ]);
 
-    res.json({ purchase_orders: dataRes.rows, total: countRes.rows[0].total });
+    res.json({ view, purchase_orders: dataRes.rows, total: countRes.rows[0].total });
   } catch (err) { next(err); }
 });
 
@@ -45,11 +72,14 @@ router.get('/stats', async (_req, res, next) => {
   try {
     const { rows } = await query(`
       SELECT
-        COUNT(*) FILTER (WHERE status = 'open')::int               AS open,
-        COUNT(*) FILTER (WHERE status = 'partially_received')::int AS partially_received,
-        COUNT(*) FILTER (WHERE status = 'received')::int           AS received,
-        COUNT(*)::int                                              AS total
-      FROM purchase_orders
+        COUNT(*) FILTER (WHERE ${EFF} = 13)::int                                                              AS submitted,
+        COUNT(*) FILTER (WHERE ${EFF} = 14)::int                                                              AS partially_received,
+        COUNT(*) FILTER (WHERE ${EFF} = 12
+          OR (${EFF} IN (13,14) AND po.expected_date IS NOT NULL AND po.expected_date < CURRENT_DATE))::int   AS exceptions,
+        COUNT(*) FILTER (WHERE ${EFF} IN (11,15,16,25))::int                                                  AS historical
+      FROM purchase_orders po
+      LEFT JOIN customers c ON c.id = po.customer_id
+      WHERE ${ACTIVE_ONLY}
     `);
     res.json(rows[0]);
   } catch (err) { next(err); }
@@ -65,7 +95,6 @@ router.get('/:id', async (req, res, next) => {
     if (!poRes.rows.length) return res.status(404).json({ error: 'Purchase order not found' });
     const po = poRes.rows[0];
 
-    // Fall back to the lines stored in the raw Helm payload if the line table is empty.
     let lines = linesRes.rows;
     if (lines.length === 0 && po.raw_payload && Array.isArray(po.raw_payload.inventory)) {
       lines = po.raw_payload.inventory.map(l => ({
@@ -73,7 +102,7 @@ router.get('/:id', async (req, res, next) => {
         qty_ordered: parseInt(l.quantity) || 0, qty_received: parseInt(l.delivered_quantity) || 0,
       }));
     }
-    delete po.raw_payload; // keep the response light
+    delete po.raw_payload;
     res.json({ ...po, lines });
   } catch (err) { next(err); }
 });

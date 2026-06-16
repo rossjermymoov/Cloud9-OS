@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   Truck, Boxes, Send, Hand, PackageOpen, RefreshCw, Database,
-  TrendingUp, TrendingDown, Minus, Trophy,
+  TrendingUp, TrendingDown, Minus, Trophy, Info,
 } from 'lucide-react';
 import api from '../api/client';
 import { listNotifications } from '../api/notifications';
@@ -91,8 +91,8 @@ function StatCard({ Icon, label, value, color, pill }) {
 }
 
 // Flexible trend chart — dual line (current vs previous) or monthly bars.
-const PREV_LABEL = { week: 'Last week', month: 'Last month', quarter: 'Prev quarter' };
-const CUR_LABEL  = { week: 'This week', month: 'This month', quarter: 'This quarter' };
+const PREV_LABEL = { day: 'Yesterday', week: 'Last week', month: 'Last month', quarter: 'Prev quarter' };
+const CUR_LABEL  = { day: 'Today', week: 'This week', month: 'This month', quarter: 'This quarter' };
 function TrendChart({ trend, metric }) {
   if (!trend) return null;
   const n = trend.labels.length;
@@ -156,6 +156,35 @@ function Seg({ options, value, onChange }) {
   );
 }
 
+// Pending dispatch — value + a mini per-carrier breakdown showing the bottleneck.
+function PendingCard({ total, byCourier }) {
+  return (
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 116 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, background: '#F59E0B1a', color: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <PackageOpen size={17} strokeWidth={1.9} />
+        </div>
+        <span style={{ fontSize: 12.5, color: MUTED, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          Pending dispatch
+          <span title="Parcels packed and manifested, awaiting carrier collection scan." style={{ display: 'inline-flex', cursor: 'help' }}>
+            <Info size={13} color="#94A3B8" />
+          </span>
+        </span>
+      </div>
+      <div style={{ fontSize: 30, fontWeight: 800, color: HEADER, lineHeight: 1, letterSpacing: -0.8 }}>{(total || 0).toLocaleString()}</div>
+      <div style={{ marginTop: 'auto', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {(byCourier && byCourier.length > 0)
+          ? byCourier.slice(0, 5).map((c, i) => (
+              <span key={i} style={{ fontSize: 11, fontWeight: 600, color: '#475569', background: '#F1F5F9', borderRadius: 6, padding: '2px 8px' }}>
+                {(c.courier_name || c.courier_code || '—')}: {c.count}
+              </span>
+            ))
+          : <span style={{ fontSize: 11, color: '#94A3B8' }}>No pending parcels</span>}
+      </div>
+    </Card>
+  );
+}
+
 function Leaderboard({ data, metric, sort, setSort, navigate }) {
   const rows = data?.rows || [];
   const unit = metric === 'items' ? 'items' : 'parcels';
@@ -208,7 +237,7 @@ export default function Dashboard() {
   const qc = useQueryClient();
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
-  const [period, setPeriod] = useState('week');
+  const [period, setPeriod] = useState('day');
   const [metric, setMetric] = useState('parcels');
   const [boardSort, setBoardSort] = useState('volume');
 
@@ -226,6 +255,8 @@ export default function Dashboard() {
     : [...(trend.current || []), ...(trend.previous || [])].some(d => d && (d.parcels > 0 || d.items > 0)));
   const cur = trend?.totals?.current  || { parcels: 0, items: 0, picks: 0 };
   const prv = trend?.totals?.previous || { parcels: 0, items: 0, picks: 0 };
+  const periodNoun = period === 'day' ? 'today' : `this ${period}`;
+  const vsNoun     = period === 'day' ? 'yesterday' : `last ${period}`;
   const tc = cur[metric] ?? 0;
   const tp = prv[metric] ?? 0;
   const trendPct = tp > 0 ? Math.round(((tc - tp) / tp) * 1000) / 10 : (tc > 0 ? null : 0);
@@ -256,21 +287,20 @@ export default function Dashboard() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Seg value={metric} onChange={setMetric} options={[{ v: 'parcels', l: 'Parcels' }, { v: 'items', l: 'Items' }]} />
-          <Seg value={period} onChange={setPeriod} options={[{ v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }]} />
+          <Seg value={period} onChange={setPeriod} options={[{ v: 'day', l: 'Day' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }]} />
         </div>
       </div>
 
       <div className="c9-rows">
         {/* ROW 1 — stats */}
         <div className="c9-r1">
-          <StatCard Icon={Send}  label={`Parcels this ${period}`} value={cur.parcels.toLocaleString()} color={ACCENT}
-            pill={pctPill(cur.parcels, prv.parcels, `last ${period}`)} />
-          <StatCard Icon={Boxes} label={`Items this ${period}`} value={cur.items.toLocaleString()} color="#7B2FBE"
-            pill={pctPill(cur.items, prv.items, `last ${period}`)} />
-          <StatCard Icon={Hand}  label={`Picks this ${period}`} value={cur.picks.toLocaleString()} color="#00BCD4"
-            pill={pctPill(cur.picks, prv.picks, `last ${period}`)} />
-          <StatCard Icon={PackageOpen} label="Pending dispatch" value={pending} color="#F59E0B"
-            pill={{ text: 'packed · awaiting carrier', tone: 'grey' }} />
+          <StatCard Icon={Send}  label={`Parcels ${periodNoun}`} value={cur.parcels.toLocaleString()} color={ACCENT}
+            pill={pctPill(cur.parcels, prv.parcels, vsNoun)} />
+          <StatCard Icon={Boxes} label={`Items ${periodNoun}`} value={cur.items.toLocaleString()} color="#7B2FBE"
+            pill={pctPill(cur.items, prv.items, vsNoun)} />
+          <StatCard Icon={Hand}  label={`Picks ${periodNoun}`} value={cur.picks.toLocaleString()} color="#00BCD4"
+            pill={pctPill(cur.picks, prv.picks, vsNoun)} />
+          <PendingCard total={pending} byCourier={stats?.pending_by_courier} />
         </div>
 
         {/* ROW 2 — analytics 60 / 40 */}
