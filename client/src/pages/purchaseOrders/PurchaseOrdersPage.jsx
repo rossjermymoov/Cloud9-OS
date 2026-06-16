@@ -69,10 +69,12 @@ function PoDrawer({ id, onClose }) {
   );
 }
 
+const INCOMING = new Set(['open', 'partially_received']);
 function CalendarView({ rows, onOpen }) {
   const [month, setMonth] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
   const byDate = {};
-  for (const po of rows) { if (po.expected_date) { const k = String(po.expected_date).slice(0, 10); (byDate[k] ||= []).push(po); } }
+  // Only show what's still coming into the warehouse — open / partially received.
+  for (const po of rows) { if (po.expected_date && INCOMING.has(po.status)) { const k = String(po.expected_date).slice(0, 10); (byDate[k] ||= []).push(po); } }
 
   const first = new Date(month.getFullYear(), month.getMonth(), 1);
   const startDow = (first.getDay() + 6) % 7;

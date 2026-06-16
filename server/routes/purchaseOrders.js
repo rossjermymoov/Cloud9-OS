@@ -63,7 +63,18 @@ router.get('/:id', async (req, res, next) => {
              FROM purchase_order_lines WHERE po_id = $1 ORDER BY created_at`, [req.params.id]),
     ]);
     if (!poRes.rows.length) return res.status(404).json({ error: 'Purchase order not found' });
-    res.json({ ...poRes.rows[0], lines: linesRes.rows });
+    const po = poRes.rows[0];
+
+    // Fall back to the lines stored in the raw Helm payload if the line table is empty.
+    let lines = linesRes.rows;
+    if (lines.length === 0 && po.raw_payload && Array.isArray(po.raw_payload.inventory)) {
+      lines = po.raw_payload.inventory.map(l => ({
+        id: l.id, sku: l.sku || null, description: l.name || null,
+        qty_ordered: parseInt(l.quantity) || 0, qty_received: parseInt(l.delivered_quantity) || 0,
+      }));
+    }
+    delete po.raw_payload; // keep the response light
+    res.json({ ...po, lines });
   } catch (err) { next(err); }
 });
 
