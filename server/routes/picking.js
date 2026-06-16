@@ -50,9 +50,21 @@ function rangeFor(periodRaw, dateRaw) {
   return { period, from: isoDay(from), to: isoDay(to) };
 }
 
-// Per-pick time basis (ms): prefer active handling time, fall back to elapsed.
-const TIME_BASIS = `COALESCE(NULLIF(handling_ms,0), NULLIF(elapsed_ms,0), 0)`;
+// Per-pick time basis (ms): prefer wall-clock elapsed (start→completion), fall
+// back to summed handling time. Wall-clock is the truer "how long did it take".
+const TIME_BASIS = `COALESCE(NULLIF(elapsed_ms,0), NULLIF(handling_ms,0), 0)`;
 const COMPLETED = `status = 1 AND pick_date IS NOT NULL`;
+
+// Throughput is only trustworthy when EVERY pick in the set has timing data —
+// otherwise we'd divide all the items by only some of the time (the bug that
+// produced "185,000 items/hour"). Returns a sane number or null.
+function safeItemsPerHour({ picks, timedPicks, timedItems, totalMs }) {
+  if (!timedPicks || timedPicks < picks) return null;   // incomplete timing → don't show
+  const hours = Number(totalMs) / 3600000;
+  if (hours <= 0) return null;
+  const rate = Math.round(Number(timedItems) / hours);
+  return rate > 0 && rate < 100000 ? rate : null;        // final sanity clamp
+}
 
 router.get('/status', (_req, res) => res.json({ configured: helmConfigured() }));
 
@@ -61,24 +73,26 @@ router.get('/summary', async (req, res, next) => {
     const { period, from, to } = rangeFor(req.query.period, req.query.date);
     const { rows } = await query(`
       SELECT
-        COUNT(*)::int                                   AS picks,
-        COALESCE(SUM(item_count),0)::int                AS items,
-        COALESCE(SUM(order_count),0)::int               AS orders,
-        COALESCE(SUM(${TIME_BASIS}),0)::bigint          AS total_ms,
-        COUNT(*) FILTER (WHERE ${TIME_BASIS} > 0)::int  AS timed_picks
+        COUNT(*)::int                                              AS picks,
+        COALESCE(SUM(item_count),0)::int                           AS items,
+        COALESCE(SUM(order_count),0)::int                          AS orders,
+        COALESCE(SUM(${TIME_BASIS}),0)::bigint                     AS total_ms,
+        COUNT(*) FILTER (WHERE ${TIME_BASIS} > 0)::int             AS timed_picks,
+        COALESCE(SUM(item_count) FILTER (WHERE ${TIME_BASIS} > 0),0)::int AS timed_items
       FROM picks
       WHERE ${COMPLETED} AND pick_date >= $1 AND pick_date <= $2
     `, [from, to]);
     const r = rows[0];
-    const hours = r.total_ms / 3600000;
     res.json({
       period, from, to,
       picks: r.picks,
       items: r.items,
       orders: r.orders,
       avg_items_per_pick: r.picks ? +(r.items / r.picks).toFixed(1) : 0,
-      avg_secs_per_pick:  r.timed_picks ? Math.round((r.total_ms / r.timed_picks) / 1000) : null,
-      items_per_hour:     hours > 0 ? Math.round(r.items / hours) : null,
+      avg_secs_per_pick:  r.timed_picks ? Math.round((Number(r.total_ms) / r.timed_picks) / 1000) : null,
+      items_per_hour:     safeItemsPerHour({ picks: r.picks, timedPicks: r.timed_picks, timedItems: r.timed_items, totalMs: r.total_ms }),
+      timed_picks: r.timed_picks,          // how many picks had usable timing
+      timing_complete: r.picks > 0 && r.timed_picks >= r.picks,
     });
   } catch (err) { next(err); }
 });
@@ -109,27 +123,76 @@ router.get('/leaderboard', async (req, res, next) => {
         COALESCE(SUM(item_count),0)::int                AS items,
         COALESCE(SUM(order_count),0)::int               AS orders,
         COALESCE(SUM(${TIME_BASIS}),0)::bigint          AS total_ms,
-        COUNT(*) FILTER (WHERE ${TIME_BASIS} > 0)::int  AS timed_picks
+        COUNT(*) FILTER (WHERE ${TIME_BASIS} > 0)::int  AS timed_picks,
+        COALESCE(SUM(item_count) FILTER (WHERE ${TIME_BASIS} > 0),0)::int AS timed_items
       FROM picks
       WHERE ${COMPLETED} AND picker_id IS NOT NULL AND pick_date >= $1 AND pick_date <= $2
       GROUP BY picker_id
     `, [from, to]);
 
-    const ranked = rows.map(r => {
-      const hours = Number(r.total_ms) / 3600000;
-      return {
-        picker_id: r.picker_id,
-        picker_name: r.picker_name,
-        picks: r.picks,
-        items: r.items,
-        orders: r.orders,
-        hours: +hours.toFixed(2),
-        items_per_hour: hours > 0 ? Math.round(r.items / hours) : null,
-        avg_secs_per_pick: r.timed_picks ? Math.round((Number(r.total_ms) / r.timed_picks) / 1000) : null,
-      };
-    }).sort((a, b) => (b.items_per_hour ?? -1) - (a.items_per_hour ?? -1));
+    const ranked = rows.map(r => ({
+      picker_id: r.picker_id,
+      picker_name: r.picker_name,
+      picks: r.picks,
+      items: r.items,
+      orders: r.orders,
+      hours: +(Number(r.total_ms) / 3600000).toFixed(2),
+      items_per_hour: safeItemsPerHour({ picks: r.picks, timedPicks: r.timed_picks, timedItems: r.timed_items, totalMs: r.total_ms }),
+      avg_secs_per_pick: r.timed_picks ? Math.round((Number(r.total_ms) / r.timed_picks) / 1000) : null,
+      timed_picks: r.timed_picks,
+    })).sort((a, b) =>
+      // Pickers with a real throughput first (desc), then by items as a fallback.
+      ((b.items_per_hour ?? -1) - (a.items_per_hour ?? -1)) || (b.items - a.items)
+    );
 
     res.json({ period, from, to, rows: ranked });
+  } catch (err) { next(err); }
+});
+
+// Per-pick list — the factual view: which picks, who did them, how long they took.
+router.get('/picks', async (req, res, next) => {
+  try {
+    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const { rows } = await query(`
+      SELECT helm_pick_id, pick_number, picker_name, item_count, order_count,
+             status_name, pick_type_name, pick_option_name, completed_at,
+             handling_ms, elapsed_ms,
+             (${TIME_BASIS})::bigint AS time_ms
+      FROM picks
+      WHERE ${COMPLETED} AND pick_date >= $1 AND pick_date <= $2
+      ORDER BY completed_at DESC NULLS LAST
+      LIMIT 500
+    `, [from, to]);
+    res.json({ period, from, to, rows: rows.map(r => ({
+      ...r,
+      seconds: r.time_ms ? Math.round(Number(r.time_ms) / 1000) : null,
+    })) });
+  } catch (err) { next(err); }
+});
+
+// Inspect raw timing for recent picks — so we can verify how Helm reports time.
+// Re-run a pick sync AFTER deploying (raw timing is only stored from then on).
+router.get('/inspect', async (req, res, next) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 3, 1), 20);
+    const { rows } = await query(`
+      SELECT helm_pick_id, pick_number, picker_name, item_count, status_name,
+             handling_ms, elapsed_ms, helm_created_at, completed_at, raw_payload
+      FROM picks WHERE status = 1 ORDER BY pick_date DESC NULLS LAST, completed_at DESC NULLS LAST
+      LIMIT $1
+    `, [limit]);
+    res.json(rows.map(r => {
+      const raw = r.raw_payload || {};
+      return {
+        pick_number: r.pick_number,
+        picker_name: r.picker_name,
+        item_count: r.item_count,
+        derived: { handling_ms: r.handling_ms, elapsed_ms: r.elapsed_ms,
+                   helm_created_at: r.helm_created_at, completed_at: r.completed_at },
+        time_tracking_data: raw.time_tracking_data || '(no raw timing stored — re-run a pick sync after deploy)',
+        pick_inventories: raw.pick_inventories || null,
+      };
+    }));
   } catch (err) { next(err); }
 });
 

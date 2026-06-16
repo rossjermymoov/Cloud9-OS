@@ -125,11 +125,28 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
                 created: toDate(h.created_at), completed: toDate(h.completed_at) };
 
       // Only completed picks carry meaningful items/time — fetch detail for those.
+      let rawToStore = h;
       if (status === 1) {
         try {
           const detail = await fetchPickDetail(pickId);
           s = summarisePick(detail, h);
           detailed++;
+          // Keep the timing-relevant parts of the detail (NOT the huge order_data
+          // blobs) so we can audit how time/items were derived.
+          rawToStore = {
+            header: h,
+            assigned_to: detail?.assigned_to,
+            created_at: detail?.created_at,
+            completed_at: detail?.completed_at,
+            time_tracking_data: detail?.time_tracking_data || null,
+            pick_inventories: Array.isArray(detail?.pick_inventories)
+              ? detail.pick_inventories.map(pi => ({
+                  quantity_to_pick: pi.quantity_to_pick, quantity_picked: pi.quantity_picked,
+                  picked_by: pi.picked_by, order_summary_id: pi.order_summary_id,
+                  inventory_id: pi.inventory_id, location_id: pi.location_id,
+                }))
+              : null,
+          };
           if (pickDelayMs) await sleep(pickDelayMs);
         } catch (e) { errors++; console.warn(`[picking-sync] detail ${pickId}: ${e.message}`); }
       }
@@ -166,7 +183,7 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
           h.is_batch === '1' || h.is_batch === 1, h.is_split === '1' || h.is_split === 1,
           h.ui_pick === '1' || h.ui_pick === 1, h.force_completed === '1' || h.force_completed === 1,
           s.created ? s.created.toISOString() : null, s.completed ? s.completed.toISOString() : null,
-          pickDateStr, JSON.stringify(h).slice(0, 100000),
+          pickDateStr, JSON.stringify(rawToStore).slice(0, 150000),
         ]);
         stored++;
       } catch (e) { errors++; console.warn(`[picking-sync] upsert ${pickId}: ${e.message}`); }

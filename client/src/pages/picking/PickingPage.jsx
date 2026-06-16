@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal } from 'lucide-react';
 import {
-  pickingSummary, pickingDaily, pickingLeaderboard, pickingFreshness, triggerPickSync,
+  pickingSummary, pickingDaily, pickingLeaderboard, pickingPicks, pickingFreshness, triggerPickSync,
 } from '../../api/picking';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
@@ -112,6 +112,38 @@ function Leaderboard({ rows }) {
   );
 }
 
+function PicksTable({ rows }) {
+  if (!rows?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '24px 0', textAlign: 'center' }}>No completed picks in this period.</div>;
+  return (
+    <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5, position: 'sticky', top: 0, background: '#fff' }}>
+            <th style={{ padding: '8px 6px' }}>Completed</th>
+            <th style={{ padding: '8px 6px' }}>Pick</th>
+            <th style={{ padding: '8px 6px' }}>Picker</th>
+            <th style={{ padding: '8px 6px', textAlign: 'right' }}>Items</th>
+            <th style={{ padding: '8px 6px', textAlign: 'right' }}>Time taken</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.helm_pick_id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+              <td style={{ padding: '9px 6px', color: MUTED, whiteSpace: 'nowrap' }}>
+                {r.completed_at ? new Date(r.completed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
+              </td>
+              <td style={{ padding: '9px 6px', color: '#334155', fontWeight: 600 }}>{r.pick_number || r.helm_pick_id}</td>
+              <td style={{ padding: '9px 6px', color: TITLE }}>{r.picker_name || 'Unassigned'}</td>
+              <td style={{ padding: '9px 6px', textAlign: 'right', color: '#334155' }}>{r.item_count}</td>
+              <td style={{ padding: '9px 6px', textAlign: 'right', color: r.seconds == null ? '#CBD5E1' : MUTED }}>{fmtDuration(r.seconds)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function PickingPage() {
   const [period, setPeriod] = useState('week');
   const [syncing, setSyncing] = useState(false);
@@ -124,6 +156,7 @@ export default function PickingPage() {
   const summary = useQuery({ queryKey: ['picking', 'summary', period, dateParam], queryFn: () => pickingSummary(period, dateParam) });
   const daily   = useQuery({ queryKey: ['picking', 'daily', period, dateParam], queryFn: () => pickingDaily(period, dateParam) });
   const board   = useQuery({ queryKey: ['picking', 'leaderboard', period, dateParam], queryFn: () => pickingLeaderboard(period, dateParam) });
+  const picks   = useQuery({ queryKey: ['picking', 'picks', period, dateParam], queryFn: () => pickingPicks(period, dateParam) });
   const fresh   = useQuery({ queryKey: ['picking', 'freshness'], queryFn: pickingFreshness });
 
   const s = summary.data;
@@ -186,7 +219,8 @@ export default function PickingPage() {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 14, marginBottom: 16 }}>
-            <Kpi headline Icon={Gauge} label="Items per hour" value={s?.items_per_hour ?? '—'} sub="Throughput across all pickers" />
+            <Kpi headline Icon={Gauge} label="Items per hour" value={s?.items_per_hour ?? '—'}
+              sub={s?.items_per_hour != null ? 'Throughput across all pickers' : (s?.picks ? 'Timing data incomplete' : 'Throughput across all pickers')} />
             <Kpi Icon={ListChecks} label="Picks completed" value={s?.picks ?? '—'} sub={s?.orders ? `${s.orders} orders` : null} />
             <Kpi Icon={Boxes} label="Items picked" value={(s?.items ?? 0).toLocaleString()} sub={s?.avg_items_per_pick != null ? `${s.avg_items_per_pick} per pick` : null} />
             <Kpi Icon={Timer} label="Avg time per pick" value={fmtDuration(s?.avg_secs_per_pick)} sub="Active handling time" />
@@ -206,6 +240,14 @@ export default function PickingPage() {
               <Leaderboard rows={board.data?.rows} />
             </Card>
           </div>
+
+          <Card style={{ marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Picks — who did them &amp; how long</span>
+              <span style={{ fontSize: 11.5, color: '#94A3B8' }}>{picks.data?.rows?.length || 0} picks</span>
+            </div>
+            <PicksTable rows={picks.data?.rows} />
+          </Card>
         </>
       )}
 
