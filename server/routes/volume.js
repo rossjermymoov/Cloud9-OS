@@ -270,7 +270,9 @@ router.get('/diagnose', async (req, res, next) => {
     const customerId = cust.rows[0]?.id || null;
 
     const [byDate, totals, unattrib, nullDisp, distinctAccts] = await Promise.all([
-      query(`SELECT dispatched_at::text AS date, COUNT(*)::int AS shipments, SUM(parcel_count)::int AS parcels, SUM(item_count)::int AS items
+      query(`SELECT dispatched_at::text AS date, COUNT(*)::int AS shipments,
+                    COUNT(DISTINCT COALESCE(reference, helm_shipment_id))::int AS orders,
+                    SUM(parcel_count)::int AS parcels, SUM(item_count)::int AS items
              FROM shipments WHERE (customer_account = $1 OR customer_id = $2) AND cancelled = false
              GROUP BY dispatched_at ORDER BY dispatched_at DESC NULLS LAST LIMIT 15`, [acct, customerId]),
       query(`SELECT COUNT(*)::int AS shipments, COALESCE(SUM(parcel_count),0)::int AS parcels, COALESCE(SUM(item_count),0)::int AS items
