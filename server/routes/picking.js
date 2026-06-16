@@ -117,33 +117,33 @@ router.get('/daily', async (req, res, next) => {
 router.get('/leaderboard', async (req, res, next) => {
   try {
     const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    // Per-PERSON, from pick_contributions — time + items split by the real user
+    // who performed each scan, not just the pick's assigned name.
     const { rows } = await query(`
       SELECT
-        picker_id,
-        COALESCE(MAX(picker_name), 'Unassigned')        AS picker_name,
-        COUNT(*)::int                                   AS picks,
-        COALESCE(SUM(item_count),0)::int                AS items,
-        COALESCE(SUM(order_count),0)::int               AS orders,
-        COALESCE(SUM(${TIME_BASIS}),0)::bigint          AS total_ms,
-        COUNT(*) FILTER (WHERE ${TIME_BASIS} > 0)::int  AS timed_picks,
-        COALESCE(SUM(item_count) FILTER (WHERE ${TIME_BASIS} > 0),0)::int AS timed_items
-      FROM picks
-      WHERE ${COMPLETED} AND picker_id IS NOT NULL AND pick_date >= $1 AND pick_date <= $2
-      GROUP BY picker_id
+        user_id,
+        COALESCE(MAX(picker_name), 'Unknown')                         AS picker_name,
+        COUNT(DISTINCT helm_pick_id)::int                             AS picks,
+        COALESCE(SUM(items),0)::int                                   AS items,
+        COALESCE(SUM(handling_ms),0)::bigint                          AS total_ms,
+        COUNT(DISTINCT helm_pick_id) FILTER (WHERE handling_ms > 0)::int  AS timed_picks,
+        COALESCE(SUM(items) FILTER (WHERE handling_ms > 0),0)::int    AS timed_items
+      FROM pick_contributions
+      WHERE pick_date >= $1 AND pick_date <= $2
+      GROUP BY user_id
     `, [from, to]);
 
     const ranked = rows.map(r => ({
-      picker_id: r.picker_id,
+      picker_id: r.user_id,
       picker_name: r.picker_name,
       picks: r.picks,
       items: r.items,
-      orders: r.orders,
       hours: +(Number(r.total_ms) / 3600000).toFixed(2),
-      items_per_hour: safeItemsPerHour({ picks: r.picks, timedPicks: r.timed_picks, timedItems: r.timed_items, totalMs: r.total_ms }),
+      items_per_hour: safeItemsPerHour({ timedPicks: r.timed_picks, timedItems: r.timed_items, totalMs: r.total_ms }),
       avg_secs_per_pick: r.timed_picks ? Math.round((Number(r.total_ms) / r.timed_picks) / 1000) : null,
       timed_picks: r.timed_picks,
     })).sort((a, b) =>
-      // Pickers with a real throughput first (desc), then by items as a fallback.
+      // Real throughput first (desc), then by items as a fallback.
       ((b.items_per_hour ?? -1) - (a.items_per_hour ?? -1)) || (b.items - a.items)
     );
 
@@ -158,7 +158,7 @@ router.get('/picks', async (req, res, next) => {
     const { rows } = await query(`
       SELECT helm_pick_id, pick_number, picker_name, item_count, order_count,
              status_name, pick_type_name, pick_option_name, completed_at,
-             handling_ms, elapsed_ms,
+             handling_ms, elapsed_ms, contributor_count,
              (${TIME_BASIS})::bigint AS time_ms
       FROM picks
       WHERE ${COMPLETED} AND pick_date >= $1 AND pick_date <= $2

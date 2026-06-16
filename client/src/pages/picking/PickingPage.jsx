@@ -133,7 +133,15 @@ function PicksTable({ rows }) {
                 {r.completed_at ? new Date(r.completed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
               </td>
               <td style={{ padding: '9px 6px', color: '#334155', fontWeight: 600 }}>{r.pick_number || r.helm_pick_id}</td>
-              <td style={{ padding: '9px 6px', color: TITLE }}>{r.picker_name || 'Unassigned'}</td>
+              <td style={{ padding: '9px 6px', color: TITLE }}>
+                {r.picker_name || 'Unassigned'}
+                {r.contributor_count > 1 && (
+                  <span title={`${r.contributor_count} pickers worked this pick`}
+                    style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#7C3AED', background: '#F3E8FF', borderRadius: 5, padding: '1px 5px' }}>
+                    +{r.contributor_count - 1}
+                  </span>
+                )}
+              </td>
               <td style={{ padding: '9px 6px', textAlign: 'right', color: '#334155' }}>{r.item_count}</td>
               <td style={{ padding: '9px 6px', textAlign: 'right', color: r.seconds == null ? '#CBD5E1' : MUTED }}>{fmtDuration(r.seconds)}</td>
             </tr>
