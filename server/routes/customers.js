@@ -207,4 +207,58 @@ router.delete('/:id/on-stop', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── Contact edit / delete ───────────────────────────────────────────────────
+router.patch('/:id/contacts/:contactId', async (req, res, next) => {
+  try {
+    const { id, contactId } = req.params;
+    const allowed = ['full_name', 'job_title', 'phone_number', 'email_address', 'is_main_contact', 'is_finance_contact'];
+    const sets = []; const vals = [];
+    for (const k of allowed) { if (req.body[k] !== undefined) { vals.push(req.body[k]); sets.push(`${k} = $${vals.length}`); } }
+    if (!sets.length) return res.json({});
+    if (req.body.is_main_contact)    await query('UPDATE customer_contacts SET is_main_contact = false    WHERE customer_id = $1 AND id != $2', [id, contactId]);
+    if (req.body.is_finance_contact) await query('UPDATE customer_contacts SET is_finance_contact = false WHERE customer_id = $1 AND id != $2', [id, contactId]);
+    vals.push(contactId, id);
+    const { rows } = await query(
+      `UPDATE customer_contacts SET ${sets.join(', ')} WHERE id = $${vals.length - 1} AND customer_id = $${vals.length} RETURNING *`,
+      vals
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Contact not found' });
+    res.json(rows[0]);
+  } catch (err) { next(err); }
+});
+
+router.delete('/:id/contacts/:contactId', async (req, res, next) => {
+  try {
+    await query('DELETE FROM customer_contacts WHERE id = $1 AND customer_id = $2', [req.params.contactId, req.params.id]);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// ─── Communications (correspondence + internal notes) ─────────────────────────
+router.get('/:id/communications', async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT cc.*, s.full_name AS staff_name
+       FROM customer_communications cc
+       LEFT JOIN staff s ON s.id = cc.staff_id
+       WHERE cc.customer_id = $1 ORDER BY cc.created_at DESC LIMIT 100`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/communications', async (req, res, next) => {
+  try {
+    const { subject, body } = req.body;
+    if (!body) return res.status(400).json({ error: 'body is required' });
+    const { rows } = await query(
+      `INSERT INTO customer_communications (customer_id, channel, direction, subject, body)
+       VALUES ($1,'internal_note','internal',$2,$3) RETURNING *`,
+      [req.params.id, subject || null, body]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) { next(err); }
+});
+
 export default router;
