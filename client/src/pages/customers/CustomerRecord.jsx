@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Building2, Users, MessageSquare, TrendingUp, DollarSign,
+  ArrowLeft, Building2, Users, MessageSquare, TrendingUp, PoundSterling,
   PackagePlus, RotateCcw, Heart, Pencil, Check, X, Trash2, Plus, Boxes, Send,
 } from 'lucide-react';
 import api from '../../api/client';
@@ -10,6 +10,7 @@ import {
   getCustomer, updateCustomer, addContact, updateContact, deleteContact,
   listCommunications, addCommunication,
 } from '../../api/customers';
+import { volumeCustomer } from '../../api/volume';
 
 const RAG = { green: '#00C853', amber: '#F59E0B', red: '#E11D48', grey: '#94A3B8' };
 const HEALTH = { green: 'Healthy', amber: 'Warning', red: 'At Risk' };
@@ -23,7 +24,7 @@ const TABS = [
   { key: 'contacts',  label: 'Contacts',        Icon: Users },
   { key: 'comms',     label: 'Communications',  Icon: MessageSquare },
   { key: 'performance', label: 'Performance',   Icon: TrendingUp },
-  { key: 'financial', label: 'Financial',       Icon: DollarSign },
+  { key: 'financial', label: 'Financial',       Icon: PoundSterling },
   { key: 'pos',       label: 'Purchase Orders', Icon: PackagePlus },
   { key: 'returns',   label: 'Returns',         Icon: RotateCcw },
   { key: 'happiness', label: 'Happiness',       Icon: Heart },
@@ -240,37 +241,92 @@ function CommsTab({ customerId }) {
 }
 
 // ── Performance ─────────────────────────────────────────────
-function PerformanceTab({ snaps }) {
-  const sum = (k, days) => snaps.filter(s => (Date.now() - new Date(s.snapshot_date)) / 86400000 < days).reduce((a, s) => a + (s[k] || 0), 0);
-  const cards = [
-    { l: 'Parcels · 7d', v: sum('parcel_count', 7), I: Send, c: ACCENT },
-    { l: 'Items · 7d', v: sum('item_count', 7), I: Boxes, c: '#7B2FBE' },
-    { l: 'Parcels · 30d', v: sum('parcel_count', 30), I: Send, c: ACCENT },
-    { l: 'Items · 30d', v: sum('item_count', 30), I: Boxes, c: '#7B2FBE' },
-  ];
-  const max = Math.max(1, ...snaps.map(s => s.parcel_count));
-  const recent = [...snaps].slice(0, 14).reverse();
+function Toggle({ value, onChange, options }) {
+  return (
+    <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: 8, padding: 3 }}>
+      {options.map(([v, l]) => (
+        <button key={v} onClick={() => onChange(v)} style={{ fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', background: value === v ? '#fff' : 'transparent', color: value === v ? ACCENT : MUTED, boxShadow: value === v ? SHADOW : 'none' }}>{l}</button>
+      ))}
+    </div>
+  );
+}
+
+function PerformanceTab({ customerId }) {
+  const [tf, setTf] = useState('month');
+  const [metric, setMetric] = useState('parcels');
+  const [custFrom, setCustFrom] = useState('');
+  const [custTo, setCustTo] = useState('');
+  const [hover, setHover] = useState(null);
+
+  const ymd = (d) => { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const back = (n) => { const d = new Date(today); d.setDate(today.getDate() - n); return d; };
+  let from, to;
+  if (tf === 'custom') { from = custFrom; to = custTo; }
+  else { to = ymd(today); from = ymd(tf === 'day' ? today : tf === 'week' ? back(6) : tf === 'month' ? back(29) : back(89)); }
+
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ['cust-volume', customerId, from, to],
+    queryFn: () => volumeCustomer(customerId, { from, to }),
+    enabled: !!customerId && !!from && !!to,
+  });
+
+  const totalParcels = rows.reduce((a, r) => a + (r.parcels || 0), 0);
+  const totalItems = rows.reduce((a, r) => a + (r.items || 0), 0);
+  const max = Math.max(1, ...rows.map(r => r[metric] || 0));
+  const TF = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['custom', 'Custom']];
+  const dateInp = { fontSize: 12, padding: '5px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.14)', outline: 'none' };
+
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 14 }}>
-        {cards.map(c => (
-          <Card key={c.l}><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 34, height: 34, borderRadius: 9, background: `${c.c}1a`, color: c.c, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><c.I size={16} /></div>
-            <div><div style={{ fontSize: 22, fontWeight: 800, color: HEADER, letterSpacing: -0.5 }}>{c.v}</div><div style={{ fontSize: 11.5, color: MUTED }}>{c.l}</div></div>
-          </div></Card>
-        ))}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 22 }}>
+          <div><div style={{ fontSize: 26, fontWeight: 800, color: HEADER, letterSpacing: -0.6 }}>{totalParcels.toLocaleString()}</div><div style={{ fontSize: 11.5, color: MUTED }}>parcels in range</div></div>
+          <div><div style={{ fontSize: 26, fontWeight: 800, color: '#7B2FBE', letterSpacing: -0.6 }}>{totalItems.toLocaleString()}</div><div style={{ fontSize: 11.5, color: MUTED }}>items in range</div></div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Toggle value={metric} onChange={setMetric} options={[['parcels', 'Parcels'], ['items', 'Items']]} />
+          <Toggle value={tf} onChange={setTf} options={TF} />
+          {tf === 'custom' && <>
+            <input type="date" value={custFrom} onChange={e => setCustFrom(e.target.value)} style={dateInp} />
+            <span style={{ color: MUTED, fontSize: 12 }}>→</span>
+            <input type="date" value={custTo} onChange={e => setCustTo(e.target.value)} style={dateInp} />
+          </>}
+        </div>
       </div>
-      <Card title="Dispatch volume · recent">
-        {recent.length === 0 ? <div style={{ fontSize: 12.5, color: '#94A3B8' }}>No dispatch volume yet.</div> : (
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 120 }}>
-            {recent.map(s => (
-              <div key={s.snapshot_date} title={`${s.snapshot_date}: ${s.parcel_count} parcels, ${s.item_count} items`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                <div style={{ width: '100%', background: ACCENT, borderRadius: '4px 4px 0 0', height: `${Math.round((s.parcel_count / max) * 96)}px`, minHeight: 2 }} />
-                <span style={{ fontSize: 9, color: '#94A3B8' }}>{String(s.snapshot_date).slice(8, 10)}/{String(s.snapshot_date).slice(5, 7)}</span>
-              </div>
-            ))}
-          </div>
-        )}
+
+      <Card>
+        {tf === 'custom' && (!from || !to)
+          ? <div style={{ color: '#94A3B8', fontSize: 13, padding: '60px 0', textAlign: 'center' }}>Pick a start and end date.</div>
+          : isLoading
+            ? <div style={{ color: '#94A3B8', fontSize: 13, padding: '60px 0', textAlign: 'center' }}>Loading…</div>
+            : rows.length === 0
+              ? <div style={{ color: '#94A3B8', fontSize: 13, padding: '60px 0', textAlign: 'center' }}>No dispatch volume in this range.</div>
+              : (
+                <div style={{ position: 'relative' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: rows.length > 45 ? 2 : 4, height: 340 }}>
+                    {rows.map((r, i) => {
+                      const isH = hover === i;
+                      return (
+                        <div key={r.date} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
+                          style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center', cursor: 'default' }}>
+                          <div style={{ width: '82%', minWidth: 3, background: isH ? '#3B82F6' : ACCENT, borderRadius: '3px 3px 0 0', height: Math.max(2, Math.round((r[metric] / max) * 308)), transition: 'background 0.12s ease' }} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 10.5, color: '#94A3B8' }}>
+                    <span>{new Date(rows[0].date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                    <span>{new Date(rows[rows.length - 1].date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                  </div>
+                  {hover != null && rows[hover] && (
+                    <div style={{ position: 'absolute', top: 0, left: `${(hover / Math.max(1, rows.length - 1)) * 100}%`, transform: 'translateX(-50%)', background: '#0B1220', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 12, pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10, boxShadow: '0 6px 18px rgba(0,0,0,0.2)' }}>
+                      <div style={{ fontWeight: 700 }}>{new Date(rows[hover].date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
+                      <div style={{ color: 'rgba(255,255,255,0.85)' }}>{rows[hover].parcels} parcels · {rows[hover].items} items</div>
+                    </div>
+                  )}
+                </div>
+              )}
       </Card>
     </div>
   );
@@ -404,7 +460,7 @@ export default function CustomerRecord() {
       {tab === 'overview'    && <OverviewTab c={c} onSaved={refresh} />}
       {tab === 'contacts'    && <ContactsTab customerId={id} contacts={data.contacts || []} onRefresh={refresh} />}
       {tab === 'comms'       && <CommsTab customerId={id} />}
-      {tab === 'performance' && <PerformanceTab snaps={data.volume_snapshots || []} />}
+      {tab === 'performance' && <PerformanceTab customerId={id} />}
       {tab === 'financial'   && <FinancialTab c={c} />}
       {tab === 'pos'         && <POsTab customerId={id} />}
       {tab === 'returns'     && <ReturnsTab customerId={id} />}

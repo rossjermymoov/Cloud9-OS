@@ -241,6 +241,22 @@ router.get('/daily', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Daily volume for a single customer over an arbitrary date range.
+router.get('/customer/:id', async (req, res, next) => {
+  try {
+    const { from, to } = req.query;
+    const vals = [req.params.id];
+    let where = 'customer_id = $1';
+    if (from) { vals.push(from); where += ` AND snapshot_date >= $${vals.length}`; }
+    if (to)   { vals.push(to);   where += ` AND snapshot_date <= $${vals.length}`; }
+    const { rows } = await query(`
+      SELECT snapshot_date::text AS date, parcel_count::int AS parcels, item_count::int AS items
+      FROM customer_volume_snapshots WHERE ${where} ORDER BY snapshot_date ASC
+    `, vals);
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
 router.get('/by-customer', async (req, res, next) => {
   try {
     const days = Math.min(Math.max(parseInt(req.query.days) || 1, 1), 365);
