@@ -106,8 +106,10 @@ function prettyCourier(name) {
 }
 
 // Flexible trend chart — dual line (current vs previous) or monthly bars.
-const PREV_LABEL = { day: 'Yesterday', week: 'Last week', month: 'Last month', quarter: 'Prev quarter' };
-const CUR_LABEL  = { day: 'Today', week: 'This week', month: 'This month', quarter: 'This quarter' };
+const PREV_LABEL = { day: 'Yesterday', yesterday: 'Prev day', week: 'Last week', month: 'Last month', quarter: 'Prev quarter' };
+const CUR_LABEL  = { day: 'Today', yesterday: 'Yesterday', week: 'This week', month: 'This month', quarter: 'This quarter' };
+const PERIOD_NOUN = { day: 'today', yesterday: 'yesterday', week: 'this week', month: 'this month', quarter: 'this quarter' };
+const VS_NOUN     = { day: 'yesterday', yesterday: 'prev day', week: 'last week', month: 'last month', quarter: 'last quarter' };
 function TrendChart({ trend, metric }) {
   const [hoverIdx, setHoverIdx] = useState(null);
   if (!trend) return null;
@@ -296,8 +298,8 @@ export default function Dashboard() {
     : [...(trend.current || []), ...(trend.previous || [])].some(d => d && (d.parcels > 0 || d.items > 0)));
   const cur = trend?.totals?.current  || { parcels: 0, items: 0, picks: 0 };
   const prv = trend?.totals?.previous || { parcels: 0, items: 0, picks: 0 };
-  const periodNoun = period === 'day' ? 'today' : `this ${period}`;
-  const vsNoun     = period === 'day' ? 'yesterday' : `last ${period}`;
+  const periodNoun = PERIOD_NOUN[period] || `this ${period}`;
+  const vsNoun     = VS_NOUN[period] || `last ${period}`;
   const tc = cur[metric] ?? 0;
   const tp = prv[metric] ?? 0;
   const trendPct = tp > 0 ? Math.round(((tc - tp) / tp) * 1000) / 10 : (tc > 0 ? null : 0);
@@ -328,7 +330,7 @@ export default function Dashboard() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Seg value={metric} onChange={setMetric} options={[{ v: 'parcels', l: 'Parcels' }, { v: 'items', l: 'Items' }]} />
-          <Seg value={period} onChange={setPeriod} options={[{ v: 'day', l: 'Day' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }]} />
+          <Seg value={period} onChange={setPeriod} options={[{ v: 'day', l: 'Day' }, { v: 'yesterday', l: 'Yesterday' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }]} />
         </div>
       </div>
 

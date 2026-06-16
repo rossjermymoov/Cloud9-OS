@@ -77,7 +77,7 @@ function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 
 router.get('/trend', async (req, res, next) => {
   try {
-    const period = ['day', 'week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'week';
+    const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'week';
     const [snap, picks] = await Promise.all([
       query(`SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
              FROM customer_volume_snapshots WHERE snapshot_date >= CURRENT_DATE - 220 GROUP BY snapshot_date`),
@@ -115,6 +115,22 @@ router.get('/trend', async (req, res, next) => {
         totals: {
           current:  { parcels: today.parcels, items: today.items, picks: ph.rows[0].today },
           previous: { parcels: yest.parcels,  items: yest.items,  picks: ph.rows[0].yhour },
+        } });
+    }
+
+    if (period === 'yesterday') {
+      // Yesterday vs the day before — the daily management-review metric.
+      const ph = await query(`
+        SELECT COUNT(*) FILTER (WHERE picked_at >= CURRENT_DATE - INTERVAL '1 day' AND picked_at < CURRENT_DATE)::int AS yest,
+               COUNT(*) FILTER (WHERE picked_at >= CURRENT_DATE - INTERVAL '2 day' AND picked_at < CURRENT_DATE - INTERVAL '1 day')::int AS dby
+        FROM pick_events`);
+      const yest = get(addDays(now, -1)), dby = get(addDays(now, -2));
+      const labels = [], series = [];
+      for (let k = 13; k >= 0; k--) { const d = addDays(now, -k); const g = get(d); labels.push(`${d.getDate()}/${d.getMonth() + 1}`); series.push({ parcels: g.parcels, items: g.items, picks: g.picks, dow: d.getDay() }); }
+      return res.json({ period: 'yesterday', mode: 'bars', labels, series,
+        totals: {
+          current:  { parcels: yest.parcels, items: yest.items, picks: ph.rows[0].yest },
+          previous: { parcels: dby.parcels,  items: dby.items,  picks: ph.rows[0].dby },
         } });
     }
 
@@ -165,7 +181,7 @@ router.get('/trend', async (req, res, next) => {
 router.get('/leaderboard', async (req, res, next) => {
   try {
     const limit  = Math.min(Math.max(parseInt(req.query.limit) || 5, 1), 50);
-    const period = ['day', 'week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'month';
+    const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'month';
     const metricCol = req.query.metric === 'items' ? 'item_count' : 'parcel_count';
     const sort   = req.query.sort === 'volume' ? 'volume' : 'growth';
 
@@ -175,6 +191,8 @@ router.get('/leaderboard', async (req, res, next) => {
     let curStart, curEnd, prevStart, prevEnd;
     if (period === 'day') {
       curStart = now; curEnd = now; prevStart = add(now, -1); prevEnd = add(now, -1);
+    } else if (period === 'yesterday') {
+      curStart = add(now, -1); curEnd = add(now, -1); prevStart = add(now, -2); prevEnd = add(now, -2);
     } else if (period === 'week') {
       const dow = (now.getDay() + 6) % 7; const monday = add(now, -dow);
       curStart = monday; curEnd = now; prevStart = add(monday, -7); prevEnd = add(monday, -7 + dow);
