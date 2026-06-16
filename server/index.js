@@ -15,6 +15,7 @@ import helmRouter          from './routes/helm.js';
 import volumeRouter        from './routes/volume.js';
 import purchaseOrdersRouter from './routes/purchaseOrders.js';
 import returnsRouter        from './routes/returns.js';
+import voilaRouter          from './routes/voila.js';
 
 dotenv.config();
 
@@ -40,6 +41,7 @@ app.use('/api/helm',          helmRouter);
 app.use('/api/volume',        volumeRouter);
 app.use('/api/purchase-orders', purchaseOrdersRouter);
 app.use('/api/returns',         returnsRouter);
+app.use('/api/voila',           voilaRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'cloud9-os' }));
 

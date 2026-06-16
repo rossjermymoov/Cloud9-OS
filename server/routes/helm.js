@@ -136,4 +136,70 @@ router.post('/sync/volume', async (req, res, next) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /api/helm/backfill?days=30
+// Month (or N-day) backfill of dispatch volume for EVERY customer. Runs in the
+// background and returns 202 immediately so a large pull never times out.
+// Pulls despatched orders per fulfilment client → orders table → volume snapshots
+// → recomputes health. Watch progress at GET /api/helm/sync-log.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/backfill', async (req, res, next) => {
+  try {
+    if (!helmConfigured()) {
+      return res.status(503).json({ error: 'Helm API not configured' });
+    }
+    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
+
+    res.status(202).json({
+      status: 'started', days,
+      message: `Backfilling ${days} days for every customer in the background. Check GET /api/helm/sync-log for the result.`,
+    });
+
+    setImmediate(async () => {
+      const to   = new Date();
+      const from = new Date(Date.now() - (days - 1) * 86400000);
+      let customersDone = 0, ordersWritten = 0, failed = 0;
+      try {
+        const { rows: customers } = await query(
+          `SELECT id, helm_customer_id, business_name FROM customers WHERE helm_customer_id IS NOT NULL`
+        );
+        console.log(`🔄 Backfill: ${customers.length} customers, ${days} days`);
+        for (const c of customers) {
+          try {
+            const list = await fetchDispatchedOrders({ helmClientId: c.helm_customer_id, from, to });
+            for (const raw of list) {
+              await upsertOrder(normaliseOrder(raw, { helmClientId: c.helm_customer_id, parcelFloor: 1 }));
+              ordersWritten++;
+            }
+          } catch (e) {
+            failed++;
+            console.warn(`[backfill] ${c.business_name}: ${e.message}`);
+          }
+          customersDone++;
+        }
+        let health = 0;
+        try { health = await recomputeHealthAll(); } catch (e) { console.warn('[backfill] health:', e.message); }
+
+        const detail = `${customersDone} customers, ${ordersWritten} orders over ${days}d, ${failed} failed, health ${health}`;
+        await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('backfill','ok',$1,$2)`, [ordersWritten, detail]);
+        console.log(`✅ Backfill complete: ${detail}`);
+      } catch (err) {
+        console.error('❌ backfill error:', err.message);
+        await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('backfill','error',0,$1)`, [err.message]).catch(() => {});
+      }
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /api/helm/sync-log?limit=10 — recent sync / backfill runs.
+router.get('/sync-log', async (req, res, next) => {
+  try {
+    const { rows } = await query(
+      `SELECT sync_type, status, records, detail, ran_at FROM helm_sync_log ORDER BY ran_at DESC LIMIT $1`,
+      [Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 50)]
+    );
+    res.json(rows);
+  } catch (err) { next(err); }
+});
+
 export default router;

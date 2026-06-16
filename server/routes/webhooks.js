@@ -19,7 +19,7 @@ import express from 'express';
 import { query } from '../db/index.js';
 import { normalisePayload, upsertEvent } from '../services/statusEngine.js';
 import { createNotification, resolveCustomer } from '../services/notificationService.js';
-import { normaliseOrder, upsertOrder } from '../services/volumeService.js';
+import { normaliseOrder, upsertOrder, recordVoilaShipment } from '../services/volumeService.js';
 import { mapFulfilmentClient } from '../services/helmClient.js';
 
 const router = express.Router();
@@ -502,6 +502,8 @@ router.post('/tracking-update', authMiddleware, (req, res) => {
           }
         }
       }
+      // Record the shipment's volume (parcels + items) for the customer's daily totals.
+      try { await recordVoilaShipment(body); } catch (e) { console.warn('[tracking-update] volume record:', e.message); }
       console.log(`✅ tracking-update: ${events.length} event(s) processed`);
     } catch (err) {
       console.error('❌ tracking-update error:', err.message);

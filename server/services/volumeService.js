@@ -69,14 +69,18 @@ export function normaliseOrder(raw, { helmClientId = null, parcelFloor = 0, forc
   };
 }
 
-/** Recompute one customer/day snapshot from the orders table. */
+/**
+ * Recompute one customer/day snapshot. Volume is sourced from `shipments`
+ * (Voila is the source of truth for parcels), summing the REAL per-shipment
+ * parcel + item counts for that collection date.
+ */
 export async function recomputeSnapshot(customerId, day) {
   if (!customerId || !day) return;
   const { rows } = await query(`
     SELECT COALESCE(SUM(parcel_count),0)::int AS parcels,
            COALESCE(SUM(item_count),0)::int   AS items
-    FROM orders
-    WHERE customer_id = $1 AND dispatched_at IS NOT NULL AND dispatched_at::date = $2::date
+    FROM shipments
+    WHERE customer_id = $1 AND cancelled = false AND collection_date = $2::date
   `, [customerId, day]);
   const { parcels, items } = rows[0];
   await query(`
@@ -86,6 +90,87 @@ export async function recomputeSnapshot(customerId, day) {
       parcel_count = EXCLUDED.parcel_count,
       item_count   = EXCLUDED.item_count
   `, [customerId, day, parcels, items]);
+}
+
+// ─── Voila shipment volume (the real parcel + item source) ───────────────────
+function parseRS(rs) {
+  if (typeof rs === 'string') { try { rs = JSON.parse(rs); } catch { rs = {}; } }
+  return rs && typeof rs === 'object' ? rs : {};
+}
+
+/** Parcels = number of parcels in the shipment (one entry per parcel). */
+export function countShipmentParcels(shipment, rs) {
+  if (Array.isArray(shipment?.create_label_parcels) && shipment.create_label_parcels.length) return shipment.create_label_parcels.length;
+  if (Array.isArray(rs?.parcels) && rs.parcels.length) return rs.parcels.length;
+  if (shipment?.parcel_count != null) return parseInt(shipment.parcel_count) || 0;
+  return 0;
+}
+
+/** Items = sum of every item quantity across every parcel. */
+export function countShipmentItems(rs) {
+  let n = 0;
+  for (const p of (rs?.parcels || [])) {
+    for (const it of (p.items || [])) n += parseInt(it.quantity ?? it.qty ?? 1) || 0;
+  }
+  return n;
+}
+
+/**
+ * Record one Voila shipment (from a webhook) into the shipments table — keyed
+ * by Voila shipment id so repeated tracking updates never double-count — and
+ * refresh that customer's daily volume snapshot. Customer is resolved by
+ * accounts_id → helm_accounts_id.
+ */
+export async function recordVoilaShipment(body) {
+  const json = (body && body.json && typeof body.json === 'object') ? body.json : (body || {});
+  const shipment = json.shipment || {};
+  const tu = json.tracking_update || {};
+  const shipmentId = shipment.id ?? tu.shipment_id;
+  if (shipmentId == null) return null;
+
+  const rs = parseRS(shipment.request_shipment ?? json.request_shipment);
+  const accountsId = rs.accounts_id || shipment.account_name || rs.ship_from?.company_name || shipment.account_number || null;
+
+  let customerId = null;
+  if (accountsId) {
+    const cr = await query(
+      `SELECT id FROM customers WHERE helm_accounts_id = $1 OR account_number = $1 OR helm_customer_id = $1 LIMIT 1`,
+      [String(accountsId).trim()]
+    );
+    customerId = cr.rows[0]?.id || null;
+  }
+
+  const parcels  = countShipmentParcels(shipment, rs);
+  const items    = countShipmentItems(rs);
+  const cl       = Array.isArray(shipment.create_label_parcels) ? shipment.create_label_parcels : [];
+  const tracking = [...new Set(cl.map(p => p.tracking_code).filter(Boolean))];
+  const collectionDate = shipment.collection_date || tu.collection_date || tu.received_date || null;
+  const day = collectionDate ? String(collectionDate).slice(0, 10) : null;
+
+  await query(`
+    INSERT INTO shipments
+      (helm_shipment_id, customer_id, customer_account, courier, reference,
+       ship_to_name, ship_to_postcode, ship_to_country_iso, parcel_count, item_count,
+       collection_date, tracking_codes, cancelled, raw_payload)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+    ON CONFLICT (helm_shipment_id) DO UPDATE SET
+      customer_id      = COALESCE(EXCLUDED.customer_id, shipments.customer_id),
+      customer_account = COALESCE(EXCLUDED.customer_account, shipments.customer_account),
+      courier          = COALESCE(EXCLUDED.courier, shipments.courier),
+      parcel_count     = EXCLUDED.parcel_count,
+      item_count       = EXCLUDED.item_count,
+      collection_date  = COALESCE(EXCLUDED.collection_date, shipments.collection_date),
+      tracking_codes   = COALESCE(EXCLUDED.tracking_codes, shipments.tracking_codes),
+      cancelled        = EXCLUDED.cancelled,
+      updated_at       = NOW()
+  `, [
+    String(shipmentId), customerId, accountsId, shipment.courier || null, shipment.reference || null,
+    shipment.ship_to_name || null, shipment.ship_to_postcode || null, shipment.ship_to_country_iso || null,
+    parcels, items, day, tracking.length ? tracking : null, !!shipment.cancelled, JSON.stringify(shipment).slice(0, 200000),
+  ]);
+
+  if (customerId && day) await recomputeSnapshot(customerId, day);
+  return { customerId, day, parcels, items, shipmentId: String(shipmentId), accountsId, resolved: !!customerId };
 }
 
 /**
