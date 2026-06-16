@@ -40,6 +40,10 @@ function extractToken(req) {
   if (h) return String(h).trim();
   const auth = (req.headers['authorization'] || '').trim();
   if (auth) return (auth.startsWith('Bearer ') ? auth.slice(7) : auth).trim();
+  // Voila nests the token in the JSON body under headers.CLOUD9_WEBHOOK_TOKEN.
+  const bh = req.body && typeof req.body === 'object' ? (req.body.headers || {}) : {};
+  const bodyTok = bh.CLOUD9_WEBHOOK_TOKEN || bh.cloud9_webhook_token || bh.Authorization || bh.authorization;
+  if (bodyTok) return String(bodyTok).replace(/^Bearer\s+/i, '').trim();
   if (req.query.token) return String(req.query.token).trim();
   return '';
 }

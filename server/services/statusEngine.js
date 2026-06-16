@@ -72,8 +72,7 @@ export function normaliseStatus(raw) {
 }
 
 // request_shipment may arrive as a JSON string or an object; return it parsed.
-function parseRequestShipment(payload) {
-  let rs = payload.request_shipment ?? payload.requestShipment;
+function parseRequestShipment(rs) {
   if (typeof rs === 'string') { try { rs = JSON.parse(rs); } catch { rs = {}; } }
   return rs && typeof rs === 'object' ? rs : {};
 }
@@ -94,7 +93,7 @@ export function normalisePayload(body) {
   if (payload.tracking_update && Array.isArray(payload.tracking_update.parcels)) {
     const tu       = payload.tracking_update;
     const shipment = payload.shipment || {};
-    const rs       = parseRequestShipment(payload);
+    const rs       = parseRequestShipment(shipment.request_shipment ?? payload.request_shipment);
     // Voila identifies the customer by accounts_id (e.g. "BEDDOES LTD") inside
     // request_shipment — this maps to a Cloud9 customer's helm_accounts_id.
     const accountsId = rs.accounts_id || shipment.accounts_id || shipment.account_name
