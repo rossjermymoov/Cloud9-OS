@@ -67,12 +67,16 @@ function summarisePick(detail, header) {
     if (pi.picked_by != null) pickerVotes[String(pi.picked_by)] = (pickerVotes[String(pi.picked_by)] || 0) + 1;
   }
 
+  // Helm `duration` is ACTIVE time on each action, in SECONDS (decimals). Summing
+  // them gives true picking effort and naturally excludes idle gaps/breaks.
   const tt = Array.isArray(detail?.time_tracking_data) ? detail.time_tracking_data : [];
-  let handlingMs = 0;
+  let handlingSec = 0;
   for (const t of tt) {
-    handlingMs += num(t.duration);
+    const d = parseFloat(t.duration);
+    if (!isNaN(d)) handlingSec += d;
     if (t.user_id != null) pickerVotes[String(t.user_id)] = (pickerVotes[String(t.user_id)] || 0) + 1;
   }
+  const handlingMs = Math.round(handlingSec * 1000);
 
   // Picker: explicit assignment wins; otherwise whoever did the most lines/scans.
   let pickerId = (header?.assigned_to ?? detail?.assigned_to);

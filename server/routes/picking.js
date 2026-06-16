@@ -50,16 +50,18 @@ function rangeFor(periodRaw, dateRaw) {
   return { period, from: isoDay(from), to: isoDay(to) };
 }
 
-// Per-pick time basis (ms): prefer wall-clock elapsed (start→completion), fall
-// back to summed handling time. Wall-clock is the truer "how long did it take".
-const TIME_BASIS = `COALESCE(NULLIF(elapsed_ms,0), NULLIF(handling_ms,0), 0)`;
+// Per-pick time basis (ms) = active handling time (Σ Helm action durations).
+// We deliberately do NOT use elapsed_ms (created→completed): a pick can sit
+// generated for ages before picking starts, and picks include idle breaks, so
+// wall-clock wildly overstates effort. Handling time is the real work time.
+const TIME_BASIS = `COALESCE(NULLIF(handling_ms,0), 0)`;
 const COMPLETED = `status = 1 AND pick_date IS NOT NULL`;
 
-// Throughput is only trustworthy when EVERY pick in the set has timing data —
-// otherwise we'd divide all the items by only some of the time (the bug that
-// produced "185,000 items/hour"). Returns a sane number or null.
-function safeItemsPerHour({ picks, timedPicks, timedItems, totalMs }) {
-  if (!timedPicks || timedPicks < picks) return null;   // incomplete timing → don't show
+// Throughput from the timed picks only: timed_items / timed_hours. Because both
+// the numerator and denominator come from the SAME set of picks, this can't
+// produce the old "all items ÷ a sliver of time" nonsense. Clamped for safety.
+function safeItemsPerHour({ timedPicks, timedItems, totalMs }) {
+  if (!timedPicks) return null;
   const hours = Number(totalMs) / 3600000;
   if (hours <= 0) return null;
   const rate = Math.round(Number(timedItems) / hours);
