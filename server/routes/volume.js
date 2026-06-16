@@ -110,7 +110,7 @@ router.get('/trend', async (req, res, next) => {
         FROM pick_events`);
       const today = get(now), yest = get(addDays(now, -1));
       const labels = [], series = [];
-      for (let k = 13; k >= 0; k--) { const d = addDays(now, -k); const g = get(d); labels.push(`${d.getDate()}/${d.getMonth() + 1}`); series.push({ parcels: g.parcels, items: g.items, picks: g.picks }); }
+      for (let k = 13; k >= 0; k--) { const d = addDays(now, -k); const g = get(d); labels.push(`${d.getDate()}/${d.getMonth() + 1}`); series.push({ parcels: g.parcels, items: g.items, picks: g.picks, dow: d.getDay() }); }
       return res.json({ period: 'day', mode: 'bars', labels, series,
         totals: {
           current:  { parcels: today.parcels, items: today.items, picks: ph.rows[0].today },

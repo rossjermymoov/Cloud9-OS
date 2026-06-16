@@ -109,19 +109,35 @@ function prettyCourier(name) {
 const PREV_LABEL = { day: 'Yesterday', week: 'Last week', month: 'Last month', quarter: 'Prev quarter' };
 const CUR_LABEL  = { day: 'Today', week: 'This week', month: 'This month', quarter: 'This quarter' };
 function TrendChart({ trend, metric }) {
+  const [hoverIdx, setHoverIdx] = useState(null);
   if (!trend) return null;
   const n = trend.labels.length;
   if (trend.mode === 'bars') {
     const vals = trend.series.map(s => s[metric] || 0);
     const max = Math.max(1, ...vals);
+    const GREEN = '#10B981', GREEN_H = '#34D399', BLUE = ACCENT, BLUE_H = '#4C84FB';
+    const hasMonday = trend.series.some(s => s.dow === 1);
+    const barColor = (s, i) => {
+      const monday = s.dow === 1;
+      const h = hoverIdx === i;
+      return monday ? (h ? GREEN_H : GREEN) : (h ? BLUE_H : BLUE);
+    };
     return (
       <div>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 160 }}>
+        {hasMonday && (
+          <div style={{ display: 'flex', gap: 14, marginBottom: 10, fontSize: 11, color: MUTED }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: GREEN }} /> Monday</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: BLUE }} /> Other days</span>
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 150 }}>
           {trend.series.map((s, i) => (
-            <div key={i} title={`${trend.labels[i]}: ${s[metric]}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+            <div key={i} onMouseEnter={() => setHoverIdx(i)} onMouseLeave={() => setHoverIdx(null)}
+              title={`${trend.labels[i]}: ${s[metric]}`}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: 'default' }}>
               <span style={{ fontSize: 10, color: '#334155', fontWeight: 600 }}>{s[metric]}</span>
-              <div style={{ width: '70%', background: ACCENT, borderRadius: '4px 4px 0 0', height: `${Math.round((s[metric] / max) * 120)}px`, minHeight: 2 }} />
-              <span style={{ fontSize: 10, color: '#94A3B8' }}>{trend.labels[i]}</span>
+              <div style={{ width: '70%', background: barColor(s, i), borderRadius: '4px 4px 0 0', height: `${Math.round((s[metric] / max) * 120)}px`, minHeight: 2, transition: 'background 0.15s ease' }} />
+              <span style={{ fontSize: 10, fontWeight: s.dow === 1 ? 700 : 400, color: s.dow === 1 ? GREEN : '#94A3B8' }}>{trend.labels[i]}</span>
             </div>
           ))}
         </div>
