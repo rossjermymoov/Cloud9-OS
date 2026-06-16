@@ -46,11 +46,17 @@ export default function CustomerRecord() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0F172A', margin: 0 }}>{c.business_name}</h1>
         <span style={{ fontSize: 12, color: '#64748B', background: '#F1F5F9', borderRadius: 6, padding: '3px 8px' }}>{c.helm_accounts_id || c.account_number}</span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#334155' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#334155' }}
+          title={c.health_score_summary || ''}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: RAG[c.health_score] }} />
           {HEALTH[c.health_score]}
         </span>
       </div>
+      {c.health_score_summary && (
+        <div style={{ fontSize: 12.5, color: '#64748B', margin: '-8px 0 18px' }}>
+          <span style={{ fontWeight: 600, color: RAG[c.health_score] }}>Health:</span> {c.health_score_summary}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <Card title="Details">

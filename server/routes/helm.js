@@ -12,6 +12,7 @@ import {
   fetchFulfilmentClients, helmConfigured, verify, fetchDispatchedOrders, rawFulfilmentClients,
 } from '../services/helmClient.js';
 import { normaliseOrder, upsertOrder } from '../services/volumeService.js';
+import { recomputeHealthAll } from '../services/healthService.js';
 
 const router = express.Router();
 
@@ -117,11 +118,15 @@ router.post('/sync/volume', async (req, res, next) => {
       customersProcessed++;
     }
 
+    // Recompute health scores now that volume is up to date.
+    let healthUpdated = 0;
+    try { healthUpdated = await recomputeHealthAll(); } catch (e) { console.warn('[health] recompute failed:', e.message); }
+
     await query(
       `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('volume','ok',$1,$2)`,
       [ordersWritten, `${customersProcessed} customers, ${ordersWritten} orders over ${days}d`]
     );
-    res.json({ ok: true, days, customers: customersProcessed, orders: ordersWritten });
+    res.json({ ok: true, days, customers: customersProcessed, orders: ordersWritten, health_updated: healthUpdated });
   } catch (err) {
     await query(
       `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('volume','error',0,$1)`,

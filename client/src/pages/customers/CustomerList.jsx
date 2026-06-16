@@ -59,7 +59,7 @@ export default function CustomerList() {
                   </span>
                 </td>
                 <td style={td}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} title={c.health_score_summary || ''}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: (HEALTH[c.health_score] || {}).c }} />
                     {(HEALTH[c.health_score] || {}).l}
                   </span>

@@ -6,8 +6,17 @@
 
 import express from 'express';
 import { query } from '../db/index.js';
+import { recomputeHealthAll } from '../services/healthService.js';
 
 const router = express.Router();
+
+// POST /api/customers/recompute-health — recalculate all health scores now.
+router.post('/recompute-health', async (_req, res, next) => {
+  try {
+    const updated = await recomputeHealthAll();
+    res.json({ ok: true, updated });
+  } catch (err) { next(err); }
+});
 
 const ALLOWED_SORT = ['business_name', 'account_number', 'tier', 'account_status',
   'health_score', 'date_onboarded', 'outstanding_balance', 'credit_limit'];
@@ -37,7 +46,7 @@ router.get('/', async (req, res, next) => {
         SELECT c.id, c.account_number, c.helm_accounts_id, c.helm_customer_id,
                c.business_name, c.primary_email, c.accounts_email, c.phone_number,
                c.postcode, c.city, c.county, c.country, c.tier, c.account_status,
-               c.health_score, c.is_on_stop, c.outstanding_balance, c.credit_limit,
+               c.health_score, c.health_score_summary, c.is_on_stop, c.outstanding_balance, c.credit_limit,
                c.billing_cycle, c.payment_terms_days, c.date_onboarded,
                am.full_name AS account_manager_name
         FROM customers c
