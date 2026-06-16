@@ -46,6 +46,19 @@ router.post('/backfill', async (req, res, next) => {
           const r = await recordVoilaShipment({ json: { shipment: s } });
           if (r) { shipments++; parcels += r.parcels; items += r.items; if (r.resolved) resolved++; }
         }
+
+        // Backfill despatch date for any shipment missing it (from stored created_at),
+        // then fully rebuild the daily parcels + items totals by DESPATCH date.
+        await query(`UPDATE shipments SET dispatched_at = LEFT(raw_payload->>'created_at', 10)::date
+                     WHERE dispatched_at IS NULL AND raw_payload->>'created_at' ~ '^\\d{4}-\\d{2}-\\d{2}'`);
+        await query(`DELETE FROM customer_volume_snapshots`);
+        await query(`
+          INSERT INTO customer_volume_snapshots (customer_id, snapshot_date, parcel_count, item_count)
+          SELECT customer_id, dispatched_at, SUM(parcel_count)::int, SUM(item_count)::int
+          FROM shipments
+          WHERE cancelled = false AND customer_id IS NOT NULL AND dispatched_at IS NOT NULL
+          GROUP BY customer_id, dispatched_at`);
+
         let health = 0;
         try { health = await recomputeHealthAll(); } catch (e) { console.warn('[voila-backfill] health:', e.message); }
 

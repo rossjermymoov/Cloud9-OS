@@ -80,7 +80,7 @@ export async function recomputeSnapshot(customerId, day) {
     SELECT COALESCE(SUM(parcel_count),0)::int AS parcels,
            COALESCE(SUM(item_count),0)::int   AS items
     FROM shipments
-    WHERE customer_id = $1 AND cancelled = false AND collection_date = $2::date
+    WHERE customer_id = $1 AND cancelled = false AND dispatched_at = $2::date
   `, [customerId, day]);
   const { parcels, items } = rows[0];
   await query(`
@@ -145,14 +145,17 @@ export async function recordVoilaShipment(body) {
   const cl       = Array.isArray(shipment.create_label_parcels) ? shipment.create_label_parcels : [];
   const tracking = [...new Set(cl.map(p => p.tracking_code).filter(Boolean))];
   const collectionDate = shipment.collection_date || tu.collection_date || tu.received_date || null;
-  const day = collectionDate ? String(collectionDate).slice(0, 10) : null;
+  // Despatch date = when the shipment/label was created. This is the day the
+  // volume is counted on (collection dates are often null or forward-dated).
+  const despatched = shipment.created_at || collectionDate || tu.received_date || null;
+  const day = despatched ? String(despatched).slice(0, 10) : null;
 
   await query(`
     INSERT INTO shipments
       (helm_shipment_id, customer_id, customer_account, courier, reference,
        ship_to_name, ship_to_postcode, ship_to_country_iso, parcel_count, item_count,
-       collection_date, tracking_codes, cancelled, raw_payload)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       collection_date, dispatched_at, tracking_codes, cancelled, raw_payload)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
     ON CONFLICT (helm_shipment_id) DO UPDATE SET
       customer_id      = COALESCE(EXCLUDED.customer_id, shipments.customer_id),
       customer_account = COALESCE(EXCLUDED.customer_account, shipments.customer_account),
@@ -160,13 +163,15 @@ export async function recordVoilaShipment(body) {
       parcel_count     = EXCLUDED.parcel_count,
       item_count       = EXCLUDED.item_count,
       collection_date  = COALESCE(EXCLUDED.collection_date, shipments.collection_date),
+      dispatched_at    = COALESCE(EXCLUDED.dispatched_at, shipments.dispatched_at),
       tracking_codes   = COALESCE(EXCLUDED.tracking_codes, shipments.tracking_codes),
       cancelled        = EXCLUDED.cancelled,
       updated_at       = NOW()
   `, [
     String(shipmentId), customerId, accountsId, shipment.courier || null, shipment.reference || null,
     shipment.ship_to_name || null, shipment.ship_to_postcode || null, shipment.ship_to_country_iso || null,
-    parcels, items, day, tracking.length ? tracking : null, !!shipment.cancelled, JSON.stringify(shipment).slice(0, 200000),
+    parcels, items, collectionDate ? String(collectionDate).slice(0, 10) : null, day,
+    tracking.length ? tracking : null, !!shipment.cancelled, JSON.stringify(shipment).slice(0, 200000),
   ]);
 
   if (customerId && day) await recomputeSnapshot(customerId, day);
