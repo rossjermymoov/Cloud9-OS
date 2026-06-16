@@ -16,7 +16,8 @@ import { helmConfigured }  from './services/helmClient.js';
 import volumeRouter        from './routes/volume.js';
 import purchaseOrdersRouter from './routes/purchaseOrders.js';
 import returnsRouter        from './routes/returns.js';
-import voilaRouter          from './routes/voila.js';
+import voilaRouter, { runVoilaBackfill } from './routes/voila.js';
+import { voilaConfigured }  from './services/voilaClient.js';
 
 dotenv.config();
 
@@ -79,6 +80,22 @@ async function start() {
     setTimeout(() => syncPurchaseOrders().catch(e => console.warn('[po-auto-sync]', e.message)), 60 * 1000);
     setInterval(() => syncPurchaseOrders().catch(e => console.warn('[po-auto-sync]', e.message)), POLL);
     console.log('🗓️  PO auto-sync scheduled every 30 minutes');
+  }
+
+  // Nightly full Voila backfill at 19:00 UK time — runs gently overnight so the
+  // 9am management numbers are always complete, even if a webhook was missed.
+  if (voilaConfigured()) {
+    let lastNightly = null;
+    setInterval(() => {
+      const uk = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/London' }));
+      const key = `${uk.getFullYear()}-${uk.getMonth()}-${uk.getDate()}`;
+      if (uk.getHours() === 19 && uk.getMinutes() === 0 && lastNightly !== key) {
+        lastNightly = key;
+        console.log('🌙 Nightly Voila backfill starting (19:00 UK)…');
+        runVoilaBackfill(90, { pageDelayMs: 400 }).catch(e => console.warn('[nightly-backfill]', e.message));
+      }
+    }, 60 * 1000);
+    console.log('🌙 Nightly Voila backfill scheduled for 19:00 UK');
   }
 }
 

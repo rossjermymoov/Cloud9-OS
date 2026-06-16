@@ -9,7 +9,7 @@
 
 import express from 'express';
 import { query } from '../db/index.js';
-import { fetchShipmentsByDateRange, voilaConfigured } from '../services/voilaClient.js';
+import { fetchShipmentsByDateRange, fetchShipmentsPage, voilaConfigured } from '../services/voilaClient.js';
 import { countShipmentParcels, countShipmentItems } from '../services/volumeService.js';
 import { recomputeHealthAll } from '../services/healthService.js';
 
@@ -52,62 +52,48 @@ function isoDay(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T00:00:00`;
 }
 
-router.post('/backfill', async (req, res, next) => {
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Streaming backfill — fetches one page at a time and inserts it, so it never
+// holds the whole dataset in memory (which was killing the process). Survives
+// per-page errors. `pageDelayMs` lets the nightly run go gently/slowly.
+export async function runVoilaBackfill(days = 90, { pageDelayMs = 0 } = {}) {
+  const to = new Date(), from = new Date(Date.now() - (days - 1) * 86400000);
+  let stored = 0, parcels = 0, items = 0, attributed = 0, page = 1, lastFirstId = null, pageErrors = 0;
   try {
-    if (!voilaConfigured()) {
-      return res.status(503).json({ error: 'Voila API not configured — set VOILA_API_USER / VOILA_API_TOKEN in server/.env' });
-    }
-    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
-    const to   = new Date();
-    const from = new Date(Date.now() - (days - 1) * 86400000);
+    const cm = await query(`SELECT helm_accounts_id, id FROM customers WHERE helm_accounts_id IS NOT NULL`);
+    const custByAcct = new Map(cm.rows.map(r => [String(r.helm_accounts_id).trim().toLowerCase(), r.id]));
 
-    res.status(202).json({
-      status: 'started', days,
-      message: `Backfilling ${days} days of Voila shipments in the background. Check GET /api/helm/sync-log.`,
-    });
+    while (page <= 3000) {
+      let list;
+      try { list = await fetchShipmentsPage(isoDay(from), isoDay(to), page, 100); }
+      catch (e) { console.error(`[voila-backfill] fetch page ${page}: ${e.message}`); break; }
+      if (!list.length) break;
+      const firstId = list[0] && list[0].id;
+      if (firstId != null && firstId === lastFirstId) break;   // API ignoring page param
+      lastFirstId = firstId;
 
-    setImmediate(async () => {
-      let stored = 0, parcels = 0, items = 0, attributed = 0;
+      // Build + insert this page (dedupe ids within the page).
+      const seen = new Set();
+      const rows = [];
+      for (const s of list) {
+        const key = String(s.id);
+        if (seen.has(key)) continue; seen.add(key);
+        const rs = parseRS(s.request_shipment);
+        const accountsId = (rs && rs.accounts_id) || s.account_name || s.account_number || null;
+        const customerId = accountsId ? (custByAcct.get(String(accountsId).trim().toLowerCase()) || null) : null;
+        const p = countShipmentParcels(s, rs);
+        const it = countShipmentItems(rs);
+        const despatched = s.created_at || s.collection_date || (rs && rs.collection_date) || null;
+        const day = despatched ? String(despatched).slice(0, 10) : null;
+        if (customerId) attributed++;
+        parcels += p; items += it;
+        rows.push([key, customerId, accountsId, s.courier || null, s.reference || null, s.ship_to_name || null,
+          s.ship_to_postcode || null, p, it, s.collection_date ? String(s.collection_date).slice(0, 10) : null, day, !!s.cancelled]);
+      }
       try {
-        // 1. Customer lookup map (accounts_id → customer id), loaded once.
-        const cm = await query(`SELECT helm_accounts_id, id FROM customers WHERE helm_accounts_id IS NOT NULL`);
-        const custByAcct = new Map(cm.rows.map(r => [String(r.helm_accounts_id).trim().toLowerCase(), r.id]));
-
-        // 2. Fetch all shipments in the window.
-        const list = await fetchShipmentsByDateRange(isoDay(from), isoDay(to), {
-          onPage: ({ total }) => console.log(`[voila-backfill] fetched ${total} shipments`),
-        });
-        console.log(`[voila-backfill] fetched ${list.length} shipments total — storing…`);
-
-        // 3. Build rows in memory (parcels, items, customer, despatch date).
-        const rows = list.map(s => {
-          const rs = parseRS(s.request_shipment);
-          const accountsId = (rs && rs.accounts_id) || s.account_name || s.account_number || null;
-          const customerId = accountsId ? (custByAcct.get(String(accountsId).trim().toLowerCase()) || null) : null;
-          const p = countShipmentParcels(s, rs);
-          const it = countShipmentItems(rs);
-          const despatched = s.created_at || s.collection_date || (rs && rs.collection_date) || null;
-          const day = despatched ? String(despatched).slice(0, 10) : null;
-          if (customerId) attributed++;
-          parcels += p; items += it;
-          return {
-            id: String(s.id), customerId, accountsId, courier: s.courier || null, reference: s.reference || null,
-            shipTo: s.ship_to_name || null, postcode: s.ship_to_postcode || null,
-            parcels: p, items: it, collection: s.collection_date ? String(s.collection_date).slice(0, 10) : null,
-            day, cancelled: !!s.cancelled,
-          };
-        });
-
-        // 4. Batch upsert shipments (chunks of 500) — far fewer round-trips.
-        const CH = 500;
-        for (let i = 0; i < rows.length; i += CH) {
-          const chunk = rows.slice(i, i + CH);
-          const ph = [], vals = [];
-          chunk.forEach((r, j) => {
-            const b = j * 12;
-            ph.push(`($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10},$${b+11},$${b+12})`);
-            vals.push(r.id, r.customerId, r.accountsId, r.courier, r.reference, r.shipTo, r.postcode, r.parcels, r.items, r.collection, r.day, r.cancelled);
-          });
+        const ph = rows.map((_, j) => { const b = j * 12; return `($${b+1},$${b+2},$${b+3},$${b+4},$${b+5},$${b+6},$${b+7},$${b+8},$${b+9},$${b+10},$${b+11},$${b+12})`; });
+        if (rows.length) {
           await query(`
             INSERT INTO shipments
               (helm_shipment_id, customer_id, customer_account, courier, reference, ship_to_name, ship_to_postcode,
@@ -123,31 +109,47 @@ router.post('/backfill', async (req, res, next) => {
               dispatched_at    = COALESCE(EXCLUDED.dispatched_at, shipments.dispatched_at),
               cancelled        = EXCLUDED.cancelled,
               updated_at       = NOW()
-          `, vals);
-          stored += chunk.length;
+          `, rows.flat());
+          stored += rows.length;
         }
+      } catch (e) { pageErrors++; console.warn(`[voila-backfill] insert page ${page}: ${e.message}`); }
 
-        // 5. Rebuild the daily totals once, by despatch date.
-        await query(`UPDATE shipments SET dispatched_at = collection_date WHERE dispatched_at IS NULL AND collection_date IS NOT NULL`);
-        await query(`DELETE FROM customer_volume_snapshots`);
-        await query(`
-          INSERT INTO customer_volume_snapshots (customer_id, snapshot_date, parcel_count, item_count)
-          SELECT customer_id, dispatched_at, SUM(parcel_count)::int, SUM(item_count)::int
-          FROM shipments
-          WHERE cancelled = false AND customer_id IS NOT NULL AND dispatched_at IS NOT NULL
-          GROUP BY customer_id, dispatched_at`);
+      if (page % 10 === 0) console.log(`[voila-backfill] page ${page}, stored ${stored}`);
+      page++;
+      if (pageDelayMs) await sleep(pageDelayMs);
+    }
 
-        let health = 0;
-        try { health = await recomputeHealthAll(); } catch (e) { console.warn('[voila-backfill] health:', e.message); }
+    // Rebuild the daily totals once, by despatch date.
+    await query(`UPDATE shipments SET dispatched_at = collection_date WHERE dispatched_at IS NULL AND collection_date IS NOT NULL`);
+    await query(`DELETE FROM customer_volume_snapshots`);
+    await query(`
+      INSERT INTO customer_volume_snapshots (customer_id, snapshot_date, parcel_count, item_count)
+      SELECT customer_id, dispatched_at, SUM(parcel_count)::int, SUM(item_count)::int
+      FROM shipments WHERE cancelled = false AND customer_id IS NOT NULL AND dispatched_at IS NOT NULL
+      GROUP BY customer_id, dispatched_at`);
 
-        const detail = `${stored} shipments, ${parcels} parcels, ${items} items, ${attributed} attributed, health ${health}`;
-        await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','ok',$1,$2)`, [stored, detail]);
-        console.log('✅ Voila backfill complete:', detail);
-      } catch (err) {
-        console.error('❌ voila-backfill error:', err.message);
-        await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','error',0,$1)`, [err.message]).catch(() => {});
-      }
-    });
+    let health = 0;
+    try { health = await recomputeHealthAll(); } catch (e) { console.warn('[voila-backfill] health:', e.message); }
+
+    const detail = `${stored} shipments, ${parcels} parcels, ${items} items, ${attributed} attributed, ${pageErrors} page errors, health ${health}`;
+    await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','ok',$1,$2)`, [stored, detail]);
+    console.log('✅ Voila backfill complete:', detail);
+    return { stored, parcels, items, attributed };
+  } catch (err) {
+    console.error('❌ voila-backfill error:', err.message);
+    await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','error',$1,$2)`, [stored, err.message]).catch(() => {});
+    return { stored, error: err.message };
+  }
+}
+
+router.post('/backfill', async (req, res, next) => {
+  try {
+    if (!voilaConfigured()) {
+      return res.status(503).json({ error: 'Voila API not configured — set VOILA_API_USER / VOILA_API_TOKEN in server/.env' });
+    }
+    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
+    res.status(202).json({ status: 'started', days, message: `Backfilling ${days} days of Voila shipments in the background. Check GET /api/helm/sync-log.` });
+    setImmediate(() => runVoilaBackfill(days));
   } catch (err) { next(err); }
 });
 

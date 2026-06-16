@@ -38,6 +38,12 @@ async function voilaGet(path, params = {}) {
  * Fetch all shipments collected within a date window (paginated).
  * start / end: ISO datetime strings, e.g. '2026-06-01T00:00:00'.
  */
+// Fetch a single page of shipments (for streaming backfills that insert as they go).
+export async function fetchShipmentsPage(start, end, page, perPage = 100) {
+  const data = await voilaGet('/shipments.json', { startDateFilter: start, endDateFilter: end, page, per_page: perPage });
+  return Array.isArray(data) ? data : (data.shipments || data.data || []);
+}
+
 export async function fetchShipmentsByDateRange(start, end, { onPage } = {}) {
   const PAGE = 100;
   let page = 1;
