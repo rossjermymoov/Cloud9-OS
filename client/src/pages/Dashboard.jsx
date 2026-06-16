@@ -74,20 +74,35 @@ function pctPill(today, prev, periodLabel) {
 
 function StatCard({ Icon, label, value, color, pill }) {
   return (
-    <Card style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 116 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, background: `${color}1a`, color,
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '13px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: `${color}1a`, color,
           display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Icon size={17} strokeWidth={1.9} />
+          <Icon size={16} strokeWidth={1.9} />
         </div>
-        <span style={{ fontSize: 12.5, color: MUTED, fontWeight: 500 }}>{label}</span>
+        <span style={{ fontSize: 12, color: MUTED, fontWeight: 500 }}>{label}</span>
       </div>
-      <div style={{ fontSize: 30, fontWeight: 800, color: HEADER, lineHeight: 1, letterSpacing: -0.8 }}>{value}</div>
-      <div style={{ marginTop: 'auto', display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ fontSize: 26, fontWeight: 800, color: HEADER, lineHeight: 1, letterSpacing: -0.6 }}>{value}</div>
+      <div style={{ marginTop: 2, display: 'flex', justifyContent: 'flex-end' }}>
         {pill && <Pill text={pill.text} tone={pill.tone} />}
       </div>
     </Card>
   );
+}
+
+// Render raw courier codes/names as human-readable labels.
+function prettyCourier(name) {
+  const n = (name || '').toLowerCase().replace(/[^a-z]/g, '');
+  if (n.includes('royalmail')) return 'Royal Mail';
+  if (n.includes('dpd')) return 'DPD';
+  if (n.includes('dhl')) return 'DHL';
+  if (n.includes('yodel')) return 'Yodel';
+  if (n.includes('evri') || n.includes('hermes')) return 'Evri';
+  if (n.includes('parcelforce')) return 'Parcelforce';
+  if (n.includes('ups')) return 'UPS';
+  if (n.includes('fedex')) return 'FedEx';
+  if (n.includes('amazon')) return 'Amazon';
+  return name || '—';
 }
 
 // Flexible trend chart — dual line (current vs previous) or monthly bars.
@@ -156,31 +171,41 @@ function Seg({ options, value, onChange }) {
   );
 }
 
-// Pending dispatch — value + a mini per-carrier breakdown showing the bottleneck.
+// Pending dispatch — compact; the per-carrier breakdown lives in the (i) tooltip.
 function PendingCard({ total, byCourier }) {
+  const [hover, setHover] = useState(false);
   return (
-    <Card style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 116 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ width: 34, height: 34, borderRadius: 9, flexShrink: 0, background: '#F59E0B1a', color: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <PackageOpen size={17} strokeWidth={1.9} />
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '13px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+        <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: '#F59E0B1a', color: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <PackageOpen size={16} strokeWidth={1.9} />
         </div>
-        <span style={{ fontSize: 12.5, color: MUTED, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <span style={{ fontSize: 12, color: MUTED, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           Pending dispatch
-          <span title="Parcels packed and manifested, awaiting carrier collection scan." style={{ display: 'inline-flex', cursor: 'help' }}>
-            <Info size={13} color="#94A3B8" />
+          <span style={{ position: 'relative', display: 'inline-flex' }}
+            onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+            <Info size={13} color="#94A3B8" style={{ cursor: 'help' }} />
+            {hover && (
+              <div style={{ position: 'absolute', top: '150%', left: '50%', transform: 'translateX(-50%)', zIndex: 60,
+                background: '#0B1220', color: '#fff', borderRadius: 9, padding: '10px 12px', minWidth: 168,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.22)' }}>
+                <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', marginBottom: 7, lineHeight: 1.4 }}>
+                  Packed &amp; manifested — awaiting carrier collection scan
+                </div>
+                {(byCourier && byCourier.length > 0)
+                  ? byCourier.slice(0, 7).map((c, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 12.5, padding: '3px 0' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.85)' }}>{prettyCourier(c.courier_name || c.courier_code)}</span>
+                        <span style={{ fontWeight: 700 }}>{c.count}</span>
+                      </div>
+                    ))
+                  : <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>No pending parcels</div>}
+              </div>
+            )}
           </span>
         </span>
       </div>
-      <div style={{ fontSize: 30, fontWeight: 800, color: HEADER, lineHeight: 1, letterSpacing: -0.8 }}>{(total || 0).toLocaleString()}</div>
-      <div style={{ marginTop: 'auto', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-        {(byCourier && byCourier.length > 0)
-          ? byCourier.slice(0, 5).map((c, i) => (
-              <span key={i} style={{ fontSize: 11, fontWeight: 600, color: '#475569', background: '#F1F5F9', borderRadius: 6, padding: '2px 8px' }}>
-                {(c.courier_name || c.courier_code || '—')}: {c.count}
-              </span>
-            ))
-          : <span style={{ fontSize: 11, color: '#94A3B8' }}>No pending parcels</span>}
-      </div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: HEADER, lineHeight: 1, letterSpacing: -0.6 }}>{(total || 0).toLocaleString()}</div>
     </Card>
   );
 }

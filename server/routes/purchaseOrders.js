@@ -29,18 +29,23 @@ const ACTIVE_ONLY = `(po.customer_id IS NULL OR c.account_status = 'active')`;
 function viewClause(view) {
   switch (view) {
     case 'exceptions':
-      return `(${EFF} = 12 OR (${EFF} IN (13,14) AND po.expected_date IS NOT NULL AND po.expected_date < CURRENT_DATE))`;
+      // On hold, OR heavily overdue (expected date passed by more than 30 days).
+      return `(${EFF} = 12 OR (${EFF} IN (13,14) AND po.expected_date IS NOT NULL AND po.expected_date < CURRENT_DATE - 30))`;
     case 'historical':
       return `${EFF} IN (11,15,16,25)`;
+    case 'missing':
+      // Submitted/partial POs with no expected date — bad data to chase up.
+      return `${EFF} IN (13,14) AND po.expected_date IS NULL`;
     case 'inbound':
     default:
-      return `${EFF} IN (13,14)`;
+      // Recent incoming only — drop anything overdue by more than 30 days.
+      return `${EFF} IN (13,14) AND (po.expected_date IS NULL OR po.expected_date >= CURRENT_DATE - 30)`;
   }
 }
 
 router.get('/', async (req, res, next) => {
   try {
-    const view = ['inbound', 'exceptions', 'historical'].includes(req.query.view) ? req.query.view : 'inbound';
+    const view = ['inbound', 'exceptions', 'historical', 'missing'].includes(req.query.view) ? req.query.view : 'inbound';
     const { customer_id, search, limit = 500, offset = 0 } = req.query;
 
     const conditions = [ACTIVE_ONLY, viewClause(view)];
@@ -72,11 +77,13 @@ router.get('/stats', async (_req, res, next) => {
   try {
     const { rows } = await query(`
       SELECT
-        COUNT(*) FILTER (WHERE ${EFF} = 13)::int                                                              AS submitted,
-        COUNT(*) FILTER (WHERE ${EFF} = 14)::int                                                              AS partially_received,
+        COUNT(*) FILTER (WHERE ${EFF} = 13)::int                                                                 AS submitted,
+        COUNT(*) FILTER (WHERE ${EFF} = 14)::int                                                                 AS partially_received,
         COUNT(*) FILTER (WHERE ${EFF} = 12
-          OR (${EFF} IN (13,14) AND po.expected_date IS NOT NULL AND po.expected_date < CURRENT_DATE))::int   AS exceptions,
-        COUNT(*) FILTER (WHERE ${EFF} IN (11,15,16,25))::int                                                  AS historical
+          OR (${EFF} IN (13,14) AND po.expected_date IS NOT NULL AND po.expected_date < CURRENT_DATE - 30))::int AS exceptions,
+        COUNT(*) FILTER (WHERE ${EFF} IN (13,14) AND po.expected_date IS NULL)::int                             AS missing_date,
+        COUNT(*) FILTER (WHERE ${EFF} IN (11,15,16,25))::int                                                     AS historical,
+        (SELECT MAX(ran_at) FROM helm_sync_log WHERE sync_type = 'purchase_orders' AND status = 'ok')           AS last_synced
       FROM purchase_orders po
       LEFT JOIN customers c ON c.id = po.customer_id
       WHERE ${ACTIVE_ONLY}

@@ -11,7 +11,8 @@ import customersRouter     from './routes/customers.js';
 import trackingRouter      from './routes/tracking.js';
 import webhooksRouter      from './routes/webhooks.js';
 import notificationsRouter from './routes/notifications.js';
-import helmRouter          from './routes/helm.js';
+import helmRouter, { syncPurchaseOrders } from './routes/helm.js';
+import { helmConfigured }  from './services/helmClient.js';
 import volumeRouter        from './routes/volume.js';
 import purchaseOrdersRouter from './routes/purchaseOrders.js';
 import returnsRouter        from './routes/returns.js';
@@ -71,6 +72,14 @@ async function start() {
     process.exit(1);
   }
   app.listen(PORT, () => console.log(`🟢 Cloud9 OS server running on port ${PORT}`));
+
+  // Auto-sync purchase orders from Helm every 30 minutes.
+  if (helmConfigured()) {
+    const POLL = 30 * 60 * 1000;
+    setTimeout(() => syncPurchaseOrders().catch(e => console.warn('[po-auto-sync]', e.message)), 60 * 1000);
+    setInterval(() => syncPurchaseOrders().catch(e => console.warn('[po-auto-sync]', e.message)), POLL);
+    console.log('🗓️  PO auto-sync scheduled every 30 minutes');
+  }
 }
 
 start();

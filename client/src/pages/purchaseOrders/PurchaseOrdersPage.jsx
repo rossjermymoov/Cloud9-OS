@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { X, PackagePlus, List, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
-import { listPurchaseOrders, poStats, getPurchaseOrder } from '../../api/purchaseOrders';
+import { X, PackagePlus, List, Calendar, ChevronLeft, ChevronRight, RefreshCw, CalendarX2 } from 'lucide-react';
+import { listPurchaseOrders, poStats, getPurchaseOrder, triggerPoSync } from '../../api/purchaseOrders';
 
 const ACCENT = '#0056FB', MUTED = '#64748B', TITLE = '#0F172A', HEADER = '#0B1220', TEAL = '#0EA5B7';
 const SHADOW = '0 1px 2px rgba(16,24,40,0.06), 0 1px 3px rgba(16,24,40,0.10)';
@@ -145,30 +145,57 @@ function CalendarView({ rows, onOpen }) {
 
 export default function PurchaseOrdersPage() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [listView, setListView] = useState('inbound');
   const [openId, setOpenId] = useState(null);
   const [mode, setMode] = useState('list');
+  const [syncing, setSyncing] = useState(false);
 
   const view = mode === 'calendar' ? 'inbound' : listView;
   const { data: stats } = useQuery({ queryKey: ['po-stats'], queryFn: poStats });
   const { data, isLoading } = useQuery({ queryKey: ['purchase-orders', view], queryFn: () => listPurchaseOrders({ view, limit: 500 }) });
   const rows = data?.purchase_orders || [];
 
+  const lastSynced = stats?.last_synced ? new Date(stats.last_synced).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : null;
+
+  async function refresh() {
+    setSyncing(true);
+    try {
+      await triggerPoSync();
+      await new Promise(r => setTimeout(r, 1500));
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['purchase-orders'] }),
+        qc.invalidateQueries({ queryKey: ['po-stats'] }),
+      ]);
+    } catch { /* ignore */ } finally { setSyncing(false); }
+  }
+
   return (
     <div style={{ width: '100%', maxWidth: 1280 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <PackagePlus size={20} color={ACCENT} />
           <h1 style={{ fontSize: 23, fontWeight: 800, color: HEADER, margin: 0, letterSpacing: -0.5 }}>Purchase Orders</h1>
         </div>
-        <div style={{ display: 'flex', background: '#F1F5F9', borderRadius: 9, padding: 3 }}>
-          {[['list', 'List', List], ['calendar', 'Calendar', Calendar]].map(([k, l, Ic]) => (
-            <button key={k} onClick={() => setMode(k)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', background: mode === k ? '#fff' : 'transparent', color: mode === k ? ACCENT : MUTED, boxShadow: mode === k ? SHADOW : 'none' }}>
-              <Ic size={14} /> {l}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', background: '#F1F5F9', borderRadius: 9, padding: 3 }}>
+              {[['list', 'List', List], ['calendar', 'Calendar', Calendar]].map(([k, l, Ic]) => (
+                <button key={k} onClick={() => setMode(k)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 7, border: 'none', cursor: 'pointer', background: mode === k ? '#fff' : 'transparent', color: mode === k ? ACCENT : MUTED, boxShadow: mode === k ? SHADOW : 'none' }}>
+                  <Ic size={14} /> {l}
+                </button>
+              ))}
+            </div>
+            <button onClick={refresh} disabled={syncing} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: '#334155', background: '#fff', border: '1px solid rgba(0,0,0,0.12)', borderRadius: 8, padding: '7px 12px', cursor: syncing ? 'default' : 'pointer' }}>
+              <RefreshCw size={14} style={{ animation: syncing ? 'spin 0.9s linear infinite' : 'none' }} /> {syncing ? 'Syncing…' : 'Refresh'}
             </button>
-          ))}
+          </div>
+          <div style={{ fontSize: 11, color: '#94A3B8' }}>
+            Auto-syncs every 30m{lastSynced ? ` • Last synced at ${lastSynced}` : ' • Not synced yet'}
+          </div>
         </div>
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
 
       {/* Focused inbound KPIs */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12, marginBottom: 18 }}>
@@ -182,7 +209,24 @@ export default function PurchaseOrdersPage() {
             <div style={{ fontSize: 12, color: MUTED }}>{s.l}</div>
           </div>
         ))}
+        {/* Missing Expected Date — warning, click to isolate the bad-data rows */}
+        <div onClick={() => { setListView('missing'); setMode('list'); }}
+          style={{ background: stats?.missing_date > 0 ? '#FEF2F2' : '#fff', border: `1px solid ${stats?.missing_date > 0 ? 'rgba(220,38,38,0.25)' : 'rgba(16,24,40,0.06)'}`,
+            borderRadius: 12, boxShadow: SHADOW, padding: '14px 16px', cursor: 'pointer' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: stats?.missing_date > 0 ? '#B91C1C' : MUTED, letterSpacing: -0.5 }}>{stats?.missing_date ?? '—'}</div>
+            <CalendarX2 size={16} color={stats?.missing_date > 0 ? '#DC2626' : '#94A3B8'} />
+          </div>
+          <div style={{ fontSize: 12, color: stats?.missing_date > 0 ? '#B91C1C' : MUTED, fontWeight: stats?.missing_date > 0 ? 600 : 400 }}>Missing expected date</div>
+        </div>
       </div>
+
+      {mode === 'list' && listView === 'missing' && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#FEF2F2', border: '1px solid rgba(220,38,38,0.2)', borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
+          <span style={{ fontSize: 12.5, color: '#B91C1C' }}>Showing submitted POs with <b>no expected date</b> — chase these customers to fix the data in Helm.</span>
+          <button onClick={() => setListView('inbound')} style={{ fontSize: 12, color: '#B91C1C', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600 }}>Clear</button>
+        </div>
+      )}
 
       {mode === 'calendar' ? (
         <div style={{ background: '#fff', border: '1px solid rgba(16,24,40,0.06)', borderRadius: 12, boxShadow: SHADOW, padding: 18 }}>

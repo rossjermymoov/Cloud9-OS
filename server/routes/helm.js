@@ -199,71 +199,74 @@ router.post('/backfill', async (req, res, next) => {
 // ─────────────────────────────────────────────────────────────────────────────
 const PO_STATUS = { 11: 'open', 12: 'open', 13: 'open', 14: 'partially_received', 15: 'received', 16: 'cancelled', 25: 'received' };
 
+// Reusable PO sync — used by the route and the 30-minute scheduler.
+export async function syncPurchaseOrders() {
+  let total = 0, upserted = 0, failed = 0;
+  try {
+    const list = await fetchPurchaseOrders();
+    total = list.length;
+    console.log(`🔄 PO sync: ${total} purchase orders`);
+    for (const head of list) {
+      try {
+        const po = await fetchPurchaseOrder(head.id);
+        const lines = Array.isArray(po.inventory) ? po.inventory : [];
+        const totalUnits = lines.reduce((a, l) => a + (parseInt(l.quantity) || 0), 0);
+        const status = PO_STATUS[po.status_id] || 'open';
+
+        let customerId = null, customerName = null;
+        if (po.fulfilment_client_id != null) {
+          const r = await query(`SELECT id, business_name FROM customers WHERE helm_customer_id = $1`, [String(po.fulfilment_client_id)]);
+          if (r.rows.length) { customerId = r.rows[0].id; customerName = r.rows[0].business_name; }
+        }
+        if (!customerName) customerName = po.shipping_name_company || po.supplier_name_company || null;
+
+        const ins = await query(`
+          INSERT INTO purchase_orders
+            (helm_po_id, po_number, customer_id, customer_name, status, helm_status_id, expected_date, total_lines, total_units, raw_payload)
+          VALUES ($1,$2,$3,$4,$5::po_status,$6,$7,$8,$9,$10)
+          ON CONFLICT (helm_po_id) DO UPDATE SET
+            po_number      = EXCLUDED.po_number,
+            customer_id    = COALESCE(EXCLUDED.customer_id, purchase_orders.customer_id),
+            customer_name  = COALESCE(EXCLUDED.customer_name, purchase_orders.customer_name),
+            status         = EXCLUDED.status,
+            helm_status_id = EXCLUDED.helm_status_id,
+            expected_date  = EXCLUDED.expected_date,
+            total_lines    = EXCLUDED.total_lines,
+            total_units    = EXCLUDED.total_units,
+            raw_payload    = EXCLUDED.raw_payload,
+            updated_at     = NOW()
+          RETURNING id
+        `, [
+          String(po.id), (po.purchase_order_id || '').slice(0, 80) || null, customerId, customerName,
+          status, po.status_id != null ? parseInt(po.status_id) : null, po.expected_delivery_date || null,
+          lines.length, totalUnits, JSON.stringify(po).slice(0, 200000),
+        ]);
+        const poId = ins.rows[0].id;
+        await query(`DELETE FROM purchase_order_lines WHERE po_id = $1`, [poId]);
+        for (const l of lines) {
+          await query(
+            `INSERT INTO purchase_order_lines (po_id, sku, description, qty_ordered, qty_received) VALUES ($1,$2,$3,$4,$5)`,
+            [poId, l.sku || null, l.name || null, parseInt(l.quantity) || 0, parseInt(l.delivered_quantity) || 0]
+          );
+        }
+        upserted++;
+      } catch (e) { failed++; console.warn(`[po-sync] ${head.id}: ${e.message}`); }
+    }
+    await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('purchase_orders','ok',$1,$2)`,
+      [upserted, `${upserted} POs upserted, ${failed} failed of ${total}`]);
+    console.log(`✅ PO sync complete: ${upserted}/${total} upserted, ${failed} failed`);
+  } catch (err) {
+    console.error('❌ po-sync error:', err.message);
+    await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('purchase_orders','error',0,$1)`, [err.message]).catch(() => {});
+  }
+  return { total, upserted, failed };
+}
+
 router.post('/sync/purchase-orders', async (_req, res, next) => {
   try {
     if (!helmConfigured()) return res.status(503).json({ error: 'Helm API not configured' });
     res.status(202).json({ status: 'started', message: 'Pulling purchase orders in the background. Check GET /api/helm/sync-log.' });
-
-    setImmediate(async () => {
-      let total = 0, upserted = 0, failed = 0;
-      try {
-        const list = await fetchPurchaseOrders();
-        total = list.length;
-        console.log(`🔄 PO sync: ${total} purchase orders`);
-        for (const head of list) {
-          try {
-            const po = await fetchPurchaseOrder(head.id);
-            const lines = Array.isArray(po.inventory) ? po.inventory : [];
-            const totalUnits = lines.reduce((a, l) => a + (parseInt(l.quantity) || 0), 0);
-            const status = PO_STATUS[po.status_id] || 'open';
-
-            let customerId = null, customerName = null;
-            if (po.fulfilment_client_id != null) {
-              const r = await query(`SELECT id, business_name FROM customers WHERE helm_customer_id = $1`, [String(po.fulfilment_client_id)]);
-              if (r.rows.length) { customerId = r.rows[0].id; customerName = r.rows[0].business_name; }
-            }
-            if (!customerName) customerName = po.shipping_name_company || po.supplier_name_company || null;
-
-            const ins = await query(`
-              INSERT INTO purchase_orders
-                (helm_po_id, po_number, customer_id, customer_name, status, helm_status_id, expected_date, total_lines, total_units, raw_payload)
-              VALUES ($1,$2,$3,$4,$5::po_status,$6,$7,$8,$9,$10)
-              ON CONFLICT (helm_po_id) DO UPDATE SET
-                po_number      = EXCLUDED.po_number,
-                customer_id    = COALESCE(EXCLUDED.customer_id, purchase_orders.customer_id),
-                customer_name  = COALESCE(EXCLUDED.customer_name, purchase_orders.customer_name),
-                status         = EXCLUDED.status,
-                helm_status_id = EXCLUDED.helm_status_id,
-                expected_date  = EXCLUDED.expected_date,
-                total_lines    = EXCLUDED.total_lines,
-                total_units    = EXCLUDED.total_units,
-                raw_payload    = EXCLUDED.raw_payload,
-                updated_at     = NOW()
-              RETURNING id
-            `, [
-              String(po.id), (po.purchase_order_id || '').slice(0, 80) || null, customerId, customerName,
-              status, po.status_id != null ? parseInt(po.status_id) : null, po.expected_delivery_date || null,
-              lines.length, totalUnits, JSON.stringify(po).slice(0, 200000),
-            ]);
-            const poId = ins.rows[0].id;
-            await query(`DELETE FROM purchase_order_lines WHERE po_id = $1`, [poId]);
-            for (const l of lines) {
-              await query(
-                `INSERT INTO purchase_order_lines (po_id, sku, description, qty_ordered, qty_received) VALUES ($1,$2,$3,$4,$5)`,
-                [poId, l.sku || null, l.name || null, parseInt(l.quantity) || 0, parseInt(l.delivered_quantity) || 0]
-              );
-            }
-            upserted++;
-          } catch (e) { failed++; console.warn(`[po-sync] ${head.id}: ${e.message}`); }
-        }
-        await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('purchase_orders','ok',$1,$2)`,
-          [upserted, `${upserted} POs upserted, ${failed} failed of ${total}`]);
-        console.log(`✅ PO sync complete: ${upserted}/${total} upserted, ${failed} failed`);
-      } catch (err) {
-        console.error('❌ po-sync error:', err.message);
-        await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('purchase_orders','error',0,$1)`, [err.message]).catch(() => {});
-      }
-    });
+    setImmediate(() => syncPurchaseOrders());
   } catch (err) { next(err); }
 });
 
