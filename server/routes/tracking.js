@@ -122,4 +122,20 @@ router.get('/:consignment', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/tracking/repair-names — fix existing parcels whose displayed company
+// is the ship_from/warehouse rather than the resolved customer (the brand).
+router.post('/repair-names', async (_req, res, next) => {
+  try {
+    const a = await query(`
+      UPDATE parcels p SET customer_name = c.business_name, updated_at = NOW()
+      FROM customers c
+      WHERE p.customer_id = c.id AND p.customer_name IS DISTINCT FROM c.business_name`);
+    const b = await query(`
+      UPDATE parcels SET customer_name = customer_account, updated_at = NOW()
+      WHERE customer_id IS NULL AND customer_account IS NOT NULL
+        AND customer_name IS DISTINCT FROM customer_account`);
+    res.json({ ok: true, relinked: a.rowCount, fallback_to_accounts_id: b.rowCount });
+  } catch (err) { next(err); }
+});
+
 export default router;

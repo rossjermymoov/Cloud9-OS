@@ -171,17 +171,23 @@ export async function upsertEvent(event) {
   const estDelivery    = event._estimated_delivery || pick(event, 'estimated_delivery', 'estimatedDelivery', 'eta', 'due_date');
   const trackingUrl    = event._tracking_url    || pick(event, 'tracking_url', 'trackingUrl', 'track_url', 'parcel_tracking_url');
 
-  // Resolve the customer. Voila identifies them by accounts_id (e.g. "BEDDOES LTD")
-  // which maps to a Cloud9 customer's helm_accounts_id. Fall back to account number.
+  // Resolve the customer. Voila identifies them by accounts_id (e.g. "Ccell",
+  // "Vet Relieve") which maps to a Cloud9 customer's helm_accounts_id. The
+  // displayed customer name MUST be the resolved customer (the brand), NOT the
+  // shipment's ship_from company — that is often the warehouse/3PL entity
+  // (e.g. "Cloud9 Fulfillment Ltd") and would be misleading.
   const accountsId = event._accounts_id || pick(event, 'accounts_id', 'accountsId') || customerAccount;
-  let customerId = null;
+  let customerId = null, resolvedName = null;
   if (accountsId) {
     const cr = await query(
-      `SELECT id FROM customers WHERE helm_accounts_id = $1 OR account_number = $1 OR helm_customer_id = $1 LIMIT 1`,
+      `SELECT id, business_name FROM customers WHERE helm_accounts_id = $1 OR account_number = $1 OR helm_customer_id = $1 LIMIT 1`,
       [String(accountsId).trim()]
     );
-    if (cr.rows.length) customerId = cr.rows[0].id;
+    if (cr.rows.length) { customerId = cr.rows[0].id; resolvedName = cr.rows[0].business_name; }
   }
+  // Brand/customer first, then accounts_id, then the ship_from fallback.
+  const displayName    = resolvedName || accountsId || customerName;
+  const displayAccount = accountsId || customerAccount;
 
   const parcelRes = await query(`
     INSERT INTO parcels
@@ -230,7 +236,7 @@ export async function upsertEvent(event) {
     RETURNING id
   `, [
     consignment, courierName, courierCode, serviceName,
-    customerId, customerName, customerAccount,
+    customerId, displayName, displayAccount,
     recipientName, recipientPost, recipientAddr,
     weightKg ? parseFloat(weightKg) : null,
     estDelivery || null, trackingUrl || null,
