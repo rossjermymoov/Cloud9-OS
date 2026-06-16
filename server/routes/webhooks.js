@@ -186,43 +186,83 @@ router.post('/fulfilment-client-created', authMiddleware, (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /return-created  — a return has been raised (important!)
+//
+// Real payload (locked from a live fire) is an ARRAY of returns. Each return:
+//   { id, order_summary_id, user_name, created_at,
+//     return_inventory: [{ quantity, return_reason, restockable,
+//                          order_inventory: { sku, name } }] }
+// No fulfilment_client_id — the customer is resolved via the linked order.
 // ─────────────────────────────────────────────────────────────────────────────
+const RETURN_REASONS = { RTS: 'Return to sender', DMG: 'Damaged', FAULTY: 'Faulty',
+  UNWANTED: 'Unwanted', WRONG: 'Wrong item', WRONG_ITEM: 'Wrong item', NOT_DELIVERED: 'Not delivered' };
+const prettyReason = (c) => RETURN_REASONS[String(c || '').toUpperCase()] || c || null;
+
+function returnsFromBody(body) {
+  if (!body) return [];
+  if (Array.isArray(body)) return body;
+  if (Array.isArray(body.returns)) return body.returns;
+  if (body.return) return [body.return];
+  return [body];
+}
+
 router.post('/return-created', authMiddleware, (req, res) => {
-  const r = req.body?.return || req.body;
+  const list = returnsFromBody(req.body);
   res.json({ status: 'accepted' });
   setImmediate(async () => {
-    try {
-      const customer = await resolveCustomer(r?.fulfilment_client_id ?? r?.client_id ?? r?.account_number);
-      const ref     = r?.reference || r?.return_reference || null;
-      const orderRef = r?.order_id || r?.order_reference || r?.channel_order_id || null;
-      await query(`
-        INSERT INTO returns
-          (helm_return_id, customer_id, helm_client_id, reference, order_ref, status, reason, item_count, raw_payload)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-        ON CONFLICT (helm_return_id) DO UPDATE SET
-          status = EXCLUDED.status, reason = EXCLUDED.reason, updated_at = NOW()
-      `, [
-        r?.id != null ? String(r.id) : null,
-        customer?.id || null,
-        r?.fulfilment_client_id != null ? String(r.fulfilment_client_id) : null,
-        ref, orderRef, r?.status || null, r?.reason || null,
-        parseInt(r?.item_count ?? r?.total_quantity) || 0,
-        JSON.stringify(r || {}),
-      ]);
+    let ok = 0;
+    for (const r of list) {
+      try {
+        const helmReturnId = r?.id != null ? String(r.id) : null;
+        const orderRef = r?.order_summary_id ?? r?.order_id ?? r?.order_reference ?? r?.channel_order_id ?? null;
+        const lines = Array.isArray(r?.return_inventory) ? r.return_inventory : [];
+        const itemCount = lines.reduce((a, l) => a + (parseInt(l.quantity) || 0), 0);
+        const reasons = [...new Set(lines.map(l => l.return_reason).filter(Boolean))];
+        const reason = reasons.map(prettyReason).join(', ') || prettyReason(r?.reason);
+        const allRestockable = lines.length ? lines.every(l => l.restockable == 1 || l.restockable === true) : null;
+        const status = r?.status || (allRestockable === false ? 'not_restockable' : 'raised');
 
-      await createNotification({
-        type: 'return_created', severity: 'amber',
-        customer_id: customer?.id || null,
-        customer_name: customer?.business_name || null,
-        title: `Return created${customer ? ` · ${customer.business_name}` : ''}`,
-        body: ref || orderRef ? `Ref ${ref || orderRef}` : 'A return was raised in Helm.',
-        link_url: customer?.id ? `/customers/${customer.id}` : '/returns',
-        source_event: 'return-created',
-      });
-      console.log('✅ return-created processed');
-    } catch (err) {
-      console.error('❌ return-created error:', err.message);
+        // Returns carry no client — attribute via the linked order.
+        let customer = null, helmClientId = null;
+        if (orderRef != null) {
+          const ord = await query(
+            `SELECT o.customer_id, o.helm_client_id, c.business_name
+             FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+             WHERE o.helm_order_id = $1 LIMIT 1`, [String(orderRef)]
+          );
+          if (ord.rows[0]) {
+            helmClientId = ord.rows[0].helm_client_id || null;
+            if (ord.rows[0].customer_id) customer = { id: ord.rows[0].customer_id, business_name: ord.rows[0].business_name };
+          }
+        }
+
+        await query(`
+          INSERT INTO returns
+            (helm_return_id, customer_id, helm_client_id, reference, order_ref, status, reason, item_count, raw_payload)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+          ON CONFLICT (helm_return_id) DO UPDATE SET
+            customer_id    = COALESCE(EXCLUDED.customer_id, returns.customer_id),
+            helm_client_id = COALESCE(EXCLUDED.helm_client_id, returns.helm_client_id),
+            order_ref = EXCLUDED.order_ref, status = EXCLUDED.status, reason = EXCLUDED.reason,
+            item_count = EXCLUDED.item_count, raw_payload = EXCLUDED.raw_payload, updated_at = NOW()
+        `, [
+          helmReturnId, customer?.id || null, helmClientId,
+          helmReturnId ? `RET-${helmReturnId}` : null, orderRef != null ? String(orderRef) : null,
+          status, reason, itemCount, JSON.stringify(r || {}),
+        ]);
+
+        await createNotification({
+          type: 'return_created', severity: 'amber',
+          customer_id: customer?.id || null,
+          customer_name: customer?.business_name || null,
+          title: `Return raised${customer ? ` · ${customer.business_name}` : ''}`,
+          body: `${itemCount} item(s)${reason ? ` — ${reason}` : ''}${orderRef ? ` · order ${orderRef}` : ''}`,
+          link_url: customer?.id ? `/customers/${customer.id}` : '/returns',
+          source_event: 'return-created',
+        });
+        ok++;
+      } catch (err) { console.error('❌ return-created error:', err.message); }
     }
+    console.log(`✅ return-created: processed ${ok}/${list.length}`);
   });
 });
 
