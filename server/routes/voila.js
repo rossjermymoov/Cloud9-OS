@@ -60,6 +60,16 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 export async function runVoilaBackfill(days = 90, { pageDelayMs = 0 } = {}) {
   const to = new Date(), from = new Date(Date.now() - (days - 1) * 86400000);
   let stored = 0, parcels = 0, items = 0, attributed = 0, page = 1, lastFirstId = null, pageErrors = 0;
+  // Log a 'running' row immediately so the job is always visible in the sync-log,
+  // even if the process is killed mid-run. Updated to ok/error at the end.
+  let logId = null;
+  try {
+    const lr = await query(
+      `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','running',0,$1) RETURNING id`,
+      [`started ${days}d backfill at ${new Date().toISOString()}`]
+    );
+    logId = lr.rows[0]?.id || null;
+  } catch (e) { console.warn('[voila-backfill] start row failed:', e.message); }
   try {
     const cm = await query(`SELECT helm_accounts_id, id FROM customers WHERE helm_accounts_id IS NOT NULL`);
     const custByAcct = new Map(cm.rows.map(r => [String(r.helm_accounts_id).trim().toLowerCase(), r.id]));
@@ -132,12 +142,15 @@ export async function runVoilaBackfill(days = 90, { pageDelayMs = 0 } = {}) {
     try { health = await recomputeHealthAll(); } catch (e) { console.warn('[voila-backfill] health:', e.message); }
 
     const detail = `${stored} shipments, ${parcels} parcels, ${items} items, ${attributed} attributed, ${pageErrors} page errors, health ${health}`;
-    await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','ok',$1,$2)`, [stored, detail]);
+    if (logId) await query(`UPDATE helm_sync_log SET status='ok', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [stored, detail, logId]);
+    else await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','ok',$1,$2)`, [stored, detail]);
     console.log('✅ Voila backfill complete:', detail);
     return { stored, parcels, items, attributed };
   } catch (err) {
     console.error('❌ voila-backfill error:', err.message);
-    await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','error',$1,$2)`, [stored, err.message]).catch(() => {});
+    const msg = `${err.message} (stored ${stored} before failing)`;
+    if (logId) await query(`UPDATE helm_sync_log SET status='error', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [stored, msg, logId]).catch(() => {});
+    else await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('voila_backfill','error',$1,$2)`, [stored, msg]).catch(() => {});
     return { stored, error: err.message };
   }
 }

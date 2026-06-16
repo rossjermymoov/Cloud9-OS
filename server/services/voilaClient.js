@@ -22,16 +22,36 @@ function basicAuth() {
   return 'Basic ' + Buffer.from(`${USER}:${TOKEN}`).toString('base64');
 }
 
-async function voilaGet(path, params = {}) {
+const REQUEST_TIMEOUT_MS = Number(process.env.VOILA_TIMEOUT_MS) || 20000;
+
+async function voilaGet(path, params = {}, { retries = 2 } = {}) {
   if (!voilaConfigured()) throw new Error('Voila API not configured — set VOILA_API_USER / VOILA_API_TOKEN');
   const url = new URL(`${BASE}${path}`);
   for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, v);
-  const res = await fetch(url.toString(), { headers: { Authorization: basicAuth(), Accept: 'application/json' } });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Voila API ${res.status} on ${path}: ${body.slice(0, 200)}`);
+
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    // Hard timeout so a stuck Voila request fails fast instead of hanging the
+    // whole backfill. AbortSignal.timeout aborts the fetch after N ms.
+    const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: basicAuth(), Accept: 'application/json' },
+        signal,
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Voila API ${res.status} on ${path}: ${body.slice(0, 200)}`);
+      }
+      return res.json();
+    } catch (err) {
+      lastErr = (err.name === 'TimeoutError' || err.name === 'AbortError')
+        ? new Error(`Voila API timed out after ${REQUEST_TIMEOUT_MS}ms on ${path}`)
+        : err;
+      if (attempt < retries) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+    }
   }
-  return res.json();
+  throw lastErr;
 }
 
 /**
