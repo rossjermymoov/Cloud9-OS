@@ -205,14 +205,13 @@ function returnsFromBody(body) {
   return [body];
 }
 
-router.post('/return-created', authMiddleware, (req, res) => {
-  const list = returnsFromBody(req.body);
-  res.json({ status: 'accepted' });
-  setImmediate(async () => {
-    let ok = 0;
-    for (const r of list) {
-      try {
-        const helmReturnId = r?.id != null ? String(r.id) : null;
+// Core processor — shared by the live webhook and the replay endpoint.
+async function processReturns(body, { notify = true } = {}) {
+  const list = returnsFromBody(body);
+  let ok = 0;
+  for (const r of list) {
+    try {
+      const helmReturnId = r?.id != null ? String(r.id) : null;
         const orderRef = r?.order_summary_id ?? r?.order_id ?? r?.order_reference ?? r?.channel_order_id ?? null;
         const lines = Array.isArray(r?.return_inventory) ? r.return_inventory : [];
         const itemCount = lines.reduce((a, l) => a + (parseInt(l.quantity) || 0), 0);
@@ -250,7 +249,7 @@ router.post('/return-created', authMiddleware, (req, res) => {
           status, reason, itemCount, JSON.stringify(r || {}),
         ]);
 
-        await createNotification({
+        if (notify) await createNotification({
           type: 'return_created', severity: 'amber',
           customer_id: customer?.id || null,
           customer_name: customer?.business_name || null,
@@ -261,9 +260,35 @@ router.post('/return-created', authMiddleware, (req, res) => {
         });
         ok++;
       } catch (err) { console.error('❌ return-created error:', err.message); }
+  }
+  return { processed: ok, total: list.length };
+}
+
+router.post('/return-created', authMiddleware, (req, res) => {
+  const body = req.body;
+  res.json({ status: 'accepted' });
+  setImmediate(() => processReturns(body)
+    .then(r => console.log(`✅ return-created: processed ${r.processed}/${r.total}`))
+    .catch(e => console.error('❌ return-created error:', e.message)));
+});
+
+// Replay captured webhooks through the current handler — used after a parser fix
+// to rebuild data from payloads we already received (Helm only fires once).
+// POST /api/v1/webhooks/replay?endpoint=return-created
+router.post('/replay', async (req, res, next) => {
+  try {
+    const endpoint = req.query.endpoint || 'return-created';
+    const { rows } = await query(
+      `SELECT payload FROM webhook_log WHERE endpoint = $1 ORDER BY received_at ASC`, [endpoint]
+    );
+    if (endpoint !== 'return-created') return res.status(400).json({ error: `replay not supported for '${endpoint}' yet` });
+    let processed = 0, total = 0;
+    for (const row of rows) {
+      const r = await processReturns(row.payload, { notify: false });
+      processed += r.processed; total += r.total;
     }
-    console.log(`✅ return-created: processed ${ok}/${list.length}`);
-  });
+    res.json({ ok: true, endpoint, captures: rows.length, processed, total });
+  } catch (err) { next(err); }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
