@@ -20,6 +20,9 @@ import voilaRouter, { runVoilaBackfill } from './routes/voila.js';
 import { voilaConfigured }  from './services/voilaClient.js';
 import pickingRouter        from './routes/picking.js';
 import { syncPicks }        from './services/pickingService.js';
+import slaRouter            from './routes/sla.js';
+import { syncRecentOrders } from './services/slaService.js';
+import { syncBankHolidays } from './services/bankHolidayService.js';
 
 dotenv.config();
 
@@ -47,6 +50,7 @@ app.use('/api/purchase-orders', purchaseOrdersRouter);
 app.use('/api/returns',         returnsRouter);
 app.use('/api/voila',           voilaRouter);
 app.use('/api/picking',         pickingRouter);
+app.use('/api/sla',             slaRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'cloud9-os' }));
 
@@ -89,7 +93,16 @@ async function start() {
     setTimeout(() => syncPicks(2, { pickDelayMs: 60 }).catch(e => console.warn('[picking-sync]', e.message)), 90 * 1000);
     setInterval(() => syncPicks(2, { pickDelayMs: 60 }).catch(e => console.warn('[picking-sync]', e.message)), 60 * 60 * 1000);
     console.log('🧺 Picking auto-sync scheduled hourly');
+
+    // On-time SLA: refresh recent orders (received + dispatched times) hourly.
+    setTimeout(() => syncRecentOrders(14).catch(e => console.warn('[sla-sync]', e.message)), 120 * 1000);
+    setInterval(() => syncRecentOrders(14).catch(e => console.warn('[sla-sync]', e.message)), 60 * 60 * 1000);
+    console.log('⏱️  SLA order auto-sync scheduled hourly');
   }
+
+  // UK bank holidays — refresh on boot and weekly (independent of Helm).
+  syncBankHolidays().catch(e => console.warn('[bank-holidays]', e.message));
+  setInterval(() => syncBankHolidays().catch(e => console.warn('[bank-holidays]', e.message)), 7 * 24 * 60 * 60 * 1000);
 
   // Nightly full Voila backfill at 19:00 UK time — runs gently overnight so the
   // 9am management numbers are always complete, even if a webhook was missed.

@@ -175,6 +175,32 @@ export async function fetchDispatchedOrders({ helmClientId, from, to, maxPages =
 }
 
 /**
+ * Fetch ALL orders for one fulfilment client received within a date window
+ * (any status — needed for the on-time SLA so we see undispatched/overdue too).
+ * Helm filters by `date_received` via filters[date_range] in UK DD/MM/YYYY.
+ */
+export async function fetchOrdersForClient({ helmClientId, from, to, maxPages = 200 }) {
+  const all = [];
+  let page = 1;
+  for (let i = 0; i < maxPages; i++) {
+    const qs = new URLSearchParams();
+    qs.set('page', String(page));
+    qs.set('limit', '100');
+    qs.set('sort', 'datereceived_rp');
+    qs.set('filters[date_range]', `${ukDate(from)},${ukDate(to)}`);
+    if (helmClientId != null) qs.append('filters[fulfilment_clients][]', String(helmClientId));
+
+    const res = await authedGet(`/orders?${qs.toString()}`);
+    const rows = res.data || [];
+    all.push(...rows);
+    const lastPage = parseInt(res.last_page) || 1;
+    if (!res.next_page_url || page >= lastPage || rows.length === 0) break;
+    page++;
+  }
+  return all;
+}
+
+/**
  * Aggregate a list of despatched orders into { 'YYYY-MM-DD': {parcels, items, revenue} }.
  * items   = sum of total_inventory_quantity (units shipped)
  * parcels = sum of shipment[].length, defaulting to 1 parcel per order when the

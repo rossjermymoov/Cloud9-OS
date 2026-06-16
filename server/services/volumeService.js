@@ -47,7 +47,8 @@ export function pickParcelCount(o) {
 export function normaliseOrder(raw, { helmClientId = null, parcelFloor = 0, forceDispatched = false } = {}) {
   const o = raw.order || raw;
   const parcels = pickParcelCount(o);
-  const dispatched = cleanDate(o.date_dispatched ?? o.dispatched_at);
+  // Shipped time (order-dispatched / order-shipped webhook) — try the common names.
+  const dispatched = cleanDate(o.date_dispatched ?? o.dispatched_at ?? o.date_despatched ?? o.despatched_at ?? o.shipped_at ?? o.date_shipped);
   const statusId = o.status_id != null ? parseInt(o.status_id) : null;
   const isDispatched = forceDispatched || !!dispatched || (statusId != null && DISPATCH_STATUS_IDS.has(statusId));
 
@@ -62,7 +63,8 @@ export function normaliseOrder(raw, { helmClientId = null, parcelFloor = 0, forc
     parcel_count:     parcels != null ? parcels : (isDispatched ? Math.max(parcelFloor, 0) : 0),
     total_weight:     o.total_weight != null ? parseFloat(o.total_weight) : null,
     channel_id:       o.channel_id != null ? parseInt(o.channel_id) : null,
-    received_at:      cleanDate(o.date_received ?? o.received_at),
+    // Created/received time (order-created webhook) — try the common names.
+    received_at:      cleanDate(o.date_received ?? o.received_at ?? o.created_at ?? o.date_created ?? o.order_date),
     // If despatched but no explicit date, stamp now so it counts for today.
     dispatched_at:    dispatched || (isDispatched ? new Date().toISOString() : null),
     raw:              o,
