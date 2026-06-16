@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import api from '../api/client';
 import { listNotifications } from '../api/notifications';
-import { volumeSummary, volumeWeekly, volumeLeaderboard } from '../api/volume';
+import { volumeSummary, volumeTrend, volumeLeaderboard } from '../api/volume';
 
 // ── palette + status config ──────────────────────────────────
 const STATUS_RAG = {
@@ -90,36 +90,68 @@ function StatCard({ Icon, label, value, color, pill }) {
   );
 }
 
-// Dual-line week-over-week chart (SVG lines stretched, dots overlaid in %).
-function WeekChart({ weekly }) {
-  const tw = weekly?.this_week || [];
-  const lw = weekly?.last_week || [];
-  const all = [...tw, ...lw].map(d => d?.parcels || 0);
+// Flexible trend chart — dual line (current vs previous) or monthly bars.
+const PREV_LABEL = { week: 'Last week', month: 'Last month', quarter: 'Prev quarter' };
+const CUR_LABEL  = { week: 'This week', month: 'This month', quarter: 'This quarter' };
+function TrendChart({ trend, metric }) {
+  if (!trend) return null;
+  const n = trend.labels.length;
+  if (trend.mode === 'bars') {
+    const vals = trend.series.map(s => s[metric] || 0);
+    const max = Math.max(1, ...vals);
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 160 }}>
+          {trend.series.map((s, i) => (
+            <div key={i} title={`${trend.labels[i]}: ${s[metric]}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 10, color: '#334155', fontWeight: 600 }}>{s[metric]}</span>
+              <div style={{ width: '70%', background: ACCENT, borderRadius: '4px 4px 0 0', height: `${Math.round((s[metric] / max) * 120)}px`, minHeight: 2 }} />
+              <span style={{ fontSize: 10, color: '#94A3B8' }}>{trend.labels[i]}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  // compare mode (week / month)
+  const cur = trend.current, prev = trend.previous;
+  const all = [...cur, ...prev].map(d => (d ? d[metric] : 0));
   const max = Math.max(1, ...all);
-  const xy = (i, v) => ({ x: (i / 6) * 100, y: 100 - (v / max) * 100 });
-  const line = (arr) => arr.map((d, i) => (d?.parcels == null ? null : xy(i, d.parcels)))
-    .filter(Boolean).map(p => `${p.x},${p.y}`).join(' ');
-
+  const xy = (i, v) => ({ x: n > 1 ? (i / (n - 1)) * 100 : 50, y: 100 - (v / max) * 100 });
+  const line = (arr) => arr.map((d, i) => (d == null ? null : xy(i, d[metric]))).filter(Boolean).map(p => `${p.x},${p.y}`).join(' ');
   return (
     <div>
       <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 11.5, color: MUTED }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 3, background: ACCENT, borderRadius: 2 }} /> This week</span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 0, borderTop: `2px dashed ${LAST}` }} /> Last week</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 3, background: ACCENT, borderRadius: 2 }} /> {CUR_LABEL[trend.period]}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 0, borderTop: `2px dashed ${LAST}` }} /> {PREV_LABEL[trend.period]}</span>
       </div>
       <div style={{ position: 'relative', height: 180 }}>
         <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ overflow: 'visible' }}>
           {[25, 50, 75].map(y => <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="#EEF2F6" strokeWidth="1" vectorEffect="non-scaling-stroke" />)}
-          <polyline points={line(lw)} fill="none" stroke={LAST} strokeWidth="2" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
-          <polyline points={line(tw)} fill="none" stroke={ACCENT} strokeWidth="2.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+          <polyline points={line(prev)} fill="none" stroke={LAST} strokeWidth="2" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
+          <polyline points={line(cur)} fill="none" stroke={ACCENT} strokeWidth="2.5" vectorEffect="non-scaling-stroke" strokeLinejoin="round" />
         </svg>
-        {tw.map((d, i) => d?.parcels == null ? null : (() => { const p = xy(i, d.parcels); return (
-          <div key={i} title={`${d.label}: ${d.parcels}`} style={{ position: 'absolute', left: `${p.x}%`, top: `${p.y}%`,
-            width: 7, height: 7, borderRadius: '50%', background: ACCENT, border: '2px solid #fff',
-            transform: 'translate(-50%,-50%)', boxShadow: '0 0 0 1px rgba(0,86,251,0.3)' }} />); })())}
+        {cur.map((d, i) => d == null ? null : (() => { const p = xy(i, d[metric]); return (
+          <div key={i} title={`${trend.labels[i]}: ${d[metric]}`} style={{ position: 'absolute', left: `${p.x}%`, top: `${p.y}%`,
+            width: 6, height: 6, borderRadius: '50%', background: ACCENT, border: '2px solid #fff',
+            transform: 'translate(-50%,-50%)' }} />); })())}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', marginTop: 8 }}>
-        {tw.map((d, i) => <span key={i} style={{ fontSize: 10, color: '#94A3B8', textAlign: 'center' }}>{d.label}</span>)}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${n},1fr)`, marginTop: 8 }}>
+        {trend.labels.map((l, i) => <span key={i} style={{ fontSize: 9, color: '#94A3B8', textAlign: 'center' }}>{n > 16 && i % 3 !== 0 ? '' : l}</span>)}
       </div>
+    </div>
+  );
+}
+
+function Seg({ options, value, onChange }) {
+  return (
+    <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: 8, padding: 3 }}>
+      {options.map(o => (
+        <button key={o.v} onClick={() => onChange(o.v)} style={{
+          fontSize: 12, fontWeight: 600, padding: '5px 11px', borderRadius: 6, border: 'none', cursor: 'pointer',
+          background: value === o.v ? '#fff' : 'transparent', color: value === o.v ? ACCENT : MUTED, boxShadow: value === o.v ? CARD_SHADOW : 'none',
+        }}>{o.l}</button>
+      ))}
     </div>
   );
 }
@@ -158,18 +190,25 @@ export default function Dashboard() {
   const qc = useQueryClient();
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
+  const [period, setPeriod] = useState('week');
+  const [metric, setMetric] = useState('parcels');
 
   const { data: stats }  = useQuery({ queryKey: ['tracking-stats'], queryFn: () => api.get('/tracking/stats').then(r => r.data) });
   const { data: notifs } = useQuery({ queryKey: ['dashboard-notifs'], queryFn: () => listNotifications({ limit: 7 }) });
   const { data: vol }    = useQuery({ queryKey: ['volume-summary'], queryFn: volumeSummary });
-  const { data: weekly } = useQuery({ queryKey: ['volume-weekly'], queryFn: volumeWeekly });
+  const { data: trend }  = useQuery({ queryKey: ['volume-trend', period], queryFn: () => volumeTrend(period) });
   const { data: board }  = useQuery({ queryKey: ['volume-leaderboard'], queryFn: () => volumeLeaderboard(5) });
 
   const byStatus = stats?.by_status || {};
   const statusRows = Object.entries(byStatus).sort((a, b) => b[1] - a[1]);
   const pending = byStatus.booked || 0;
   const todayWd = WD[new Date().getDay()];
-  const hasWeek = weekly && [...(weekly.this_week || []), ...(weekly.last_week || [])].some(d => (d?.parcels || 0) > 0);
+  const hasTrend = trend && (trend.mode === 'bars'
+    ? trend.series.some(s => s.parcels > 0 || s.items > 0)
+    : [...(trend.current || []), ...(trend.previous || [])].some(d => d && (d.parcels > 0 || d.items > 0)));
+  const tc = trend?.totals?.current?.[metric] ?? 0;
+  const tp = trend?.totals?.previous?.[metric] ?? 0;
+  const trendPct = tp > 0 ? Math.round(((tc - tp) / tp) * 1000) / 10 : (tc > 0 ? null : 0);
 
   async function runHelmSync() {
     setSyncing(true); setSyncMsg(null);
@@ -178,7 +217,7 @@ export default function Dashboard() {
       await api.post('/helm/sync/volume?days=60');
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['volume-summary'] }),
-        qc.invalidateQueries({ queryKey: ['volume-weekly'] }),
+        qc.invalidateQueries({ queryKey: ['volume-trend'] }),
         qc.invalidateQueries({ queryKey: ['volume-leaderboard'] }),
         qc.invalidateQueries({ queryKey: ['customers'] }),
       ]);
@@ -210,11 +249,22 @@ export default function Dashboard() {
         {/* ROW 2 — analytics 60 / 40 */}
         <div className="c9-r2">
           <Card>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
               <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Dispatch volume &amp; trends</span>
-              {hasWeek && <span style={{ fontSize: 12, color: MUTED }}>{vol?.parcels_7d ?? 0} parcels · {vol?.items_7d ?? 0} items (7d)</span>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Seg value={metric} onChange={setMetric} options={[{ v: 'parcels', l: 'Parcels' }, { v: 'items', l: 'Items' }]} />
+                <Seg value={period} onChange={setPeriod} options={[{ v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }]} />
+              </div>
             </div>
-            {hasWeek ? <WeekChart weekly={weekly} /> : (
+            {hasTrend && (
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+                <span style={{ fontSize: 26, fontWeight: 800, color: HEADER, letterSpacing: -0.6 }}>{tc.toLocaleString()}</span>
+                <span style={{ fontSize: 12, color: MUTED }}>{metric} {CUR_LABEL[period].toLowerCase()}</span>
+                <Pill tone={trendPct == null ? 'green' : trendPct >= 0 ? 'green' : 'amber'}
+                  text={trendPct == null ? `New vs ${PREV_LABEL[period].toLowerCase()}` : `${trendPct >= 0 ? '+' : ''}${trendPct}% vs ${PREV_LABEL[period].toLowerCase()} (${tp.toLocaleString()})`} />
+              </div>
+            )}
+            {hasTrend ? <TrendChart trend={trend} metric={metric} /> : (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                 textAlign: 'center', padding: '30px 16px', minHeight: 180 }}>
                 <div style={{ width: 52, height: 52, borderRadius: 14, background: `${ACCENT}14`, color: ACCENT,

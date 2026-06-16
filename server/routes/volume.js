@@ -71,6 +71,73 @@ router.get('/weekly', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── Flexible trend: week-on-week / month-on-month / quarter ───
+function ymd(d) { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
+function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
+
+router.get('/trend', async (req, res, next) => {
+  try {
+    const period = ['week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'week';
+    const { rows } = await query(
+      `SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
+       FROM customer_volume_snapshots WHERE snapshot_date >= CURRENT_DATE - 220 GROUP BY snapshot_date`
+    );
+    const map = {}; for (const r of rows) map[r.d] = { parcels: r.p, items: r.i };
+    const get = (d) => map[ymd(d)] || { parcels: 0, items: 0 };
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    const addDays = (base, n) => { const x = new Date(base); x.setDate(base.getDate() + n); return x; };
+
+    const pack = (mode, labels, current, previous) => {
+      const sum = (arr, k) => arr.reduce((a, x) => a + (x ? x[k] : 0), 0);
+      const elapsedPrev = (k) => previous.reduce((a, x, idx) => a + ((current[idx] != null && x) ? x[k] : 0), 0);
+      return { period, mode, labels, current, previous,
+        totals: { current: { parcels: sum(current, 'parcels'), items: sum(current, 'items') },
+                  previous: { parcels: elapsedPrev('parcels'), items: elapsedPrev('items') } } };
+    };
+
+    if (period === 'week') {
+      const dow = (now.getDay() + 6) % 7; const monday = addDays(now, -dow);
+      const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+      const current = [], previous = [];
+      for (let i = 0; i < 7; i++) {
+        const cur = addDays(monday, i);
+        current.push(cur > now ? null : get(cur));
+        previous.push(get(addDays(monday, -7 + i)));
+      }
+      return res.json(pack('compare', labels, current, previous));
+    }
+
+    if (period === 'month') {
+      const firstThis = new Date(now.getFullYear(), now.getMonth(), 1);
+      const firstLast = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const daysThis = now.getDate();
+      const dLast = daysInMonth(firstLast.getFullYear(), firstLast.getMonth());
+      const len = Math.max(daysThis, dLast);
+      const labels = [], current = [], previous = [];
+      for (let i = 0; i < len; i++) {
+        labels.push(String(i + 1));
+        current.push(i < daysThis ? get(addDays(firstThis, i)) : null);
+        previous.push(i < dLast ? get(addDays(firstLast, i)) : null);
+      }
+      return res.json(pack('compare', labels, current, previous));
+    }
+
+    // quarter → last 6 monthly totals (bars) + this-quarter vs last-quarter totals
+    const labels = [], series = [];
+    let cur = { parcels: 0, items: 0 }, prev = { parcels: 0, items: 0 };
+    for (let k = 5; k >= 0; k--) {
+      const mDate = new Date(now.getFullYear(), now.getMonth() - k, 1);
+      const dim = daysInMonth(mDate.getFullYear(), mDate.getMonth());
+      let p = 0, it = 0;
+      for (let dd = 0; dd < dim; dd++) { const g = get(addDays(mDate, dd)); p += g.parcels; it += g.items; }
+      labels.push(mDate.toLocaleString('en-GB', { month: 'short' }));
+      series.push({ parcels: p, items: it });
+      if (k < 3) { cur.parcels += p; cur.items += it; } else { prev.parcels += p; prev.items += it; }
+    }
+    return res.json({ period: 'quarter', mode: 'bars', labels, series, totals: { current: cur, previous: prev } });
+  } catch (err) { next(err); }
+});
+
 // ── Top customers by month-over-month growth ──────────────────
 router.get('/leaderboard', async (req, res, next) => {
   try {
