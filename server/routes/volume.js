@@ -78,21 +78,27 @@ function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 router.get('/trend', async (req, res, next) => {
   try {
     const period = ['week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'week';
-    const { rows } = await query(
-      `SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
-       FROM customer_volume_snapshots WHERE snapshot_date >= CURRENT_DATE - 220 GROUP BY snapshot_date`
-    );
-    const map = {}; for (const r of rows) map[r.d] = { parcels: r.p, items: r.i };
-    const get = (d) => map[ymd(d)] || { parcels: 0, items: 0 };
+    const [snap, picks] = await Promise.all([
+      query(`SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
+             FROM customer_volume_snapshots WHERE snapshot_date >= CURRENT_DATE - 220 GROUP BY snapshot_date`),
+      query(`SELECT picked_at::date::text AS d, COUNT(*)::int AS k FROM pick_events
+             WHERE picked_at >= CURRENT_DATE - 220 GROUP BY picked_at::date`),
+    ]);
+    const map = {};
+    for (const r of snap.rows) map[r.d] = { parcels: r.p, items: r.i, picks: 0 };
+    for (const r of picks.rows) (map[r.d] ||= { parcels: 0, items: 0, picks: 0 }).picks = r.k;
+    const get = (d) => map[ymd(d)] || { parcels: 0, items: 0, picks: 0 };
     const now = new Date(); now.setHours(0, 0, 0, 0);
     const addDays = (base, n) => { const x = new Date(base); x.setDate(base.getDate() + n); return x; };
 
     const pack = (mode, labels, current, previous) => {
-      const sum = (arr, k) => arr.reduce((a, x) => a + (x ? x[k] : 0), 0);
-      const elapsedPrev = (k) => previous.reduce((a, x, idx) => a + ((current[idx] != null && x) ? x[k] : 0), 0);
+      const sum = (arr, k) => arr.reduce((a, x) => a + (x ? (x[k] || 0) : 0), 0);
+      const elapsedPrev = (k) => previous.reduce((a, x, idx) => a + ((current[idx] != null && x) ? (x[k] || 0) : 0), 0);
       return { period, mode, labels, current, previous,
-        totals: { current: { parcels: sum(current, 'parcels'), items: sum(current, 'items') },
-                  previous: { parcels: elapsedPrev('parcels'), items: elapsedPrev('items') } } };
+        totals: {
+          current:  { parcels: sum(current, 'parcels'), items: sum(current, 'items'), picks: sum(current, 'picks') },
+          previous: { parcels: elapsedPrev('parcels'), items: elapsedPrev('items'), picks: elapsedPrev('picks') },
+        } };
     };
 
     if (period === 'week') {
@@ -124,57 +130,66 @@ router.get('/trend', async (req, res, next) => {
 
     // quarter → last 6 monthly totals (bars) + this-quarter vs last-quarter totals
     const labels = [], series = [];
-    let cur = { parcels: 0, items: 0 }, prev = { parcels: 0, items: 0 };
+    let cur = { parcels: 0, items: 0, picks: 0 }, prev = { parcels: 0, items: 0, picks: 0 };
     for (let k = 5; k >= 0; k--) {
       const mDate = new Date(now.getFullYear(), now.getMonth() - k, 1);
       const dim = daysInMonth(mDate.getFullYear(), mDate.getMonth());
-      let p = 0, it = 0;
-      for (let dd = 0; dd < dim; dd++) { const g = get(addDays(mDate, dd)); p += g.parcels; it += g.items; }
+      let p = 0, it = 0, pk = 0;
+      for (let dd = 0; dd < dim; dd++) { const g = get(addDays(mDate, dd)); p += g.parcels; it += g.items; pk += g.picks; }
       labels.push(mDate.toLocaleString('en-GB', { month: 'short' }));
-      series.push({ parcels: p, items: it });
-      if (k < 3) { cur.parcels += p; cur.items += it; } else { prev.parcels += p; prev.items += it; }
+      series.push({ parcels: p, items: it, picks: pk });
+      if (k < 3) { cur.parcels += p; cur.items += it; cur.picks += pk; } else { prev.parcels += p; prev.items += it; prev.picks += pk; }
     }
     return res.json({ period: 'quarter', mode: 'bars', labels, series, totals: { current: cur, previous: prev } });
   } catch (err) { next(err); }
 });
 
-// ── Top customers by month-over-month growth ──────────────────
+// ── Top customers — by volume or growth, for the selected period/metric ──
 router.get('/leaderboard', async (req, res, next) => {
   try {
-    const limit = Math.min(Math.max(parseInt(req.query.limit) || 5, 1), 20);
+    const limit  = Math.min(Math.max(parseInt(req.query.limit) || 5, 1), 50);
+    const period = ['week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'month';
+    const metricCol = req.query.metric === 'items' ? 'item_count' : 'parcel_count';
+    const sort   = req.query.sort === 'volume' ? 'volume' : 'growth';
+
+    // current period-to-date vs the same elapsed length in the previous period
+    const now = new Date(); now.setHours(0, 0, 0, 0);
+    const add = (d, n) => { const x = new Date(d); x.setDate(d.getDate() + n); return x; };
+    let curStart, curEnd, prevStart, prevEnd;
+    if (period === 'week') {
+      const dow = (now.getDay() + 6) % 7; const monday = add(now, -dow);
+      curStart = monday; curEnd = now; prevStart = add(monday, -7); prevEnd = add(monday, -7 + dow);
+    } else if (period === 'month') {
+      const ft = new Date(now.getFullYear(), now.getMonth(), 1);
+      const fl = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      curStart = ft; curEnd = now; prevStart = fl; prevEnd = add(fl, now.getDate() - 1);
+    } else {
+      curStart = add(now, -89); curEnd = now; prevStart = add(now, -179); prevEnd = add(now, -90);
+    }
+
     const { rows } = await query(`
       SELECT c.id, c.business_name,
-             COALESCE(o.orders_today, 0)::int AS orders_today,
-             COALESCE(tm.parcels, 0)::int     AS this_month,
-             COALESCE(lm.parcels, 0)::int     AS last_month
+             COALESCE(cur.v, 0)::int  AS current,
+             COALESCE(prev.v, 0)::int AS previous
       FROM customers c
-      LEFT JOIN (
-        SELECT customer_id, COUNT(*) AS orders_today FROM orders
-        WHERE dispatched_at::date = CURRENT_DATE GROUP BY customer_id
-      ) o ON o.customer_id = c.id
-      LEFT JOIN (
-        SELECT customer_id, SUM(parcel_count) AS parcels FROM customer_volume_snapshots
-        WHERE date_trunc('month', snapshot_date) = date_trunc('month', CURRENT_DATE) GROUP BY customer_id
-      ) tm ON tm.customer_id = c.id
-      LEFT JOIN (
-        SELECT customer_id, SUM(parcel_count) AS parcels FROM customer_volume_snapshots
-        WHERE date_trunc('month', snapshot_date) = date_trunc('month', CURRENT_DATE - INTERVAL '1 month') GROUP BY customer_id
-      ) lm ON lm.customer_id = c.id
-      WHERE COALESCE(tm.parcels,0) + COALESCE(lm.parcels,0) > 0
-    `);
+      LEFT JOIN (SELECT customer_id, SUM(${metricCol}) v FROM customer_volume_snapshots
+                 WHERE snapshot_date BETWEEN $1 AND $2 GROUP BY customer_id) cur  ON cur.customer_id = c.id
+      LEFT JOIN (SELECT customer_id, SUM(${metricCol}) v FROM customer_volume_snapshots
+                 WHERE snapshot_date BETWEEN $3 AND $4 GROUP BY customer_id) prev ON prev.customer_id = c.id
+      WHERE COALESCE(cur.v,0) + COALESCE(prev.v,0) > 0
+    `, [ymd(curStart), ymd(curEnd), ymd(prevStart), ymd(prevEnd)]);
 
     const ranked = rows.map(r => {
-      const mom = r.last_month > 0
-        ? ((r.this_month - r.last_month) / r.last_month) * 100
-        : (r.this_month > 0 ? null : 0);   // null = brand-new (no prior month)
-      return { ...r, mom_pct: mom == null ? null : Math.round(mom * 10) / 10 };
+      const growth = r.previous > 0 ? Math.round(((r.current - r.previous) / r.previous) * 1000) / 10 : (r.current > 0 ? null : 0);
+      return { id: r.id, business_name: r.business_name, current: r.current, previous: r.previous, growth_pct: growth };
     }).sort((a, b) => {
-      const av = a.mom_pct == null ? Infinity : a.mom_pct;
-      const bv = b.mom_pct == null ? Infinity : b.mom_pct;
+      if (sort === 'volume') return b.current - a.current;
+      const av = a.growth_pct == null ? Infinity : a.growth_pct;
+      const bv = b.growth_pct == null ? Infinity : b.growth_pct;
       return bv - av;
     }).slice(0, limit);
 
-    res.json(ranked);
+    res.json({ period, metric: req.query.metric === 'items' ? 'items' : 'parcels', sort, rows: ranked });
   } catch (err) { next(err); }
 });
 

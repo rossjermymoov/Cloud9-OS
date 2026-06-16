@@ -3,11 +3,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   Truck, Boxes, Send, Hand, PackageOpen, RefreshCw, Database,
-  TrendingUp, TrendingDown, Minus,
+  TrendingUp, TrendingDown, Minus, Trophy,
 } from 'lucide-react';
 import api from '../api/client';
 import { listNotifications } from '../api/notifications';
-import { volumeSummary, volumeTrend, volumeLeaderboard } from '../api/volume';
+import { volumeTrend, volumeLeaderboard } from '../api/volume';
 
 // ── palette + status config ──────────────────────────────────
 const STATUS_RAG = {
@@ -156,31 +156,49 @@ function Seg({ options, value, onChange }) {
   );
 }
 
-function Leaderboard({ rows, navigate }) {
-  if (!rows || rows.length === 0)
-    return <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '24px 0', color: '#94A3B8' }}>
-      <ListeningPill /><span style={{ fontSize: 12 }}>No customer volume yet.</span></div>;
+function Leaderboard({ data, metric, sort, setSort, navigate }) {
+  const rows = data?.rows || [];
+  const unit = metric === 'items' ? 'items' : 'parcels';
   return (
-    <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {rows.map((c, i) => {
-        const mom = c.mom_pct;
-        const tone = mom == null ? 'grey' : mom >= 0 ? 'green' : 'amber';
-        const Tri = mom == null ? Minus : mom >= 0 ? TrendingUp : TrendingDown;
-        const label = mom == null ? 'New' : `${mom >= 0 ? '+' : ''}${mom}%`;
-        return (
-          <div key={c.id} className="c9-row" onClick={() => navigate(`/customers/${c.id}`)}
-            style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 6px', cursor: 'pointer',
-              borderTop: i ? '1px solid rgba(16,24,40,0.05)' : 'none', borderRadius: 6 }}>
-            <span style={{ width: 18, fontSize: 12, fontWeight: 700, color: '#94A3B8' }}>{i + 1}</span>
-            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.business_name}</span>
-            <span style={{ fontSize: 12, color: MUTED, minWidth: 64, textAlign: 'right' }}>{c.orders_today} orders</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 64, justifyContent: 'flex-end',
-              fontSize: 12, fontWeight: 700, color: TONE[tone].fg }}>
-              <Tri size={13} /> {label}
-            </span>
-          </div>
-        );
-      })}
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Top customers</span>
+        <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: 8, padding: 3 }}>
+          {[['volume', 'Top volume', Trophy], ['growth', 'Fastest growth', TrendingUp]].map(([v, l, Ic]) => (
+            <button key={v} onClick={() => setSort(v)} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, padding: '5px 9px',
+              borderRadius: 6, border: 'none', cursor: 'pointer', background: sort === v ? '#fff' : 'transparent',
+              color: sort === v ? ACCENT : MUTED, boxShadow: sort === v ? CARD_SHADOW : 'none' }}>
+              <Ic size={13} /> {l}
+            </button>
+          ))}
+        </div>
+      </div>
+      {rows.length === 0
+        ? <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '20px 0', color: '#94A3B8' }}>
+            <ListeningPill /><span style={{ fontSize: 12 }}>No customer volume yet.</span></div>
+        : <div>
+            {rows.map((c, i) => {
+              const g = c.growth_pct;
+              const tone = g == null ? 'grey' : g >= 0 ? 'green' : 'amber';
+              const Tri = g == null ? Minus : g >= 0 ? TrendingUp : TrendingDown;
+              const label = g == null ? 'New' : `${g >= 0 ? '+' : ''}${g}%`;
+              return (
+                <div key={c.id} className="c9-row" onClick={() => navigate(`/customers/${c.id}`)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 6px', cursor: 'pointer',
+                    borderTop: i ? '1px solid rgba(16,24,40,0.05)' : 'none', borderRadius: 6 }}>
+                  <span style={{ width: 18, fontSize: 12, fontWeight: 700, color: '#94A3B8' }}>{i + 1}</span>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.business_name}</span>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: HEADER, minWidth: 90, textAlign: 'right' }}>
+                    {c.current.toLocaleString()} <span style={{ fontWeight: 500, color: MUTED, fontSize: 11 }}>{unit}</span>
+                  </span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 56, justifyContent: 'flex-end', fontSize: 12, fontWeight: 700, color: TONE[tone].fg }}>
+                    <Tri size={13} /> {label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>}
     </div>
   );
 }
@@ -192,12 +210,12 @@ export default function Dashboard() {
   const [syncMsg, setSyncMsg] = useState(null);
   const [period, setPeriod] = useState('week');
   const [metric, setMetric] = useState('parcels');
+  const [boardSort, setBoardSort] = useState('volume');
 
   const { data: stats }  = useQuery({ queryKey: ['tracking-stats'], queryFn: () => api.get('/tracking/stats').then(r => r.data) });
   const { data: notifs } = useQuery({ queryKey: ['dashboard-notifs'], queryFn: () => listNotifications({ limit: 7 }) });
-  const { data: vol }    = useQuery({ queryKey: ['volume-summary'], queryFn: volumeSummary });
   const { data: trend }  = useQuery({ queryKey: ['volume-trend', period], queryFn: () => volumeTrend(period) });
-  const { data: board }  = useQuery({ queryKey: ['volume-leaderboard'], queryFn: () => volumeLeaderboard(5) });
+  const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort }) });
 
   const byStatus = stats?.by_status || {};
   const statusRows = Object.entries(byStatus).sort((a, b) => b[1] - a[1]);
@@ -206,8 +224,10 @@ export default function Dashboard() {
   const hasTrend = trend && (trend.mode === 'bars'
     ? trend.series.some(s => s.parcels > 0 || s.items > 0)
     : [...(trend.current || []), ...(trend.previous || [])].some(d => d && (d.parcels > 0 || d.items > 0)));
-  const tc = trend?.totals?.current?.[metric] ?? 0;
-  const tp = trend?.totals?.previous?.[metric] ?? 0;
+  const cur = trend?.totals?.current  || { parcels: 0, items: 0, picks: 0 };
+  const prv = trend?.totals?.previous || { parcels: 0, items: 0, picks: 0 };
+  const tc = cur[metric] ?? 0;
+  const tp = prv[metric] ?? 0;
   const trendPct = tp > 0 ? Math.round(((tc - tp) / tp) * 1000) / 10 : (tc > 0 ? null : 0);
 
   async function runHelmSync() {
@@ -227,21 +247,28 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ width: '100%', maxWidth: 1600 }}>
+    <div style={{ width: '100%' }}>
       <style>{STYLE}</style>
-      <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: '0 0 4px', letterSpacing: -0.6 }}>Air Traffic Control</h1>
-      <p style={{ fontSize: 13, color: MUTED, margin: '0 0 22px' }}>Live operational view across all 3PL activity.</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 22 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: '0 0 4px', letterSpacing: -0.6 }}>Air Traffic Control</h1>
+          <p style={{ fontSize: 13, color: MUTED, margin: 0 }}>Live operational view across all 3PL activity.</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <Seg value={metric} onChange={setMetric} options={[{ v: 'parcels', l: 'Parcels' }, { v: 'items', l: 'Items' }]} />
+          <Seg value={period} onChange={setPeriod} options={[{ v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }]} />
+        </div>
+      </div>
 
       <div className="c9-rows">
         {/* ROW 1 — stats */}
         <div className="c9-r1">
-          <StatCard Icon={Send}  label="Parcels sent today" value={vol?.parcels_today ?? '—'} color={ACCENT}
-            pill={pctPill(vol?.parcels_today || 0, vol?.parcels_last_week || 0, `last ${todayWd}`)} />
-          <StatCard Icon={Boxes} label="Items sent today" value={vol?.items_today ?? '—'} color="#7B2FBE"
-            pill={pctPill(vol?.items_today || 0, vol?.items_last_week || 0, `last ${todayWd}`)} />
-          <StatCard Icon={Hand}  label="Picks today" value={vol?.picks_today ?? '—'} color="#00BCD4"
-            pill={{ text: `vs ${vol?.picks_yesterday_to_hour ?? 0} yest. @ this hour`,
-              tone: (vol?.picks_today || 0) >= (vol?.picks_yesterday_to_hour || 0) ? 'green' : 'amber' }} />
+          <StatCard Icon={Send}  label={`Parcels this ${period}`} value={cur.parcels.toLocaleString()} color={ACCENT}
+            pill={pctPill(cur.parcels, prv.parcels, `last ${period}`)} />
+          <StatCard Icon={Boxes} label={`Items this ${period}`} value={cur.items.toLocaleString()} color="#7B2FBE"
+            pill={pctPill(cur.items, prv.items, `last ${period}`)} />
+          <StatCard Icon={Hand}  label={`Picks this ${period}`} value={cur.picks.toLocaleString()} color="#00BCD4"
+            pill={pctPill(cur.picks, prv.picks, `last ${period}`)} />
           <StatCard Icon={PackageOpen} label="Pending dispatch" value={pending} color="#F59E0B"
             pill={{ text: 'packed · awaiting carrier', tone: 'grey' }} />
         </div>
@@ -249,13 +276,7 @@ export default function Dashboard() {
         {/* ROW 2 — analytics 60 / 40 */}
         <div className="c9-r2">
           <Card>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-              <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Dispatch volume &amp; trends</span>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Seg value={metric} onChange={setMetric} options={[{ v: 'parcels', l: 'Parcels' }, { v: 'items', l: 'Items' }]} />
-                <Seg value={period} onChange={setPeriod} options={[{ v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }]} />
-              </div>
-            </div>
+            <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 10 }}>Dispatch volume &amp; trends</div>
             {hasTrend && (
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
                 <span style={{ fontSize: 26, fontWeight: 800, color: HEADER, letterSpacing: -0.6 }}>{tc.toLocaleString()}</span>
@@ -287,9 +308,7 @@ export default function Dashboard() {
           </Card>
 
           <Card>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 6 }}>Top customers by growth</div>
-            <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 8 }}>Orders today · month-over-month</div>
-            <Leaderboard rows={board} navigate={navigate} />
+            <Leaderboard data={board} metric={metric} sort={boardSort} setSort={setBoardSort} navigate={navigate} />
           </Card>
         </div>
 
