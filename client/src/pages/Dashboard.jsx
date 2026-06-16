@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   Truck, Boxes, Send, Hand, PackageOpen, RefreshCw, Database,
-  TrendingUp, TrendingDown, Minus, Trophy, Info,
+  TrendingUp, TrendingDown, Minus, Trophy, Info, Maximize2, X,
 } from 'lucide-react';
 import api from '../api/client';
 import { listNotifications } from '../api/notifications';
@@ -228,24 +228,63 @@ function PendingCard({ total, byCourier }) {
   );
 }
 
-function Leaderboard({ data, metric, sort, setSort, navigate }) {
+function AllCustomersModal({ period, metric, dateParam, periodLabel, onClose, navigate }) {
+  const unit = metric === 'items' ? 'items' : 'parcels';
+  const { data } = useQuery({
+    queryKey: ['volume-all', period, metric, dateParam],
+    queryFn: () => volumeLeaderboard({ period, metric, sort: 'volume', limit: 500, date: dateParam }),
+  });
+  const rows = (data?.rows || []).filter(r => r.current > 0).sort((a, b) => b.current - a.current);
+  const total = rows.reduce((a, r) => a + r.current, 0);
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 100 }}>
+      <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 0, right: 0, height: '100%', width: 520, maxWidth: '94vw', background: '#fff', boxShadow: '-8px 0 24px rgba(0,0,0,0.12)', padding: 24, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: TITLE }}>All customers shipping {periodLabel}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED }}><X size={18} /></button>
+        </div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14 }}>{rows.length} customers · {total.toLocaleString()} {unit} total</div>
+        {rows.map((c, i) => (
+          <div key={c.id} className="c9-row" onClick={() => navigate(`/customers/${c.id}`)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 6px', cursor: 'pointer', borderTop: i ? '1px solid rgba(16,24,40,0.05)' : 'none', borderRadius: 6 }}>
+            <span style={{ width: 22, fontSize: 12, fontWeight: 700, color: '#94A3B8' }}>{i + 1}</span>
+            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: TITLE, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.business_name}</span>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: HEADER }}>{c.current.toLocaleString()} <span style={{ fontWeight: 500, color: MUTED, fontSize: 11 }}>{unit}</span></span>
+          </div>
+        ))}
+        {rows.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#94A3B8', fontSize: 13 }}>No customers shipped in this period.</div>}
+      </div>
+    </div>
+  );
+}
+
+function Leaderboard({ data, metric, sort, setSort, navigate, period, dateParam, periodLabel }) {
   const rows = data?.rows || [];
   const unit = metric === 'items' ? 'items' : 'parcels';
+  const [showAll, setShowAll] = useState(false);
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Top customers</span>
-        <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: 8, padding: 3 }}>
-          {[['volume', 'Top volume', Trophy], ['growth', 'Fastest growth', TrendingUp]].map(([v, l, Ic]) => (
-            <button key={v} onClick={() => setSort(v)} style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, padding: '5px 9px',
-              borderRadius: 6, border: 'none', cursor: 'pointer', background: sort === v ? '#fff' : 'transparent',
-              color: sort === v ? ACCENT : MUTED, boxShadow: sort === v ? CARD_SHADOW : 'none' }}>
-              <Ic size={13} /> {l}
-            </button>
-          ))}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: 8, padding: 3 }}>
+            {[['volume', 'Top volume', Trophy], ['growth', 'Fastest growth', TrendingUp]].map(([v, l, Ic]) => (
+              <button key={v} onClick={() => setSort(v)} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, padding: '5px 9px',
+                borderRadius: 6, border: 'none', cursor: 'pointer', background: sort === v ? '#fff' : 'transparent',
+                color: sort === v ? ACCENT : MUTED, boxShadow: sort === v ? CARD_SHADOW : 'none' }}>
+                <Ic size={13} /> {l}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => setShowAll(true)} title="See all customers shipping in this period" style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 600, padding: '5px 9px',
+            borderRadius: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer', color: TITLE }}>
+            <Maximize2 size={12} /> View all
+          </button>
         </div>
       </div>
+      {showAll && <AllCustomersModal period={period} metric={metric} dateParam={dateParam} periodLabel={periodLabel} onClose={() => setShowAll(false)} navigate={navigate} />}
       {rows.length === 0
         ? <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '20px 0', color: '#94A3B8' }}>
             <ListeningPill /><span style={{ fontSize: 12 }}>No customer volume yet.</span></div>
@@ -392,7 +431,7 @@ export default function Dashboard() {
           </Card>
 
           <Card>
-            <Leaderboard data={board} metric={metric} sort={boardSort} setSort={setBoardSort} navigate={navigate} />
+            <Leaderboard data={board} metric={metric} sort={boardSort} setSort={setBoardSort} navigate={navigate} period={period} dateParam={dateParam} periodLabel={periodNoun} />
           </Card>
         </div>
 

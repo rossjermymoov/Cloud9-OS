@@ -198,6 +198,26 @@ router.get('/inspect', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Diagnostic: every picker seen in contributions (last N days) + all known Helm
+// users — so we can spot a picker who's missing or showing as a bare "User <id>".
+router.get('/pickers', async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
+    const [contrib, users] = await Promise.all([
+      query(`
+        SELECT user_id, MAX(picker_name) AS picker_name,
+               COUNT(DISTINCT helm_pick_id)::int AS picks,
+               COALESCE(SUM(items),0)::int AS items,
+               COALESCE(SUM(handling_ms),0)::bigint AS total_ms,
+               MIN(pick_date)::text AS first_pick, MAX(pick_date)::text AS last_pick
+        FROM pick_contributions WHERE pick_date >= CURRENT_DATE - ($1::int - 1)
+        GROUP BY user_id ORDER BY items DESC`, [days]),
+      query(`SELECT helm_user_id, name, email, active FROM helm_users ORDER BY name ASC`),
+    ]);
+    res.json({ days, contributors: contrib.rows, helm_users: users.rows });
+  } catch (err) { next(err); }
+});
+
 router.get('/freshness', async (_req, res, next) => {
   try {
     const { rows } = await query(

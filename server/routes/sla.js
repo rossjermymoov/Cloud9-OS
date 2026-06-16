@@ -69,7 +69,8 @@ router.get('/breaches', async (req, res, next) => {
     }
     const customers = Object.values(byCustomer)
       .map(c => ({ ...c, on_time_pct: (c.on_time + c.breaches) > 0 ? Math.round((c.on_time / (c.on_time + c.breaches)) * 1000) / 10 : null }))
-      .sort((a, b) => b.breaches - a.breaches);
+      // Best on-time rate first (100% at top); customers with no resolved orders last.
+      .sort((a, b) => (b.on_time_pct ?? -1) - (a.on_time_pct ?? -1) || a.breaches - b.breaches);
 
     res.json({
       period, from, to, view,
