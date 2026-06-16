@@ -18,20 +18,32 @@ import { holidaySet, isWorkingDay, firstWorkingAfter } from './bankHolidayServic
 
 function cleanDate(d) { if (!d) return null; const s = String(d); return s.startsWith('0000') ? null : s; }
 
-// London calendar day + minutes-since-midnight for a timestamp.
-function londonParts(input) {
-  const d = new Date(input);
+/**
+ * Wall-clock calendar day + minutes-since-midnight for a Helm timestamp.
+ * Helm sends LONDON local wall-clock (e.g. '2026-06-16 13:38:19') with no zone.
+ * Those land in TIMESTAMPTZ as that wall-clock stored against UTC, so we read
+ * the components back as-is (string → parse directly; Date → UTC getters) and
+ * do NOT re-convert through a timezone (which previously shifted by the BST
+ * offset and pushed pre-cutoff orders over the line).
+ */
+function wallClock(input) {
+  if (input == null) return null;
+  if (input instanceof Date) {
+    if (isNaN(input.getTime())) return null;
+    return { ymd: input.toISOString().slice(0, 10), minutes: input.getUTCHours() * 60 + input.getUTCMinutes() };
+  }
+  const s = String(input).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+  if (m) return { ymd: `${m[1]}-${m[2]}-${m[3]}`, minutes: parseInt(m[4], 10) * 60 + parseInt(m[5], 10) };
+  const d = new Date(s);
   if (isNaN(d.getTime())) return null;
-  const fmt = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  });
-  const p = Object.fromEntries(fmt.formatToParts(d).map(x => [x.type, x.value]));
-  const hh = parseInt(p.hour, 10) % 24;
-  return { ymd: `${p.year}-${p.month}-${p.day}`, minutes: hh * 60 + parseInt(p.minute, 10) };
+  return { ymd: d.toISOString().slice(0, 10), minutes: d.getUTCHours() * 60 + d.getUTCMinutes() };
 }
 
-export function todayLondonYmd() { return londonParts(new Date()).ymd; }
+// Current London calendar date (now() is a true instant, so this is a real convert).
+export function todayLondonYmd() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}
 
 function cutoffMinutes(cutoff) {
   if (!cutoff) return 14 * 60;
@@ -41,7 +53,7 @@ function cutoffMinutes(cutoff) {
 
 /** Due working day (YYYY-MM-DD) for an order received at `receivedAt`. */
 export function dueDateFor(receivedAt, cutoff, hs) {
-  const lp = londonParts(receivedAt);
+  const lp = wallClock(receivedAt);
   if (!lp) return null;
   if (isWorkingDay(lp.ymd, hs) && lp.minutes <= cutoffMinutes(cutoff)) return lp.ymd;
   return firstWorkingAfter(lp.ymd, hs);
@@ -52,7 +64,7 @@ export function classifyOrder(order, hs, todayYmd) {
   if (!order.received_at) return { sla_status: 'unknown', due: null };
   const due = dueDateFor(order.received_at, order.cutoff_time, hs);
   if (order.dispatched_at) {
-    const dl = londonParts(order.dispatched_at);
+    const dl = wallClock(order.dispatched_at);
     const dispYmd = dl ? dl.ymd : null;
     return { due, dispatched_ymd: dispYmd, sla_status: (dispYmd && dispYmd <= due) ? 'on_time' : 'breach_late' };
   }

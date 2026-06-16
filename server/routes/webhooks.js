@@ -111,17 +111,32 @@ router.get('/log', async (req, res, next) => {
 //   shipment: [{ parcels: [{ tracking_code }] }]   // or parcel_count / parcels[] / tracking_codes[]
 // } }
 // ─────────────────────────────────────────────────────────────────────────────
+// Helm order webhooks can carry ONE order, an array of orders, or {orders:[…]}
+// / {order:{…}} — normalise all shapes to a flat list.
+function ordersFromBody(body) {
+  if (!body) return [];
+  if (Array.isArray(body)) return body;
+  if (Array.isArray(body.orders)) return body.orders;
+  if (body.order) return [body.order];
+  return [body];
+}
+
 function handleOrderWebhook(eventName, { forceDispatched = false } = {}) {
   return (req, res) => {
     const body = req.body;
     res.json({ status: 'accepted' });
     setImmediate(async () => {
       try {
-        if (!body) return;
-        const n = normaliseOrder(body, { parcelFloor: 1, forceDispatched });
-        if (!n.helm_order_id) { console.warn(`[${eventName}] no order id in payload`); return; }
-        const { customerId, day } = await upsertOrder(n);
-        console.log(`✅ ${eventName}: order ${n.helm_order_id} — ${n.parcel_count} parcel(s), ${n.item_count} item(s)${day ? `, dispatched ${day}` : ''}${customerId ? '' : ' (customer unresolved)'}`);
+        const list = ordersFromBody(body);
+        let ok = 0, unresolved = 0;
+        for (const raw of list) {
+          const n = normaliseOrder(raw, { parcelFloor: 1, forceDispatched });
+          if (!n.helm_order_id) continue;
+          const { customerId } = await upsertOrder(n);
+          ok++;
+          if (!customerId) unresolved++;
+        }
+        console.log(`✅ ${eventName}: processed ${ok}/${list.length} order(s)${unresolved ? `, ${unresolved} customer-unresolved` : ''}`);
       } catch (err) {
         console.error(`❌ ${eventName} error:`, err.message);
       }
