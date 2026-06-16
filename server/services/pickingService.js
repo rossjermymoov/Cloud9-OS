@@ -94,13 +94,21 @@ function summarisePick(detail, header) {
   }
 
   // Primary picker = most items, then most time. Falls back to the assigned user
-  // when there's no time-tracking at all.
+  // (or the per-line picked_by) when there's no time-tracking at all.
   let pickerId = null;
   if (contributions.length) {
     pickerId = [...contributions].sort((a, b) => (b.items - a.items) || (b.handlingMs - a.handlingMs))[0].user_id;
   } else {
-    const assigned = header?.assigned_to ?? detail?.assigned_to;
+    const assigned = header?.assigned_to ?? detail?.assigned_to
+      ?? invs.find(pi => pi.picked_by != null)?.picked_by;
     pickerId = assigned != null ? String(assigned) : null;
+  }
+
+  // If a completed pick has NO per-scan timing, still credit its picker for the
+  // items (with zero measured time) so they appear on the leaderboard — otherwise
+  // pickers whose flow doesn't log scan timing (e.g. Mark Lewis) vanish entirely.
+  if (contributions.length === 0 && pickerId) {
+    contributions.push({ user_id: pickerId, items, handlingMs: 0, scans: 0 });
   }
 
   const created   = toDate(detail?.created_at || header?.created_at);

@@ -203,7 +203,7 @@ router.get('/inspect', async (req, res, next) => {
 router.get('/pickers', async (req, res, next) => {
   try {
     const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
-    const [contrib, users] = await Promise.all([
+    const [contrib, byPick, users] = await Promise.all([
       query(`
         SELECT user_id, MAX(picker_name) AS picker_name,
                COUNT(DISTINCT helm_pick_id)::int AS picks,
@@ -212,9 +212,17 @@ router.get('/pickers', async (req, res, next) => {
                MIN(pick_date)::text AS first_pick, MAX(pick_date)::text AS last_pick
         FROM pick_contributions WHERE pick_date >= CURRENT_DATE - ($1::int - 1)
         GROUP BY user_id ORDER BY items DESC`, [days]),
+      // From the picks table directly — every pick's primary picker, by status,
+      // so we can see a picker even if no contribution rows were written.
+      query(`
+        SELECT picker_id, MAX(picker_name) AS picker_name, status_name,
+               COUNT(*)::int AS picks,
+               COUNT(*) FILTER (WHERE handling_ms = 0)::int AS untimed
+        FROM picks WHERE pick_date >= CURRENT_DATE - ($1::int - 1)
+        GROUP BY picker_id, status_name ORDER BY picks DESC`, [days]),
       query(`SELECT helm_user_id, name, email, active FROM helm_users ORDER BY name ASC`),
     ]);
-    res.json({ days, contributors: contrib.rows, helm_users: users.rows });
+    res.json({ days, contributors: contrib.rows, picks_by_picker: byPick.rows, helm_users: users.rows });
   } catch (err) { next(err); }
 });
 
