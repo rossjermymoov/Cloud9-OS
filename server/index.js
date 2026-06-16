@@ -23,6 +23,7 @@ import { syncPicks }        from './services/pickingService.js';
 import slaRouter            from './routes/sla.js';
 import { syncRecentOrders } from './services/slaService.js';
 import { syncBankHolidays } from './services/bankHolidayService.js';
+import authRouter, { requireAuth } from './routes/auth.js';
 
 dotenv.config();
 
@@ -40,17 +41,23 @@ app.use(express.json({ limit: '10mb' }));
 app.use(morgan(isProd ? 'combined' : 'dev'));
 
 // ─── API Routes ──────────────────────────────────────────────
-app.use('/api/customers',     customersRouter);
-app.use('/api/tracking',      trackingRouter);
+// Auth is public (its handlers gate themselves). Webhooks use the webhook token,
+// NOT user login, so they stay open for Helm/Voila. Everything else requires a
+// valid session via requireAuth (which lets requests through only during
+// first-run setup, when no users exist yet).
+app.use('/api/auth',          authRouter);
 app.use('/api/v1/webhooks',   webhooksRouter);
-app.use('/api/notifications', notificationsRouter);
-app.use('/api/helm',          helmRouter);
-app.use('/api/volume',        volumeRouter);
-app.use('/api/purchase-orders', purchaseOrdersRouter);
-app.use('/api/returns',         returnsRouter);
-app.use('/api/voila',           voilaRouter);
-app.use('/api/picking',         pickingRouter);
-app.use('/api/sla',             slaRouter);
+
+app.use('/api/customers',     requireAuth, customersRouter);
+app.use('/api/tracking',      requireAuth, trackingRouter);
+app.use('/api/notifications', requireAuth, notificationsRouter);
+app.use('/api/helm',          requireAuth, helmRouter);
+app.use('/api/volume',        requireAuth, volumeRouter);
+app.use('/api/purchase-orders', requireAuth, purchaseOrdersRouter);
+app.use('/api/returns',         requireAuth, returnsRouter);
+app.use('/api/voila',           requireAuth, voilaRouter);
+app.use('/api/picking',         requireAuth, pickingRouter);
+app.use('/api/sla',             requireAuth, slaRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'cloud9-os' }));
 

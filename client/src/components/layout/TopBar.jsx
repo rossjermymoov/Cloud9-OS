@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Search, Bell, Settings } from 'lucide-react';
+import { Search, Bell, Settings, LogOut } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 
@@ -15,7 +15,7 @@ function getGreeting() {
 }
 
 export default function TopBar() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [now, setNow] = useState(new Date());
@@ -100,15 +100,25 @@ export default function TopBar() {
       </div>
 
       {/* User avatar */}
-      <div style={{
+      <div title={user?.full_name || user?.email || ''} style={{
         width: 30, height: 30, borderRadius: '50%',
         background: 'rgba(255,255,255,0.12)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: 11, fontWeight: 500, color: TEXT, cursor: 'pointer',
+        fontSize: 11, fontWeight: 500, color: TEXT,
         flexShrink: 0,
       }}>
         {initials}
       </div>
+
+      {/* Sign out */}
+      <button onClick={logout} title="Sign out" style={{
+        width: 32, height: 32, borderRadius: 8, background: 'transparent', border: 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: MUTED,
+      }}
+        onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.10)'}
+        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+        <LogOut size={16} strokeWidth={1.5} />
+      </button>
     </header>
   );
 }

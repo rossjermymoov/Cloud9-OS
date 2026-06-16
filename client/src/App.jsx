@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import AppShell from './components/layout/AppShell';
 import Dashboard from './pages/Dashboard';
 import CustomerList from './pages/customers/CustomerList';
@@ -10,10 +10,15 @@ import PickingPage from './pages/picking/PickingPage';
 import OnTimePage from './pages/sla/OnTimePage';
 import ReturnsPage from './pages/returns/ReturnsPage';
 import NotificationCenter from './pages/notifications/NotificationCenter';
+import UsersPage from './pages/users/UsersPage';
+import { LoginScreen, SetupScreen, AuthLoading } from './pages/auth/AuthScreens';
 import Placeholder from './pages/Placeholder';
 
-// Phase 0: auth gating is off until the auth backend is brought across.
 function AppRoutes() {
+  const { user, needsSetup, loading } = useAuth();
+  if (loading) return <AuthLoading />;
+  if (needsSetup) return <SetupScreen />;
+  if (!user) return <LoginScreen />;
   return (
     <Routes>
       <Route element={<AppShell />}>
@@ -28,6 +33,7 @@ function AppRoutes() {
         <Route path="on-time"         element={<OnTimePage />} />
         <Route path="returns"         element={<ReturnsPage />} />
         <Route path="notifications"   element={<NotificationCenter />} />
+        <Route path="users"           element={<UsersPage />} />
         <Route path="queries"       element={<Placeholder name="Queries & Claims" note="Copied from Moov OS in a later phase." />} />
         <Route path="settings"      element={<Placeholder name="Settings" note="Xero, Gmail inbox and webhook config live here." />} />
         <Route path="*"             element={<Navigate to="/" replace />} />

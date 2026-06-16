@@ -60,21 +60,25 @@ function DailyChart({ days }) {
   const [hover, setHover] = useState(null);
   if (!days?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '40px 0', textAlign: 'center' }}>No picks in this period.</div>;
   const max = Math.max(...days.map(d => d.picks), 1);
+  const many = days.length > 14;                                   // month/quarter → fixed-width + scroll
+  const labelEvery = days.length > 24 ? 5 : days.length > 14 ? 2 : 1;
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 180, paddingTop: 10 }}>
-      {days.map((d, i) => {
-        const h = Math.round((d.picks / max) * 150) + 2;
-        const isHover = hover === i;
-        const label = new Date(d.date).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' });
-        return (
-          <div key={d.date} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 0 }}
-            onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: isHover ? GREEN : TITLE, height: 14 }}>{isHover ? `${d.picks} · ${d.items} items` : d.picks}</div>
-            <div style={{ width: '100%', maxWidth: 46, height: h, borderRadius: 7, background: isHover ? GREEN_HOVER : GREEN, transition: 'all .12s' }} />
-            <div style={{ fontSize: 10.5, color: '#94A3B8', whiteSpace: 'nowrap' }}>{label}</div>
-          </div>
-        );
-      })}
+    <div style={{ overflowX: many ? 'auto' : 'visible', paddingBottom: 2 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 180, paddingTop: 10, minWidth: many ? days.length * 26 : '100%' }}>
+        {days.map((d, i) => {
+          const h = Math.round((d.picks / max) * 150) + 2;
+          const isHover = hover === i;
+          const label = new Date(d.date).toLocaleDateString('en-GB', many ? { day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric' });
+          return (
+            <div key={d.date} style={{ flex: many ? '0 0 auto' : 1, width: many ? 24 : 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 0 }}
+              onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: isHover ? GREEN : TITLE, height: 14, whiteSpace: 'nowrap' }}>{isHover ? `${d.picks} · ${d.items} items` : d.picks}</div>
+              <div style={{ width: '100%', maxWidth: many ? 22 : 46, height: h, borderRadius: 6, background: isHover ? GREEN_HOVER : GREEN, transition: 'all .12s' }} />
+              <div style={{ fontSize: 10, color: '#94A3B8', whiteSpace: 'nowrap', height: 12 }}>{i % labelEvery === 0 ? label : ''}</div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -101,13 +105,18 @@ function Leaderboard({ rows }) {
               {i < 3 ? <Medal size={16} color={RANK[i]} /> : <span style={{ color: '#94A3B8' }}>{i + 1}</span>}
             </td>
             <td style={{ padding: '10px 6px', fontWeight: 600, color: TITLE }}>{r.picker_name}</td>
-            <td style={{ padding: '10px 6px', textAlign: 'right', fontWeight: 800, color: GREEN }}>{r.items_per_hour ?? '—'}</td>
+            <td title={r.items_per_hour == null ? 'No scan timing recorded for these picks' : undefined} style={{ padding: '10px 6px', textAlign: 'right', fontWeight: 800, color: r.items_per_hour == null ? '#CBD5E1' : GREEN }}>{r.items_per_hour ?? '—'}</td>
             <td style={{ padding: '10px 6px', textAlign: 'right', color: '#334155' }}>{r.items.toLocaleString()}</td>
             <td style={{ padding: '10px 6px', textAlign: 'right', color: '#334155' }}>{r.picks}</td>
-            <td style={{ padding: '10px 6px', textAlign: 'right', color: MUTED }}>{fmtDuration(r.avg_secs_per_pick)}</td>
+            <td title={r.avg_secs_per_pick == null ? 'No scan timing recorded for these picks' : undefined} style={{ padding: '10px 6px', textAlign: 'right', color: r.avg_secs_per_pick == null ? '#CBD5E1' : MUTED }}>{fmtDuration(r.avg_secs_per_pick)}</td>
           </tr>
         ))}
       </tbody>
+      <tfoot>
+        <tr><td colSpan={6} style={{ padding: '10px 6px 0', fontSize: 11, color: '#94A3B8' }}>
+          Items/hr and avg time show only for picks recorded on the scan-tracked flow — others count toward picks &amp; items but not throughput.
+        </td></tr>
+      </tfoot>
     </table>
   );
 }
@@ -234,20 +243,19 @@ export default function PickingPage() {
             <Kpi Icon={Timer} label="Avg time per pick" value={fmtDuration(s?.avg_secs_per_pick)} sub="Active handling time" />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <Card>
-              <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 6 }}>Picks per day</div>
-              <DailyChart days={daily.data?.days} />
-            </Card>
-            <Card>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-                <Trophy size={16} color="#F59E0B" />
-                <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Picker leaderboard</span>
-                <span style={{ fontSize: 11.5, color: '#94A3B8' }}>· by items / hour</span>
-              </div>
-              <Leaderboard rows={board.data?.rows} />
-            </Card>
-          </div>
+          <Card>
+            <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 6 }}>Picks per day</div>
+            <DailyChart days={daily.data?.days} />
+          </Card>
+
+          <Card style={{ marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <Trophy size={16} color="#F59E0B" />
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Picker leaderboard</span>
+              <span style={{ fontSize: 11.5, color: '#94A3B8' }}>· by items / hour</span>
+            </div>
+            <Leaderboard rows={board.data?.rows} />
+          </Card>
 
           <Card style={{ marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
