@@ -274,6 +274,19 @@ function PerformanceTab({ customerId }) {
   const totalParcels = rows.reduce((a, r) => a + (r.parcels || 0), 0);
   const totalItems = rows.reduce((a, r) => a + (r.items || 0), 0);
   const max = Math.max(1, ...rows.map(r => r[metric] || 0));
+  // Date label under each bar — thinned out as the range grows; month shown when it changes.
+  const step = Math.max(1, Math.ceil(rows.length / 14));
+  const barLabels = (() => {
+    const out = []; let prevMonth = null;
+    rows.forEach((r, i) => {
+      const show = i % step === 0 || i === rows.length - 1;
+      if (!show) { out.push(null); return; }
+      const d = new Date(r.date); const m = d.getMonth();
+      out.push(m !== prevMonth ? `${d.getDate()} ${d.toLocaleDateString('en-GB', { month: 'short' })}` : `${d.getDate()}`);
+      prevMonth = m;
+    });
+    return out;
+  })();
   const TF = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['custom', 'Custom']];
   const dateInp = { fontSize: 12, padding: '5px 8px', borderRadius: 8, border: '1px solid rgba(0,0,0,0.14)', outline: 'none' };
 
@@ -304,20 +317,19 @@ function PerformanceTab({ customerId }) {
               ? <div style={{ color: '#94A3B8', fontSize: 13, padding: '60px 0', textAlign: 'center' }}>No dispatch volume in this range.</div>
               : (
                 <div style={{ position: 'relative' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: rows.length > 45 ? 2 : 4, height: 340 }}>
+                  <div style={{ display: 'flex', alignItems: 'stretch', gap: rows.length > 45 ? 2 : 4, height: 360 }}>
                     {rows.map((r, i) => {
                       const isH = hover === i;
                       return (
                         <div key={r.date} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}
                           style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', alignItems: 'center', cursor: 'default' }}>
-                          <div style={{ width: '82%', minWidth: 3, background: isH ? '#3B82F6' : ACCENT, borderRadius: '3px 3px 0 0', height: Math.max(2, Math.round((r[metric] / max) * 308)), transition: 'background 0.12s ease' }} />
+                          <div style={{ width: '82%', minWidth: 3, background: isH ? '#3B82F6' : ACCENT, borderRadius: '3px 3px 0 0', height: Math.max(2, Math.round((r[metric] / max) * 300)), transition: 'background 0.12s ease' }} />
+                          <div style={{ height: 26, paddingTop: 5, display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
+                            {barLabels[i] && <span style={{ fontSize: 9.5, fontWeight: isH ? 700 : 400, color: isH ? '#334155' : '#94A3B8', whiteSpace: 'nowrap' }}>{barLabels[i]}</span>}
+                          </div>
                         </div>
                       );
                     })}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 10.5, color: '#94A3B8' }}>
-                    <span>{new Date(rows[0].date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
-                    <span>{new Date(rows[rows.length - 1].date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
                   </div>
                   {hover != null && rows[hover] && (
                     <div style={{ position: 'absolute', top: 0, left: `${(hover / Math.max(1, rows.length - 1)) * 100}%`, transform: 'translateX(-50%)', background: '#0B1220', color: '#fff', borderRadius: 8, padding: '8px 11px', fontSize: 12, pointerEvents: 'none', whiteSpace: 'nowrap', zIndex: 10, boxShadow: '0 6px 18px rgba(0,0,0,0.2)' }}>
