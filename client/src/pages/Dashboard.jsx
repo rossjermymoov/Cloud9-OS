@@ -187,41 +187,41 @@ function Seg({ options, value, onChange }) {
   );
 }
 
-// Pending dispatch — compact; the per-carrier breakdown lives in the (i) tooltip.
+// Pending dispatch — compact; hovering anywhere on the card reveals the per-carrier breakdown.
 function PendingCard({ total, byCourier }) {
   const [hover, setHover] = useState(false);
+  const list = byCourier || [];
   return (
-    <Card style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '13px 16px' }}>
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '13px 16px', position: 'relative', cursor: 'default' }}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
         <div style={{ width: 30, height: 30, borderRadius: 8, flexShrink: 0, background: '#F59E0B1a', color: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <PackageOpen size={16} strokeWidth={1.9} />
         </div>
         <span style={{ fontSize: 12, color: MUTED, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-          Pending dispatch
-          <span style={{ position: 'relative', display: 'inline-flex' }}
-            onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-            <Info size={13} color="#94A3B8" style={{ cursor: 'help' }} />
-            {hover && (
-              <div style={{ position: 'absolute', top: '150%', left: '50%', transform: 'translateX(-50%)', zIndex: 60,
-                background: '#0B1220', color: '#fff', borderRadius: 9, padding: '10px 12px', minWidth: 168,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.22)' }}>
-                <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', marginBottom: 7, lineHeight: 1.4 }}>
-                  Packed &amp; manifested — awaiting carrier collection scan
-                </div>
-                {(byCourier && byCourier.length > 0)
-                  ? byCourier.slice(0, 7).map((c, i) => (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 12.5, padding: '3px 0' }}>
-                        <span style={{ color: 'rgba(255,255,255,0.85)' }}>{prettyCourier(c.courier_name || c.courier_code)}</span>
-                        <span style={{ fontWeight: 700 }}>{c.count}</span>
-                      </div>
-                    ))
-                  : <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>No pending parcels</div>}
-              </div>
-            )}
-          </span>
+          Pending collection
+          <Info size={13} color="#94A3B8" style={{ cursor: 'help' }} />
         </span>
       </div>
       <div style={{ fontSize: 26, fontWeight: 800, color: HEADER, lineHeight: 1, letterSpacing: -0.6 }}>{(total || 0).toLocaleString()}</div>
+
+      {hover && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 60,
+          background: '#0B1220', color: '#fff', borderRadius: 9, padding: '11px 13px', minWidth: 190,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.22)' }}>
+          <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.6)', marginBottom: 8, lineHeight: 1.4 }}>
+            Awaiting carrier collection scan
+          </div>
+          {list.length > 0
+            ? list.slice(0, 8).map((c, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 18, fontSize: 12.5, padding: '3px 0' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.88)' }}>{prettyCourier(c.courier_name || c.courier_code)}</span>
+                  <span style={{ fontWeight: 700 }}>{c.count}</span>
+                </div>
+              ))
+            : <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>No parcels currently awaiting collection.</div>}
+        </div>
+      )}
     </Card>
   );
 }
