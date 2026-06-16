@@ -11,8 +11,9 @@ const SHADOW = '0 1px 2px rgba(16,24,40,0.06), 0 1px 3px rgba(16,24,40,0.10)';
 
 const PERIODS = [
   { v: 'day', l: 'Today' }, { v: 'yesterday', l: 'Yesterday' }, { v: 'week', l: 'Week' },
-  { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' },
+  { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }, { v: 'custom', l: 'Custom' },
 ];
+const isoOf = (d) => { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
 
 function Seg({ value, onChange, options }) {
   return (
@@ -115,10 +116,14 @@ export default function PickingPage() {
   const [period, setPeriod] = useState('week');
   const [syncing, setSyncing] = useState(false);
   const qc = useQueryClient();
+  const todayStr = isoOf(new Date());
+  const minStr = isoOf(new Date(Date.now() - 90 * 86400000));
+  const [customDate, setCustomDate] = useState(todayStr);
+  const dateParam = period === 'custom' ? customDate : null;
 
-  const summary = useQuery({ queryKey: ['picking', 'summary', period], queryFn: () => pickingSummary(period) });
-  const daily   = useQuery({ queryKey: ['picking', 'daily', period], queryFn: () => pickingDaily(period) });
-  const board   = useQuery({ queryKey: ['picking', 'leaderboard', period], queryFn: () => pickingLeaderboard(period) });
+  const summary = useQuery({ queryKey: ['picking', 'summary', period, dateParam], queryFn: () => pickingSummary(period, dateParam) });
+  const daily   = useQuery({ queryKey: ['picking', 'daily', period, dateParam], queryFn: () => pickingDaily(period, dateParam) });
+  const board   = useQuery({ queryKey: ['picking', 'leaderboard', period, dateParam], queryFn: () => pickingLeaderboard(period, dateParam) });
   const fresh   = useQuery({ queryKey: ['picking', 'freshness'], queryFn: pickingFreshness });
 
   const s = summary.data;
@@ -127,7 +132,7 @@ export default function PickingPage() {
   async function runSync() {
     setSyncing(true);
     try {
-      await triggerPickSync(30);
+      await triggerPickSync(90);
       // Give the background job a moment, then refresh.
       setTimeout(() => {
         qc.invalidateQueries({ queryKey: ['picking'] });
@@ -152,6 +157,11 @@ export default function PickingPage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Seg value={period} onChange={setPeriod} options={PERIODS} />
+          {period === 'custom' && (
+            <input type="date" value={customDate} min={minStr} max={todayStr}
+              onChange={e => setCustomDate(e.target.value || todayStr)}
+              style={{ border: '1px solid #E2E8F0', borderRadius: 9, padding: '7px 10px', fontSize: 12.5, fontWeight: 600, color: TITLE, fontFamily: 'inherit' }} />
+          )}
           <button onClick={runSync} disabled={syncing}
             style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: syncing ? 'default' : 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE, opacity: syncing ? 0.6 : 1 }}>
             <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} /> {syncing ? 'Syncing…' : 'Sync now'}

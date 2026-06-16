@@ -20,10 +20,26 @@ import { syncPicks } from '../services/pickingService.js';
 
 const router = express.Router();
 
-function rangeFor(periodRaw) {
+const p2 = (n) => String(n).padStart(2, '0');
+const isoDay = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+
+// A single custom day, clamped to the last 90 days.
+function parseCustomDate(s) {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(String(s))) return null;
+  const d = new Date(`${s}T00:00:00`);
+  if (isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const min = new Date(today); min.setDate(today.getDate() - 90);
+  if (d > today) return today;
+  if (d < min) return min;
+  return d;
+}
+
+function rangeFor(periodRaw, dateRaw) {
+  const custom = parseCustomDate(dateRaw);
+  if (custom) return { period: 'custom', from: isoDay(custom), to: isoDay(custom) };
   const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(periodRaw) ? periodRaw : 'week';
-  const p = (n) => String(n).padStart(2, '0');
-  const iso = (d) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   const today = new Date();
   let from = new Date(today), to = new Date(today);
   if (period === 'day')           { /* today only */ }
@@ -31,7 +47,7 @@ function rangeFor(periodRaw) {
   else if (period === 'week')      { from.setDate(today.getDate() - 6); }
   else if (period === 'month')     { from.setDate(today.getDate() - 29); }
   else if (period === 'quarter')   { from.setDate(today.getDate() - 89); }
-  return { period, from: iso(from), to: iso(to) };
+  return { period, from: isoDay(from), to: isoDay(to) };
 }
 
 // Per-pick time basis (ms): prefer active handling time, fall back to elapsed.
@@ -42,7 +58,7 @@ router.get('/status', (_req, res) => res.json({ configured: helmConfigured() }))
 
 router.get('/summary', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period);
+    const { period, from, to } = rangeFor(req.query.period, req.query.date);
     const { rows } = await query(`
       SELECT
         COUNT(*)::int                                   AS picks,
@@ -69,7 +85,7 @@ router.get('/summary', async (req, res, next) => {
 
 router.get('/daily', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period);
+    const { period, from, to } = rangeFor(req.query.period, req.query.date);
     const { rows } = await query(`
       SELECT pick_date::text AS date,
              COUNT(*)::int AS picks,
@@ -84,7 +100,7 @@ router.get('/daily', async (req, res, next) => {
 
 router.get('/leaderboard', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period);
+    const { period, from, to } = rangeFor(req.query.period, req.query.date);
     const { rows } = await query(`
       SELECT
         picker_id,

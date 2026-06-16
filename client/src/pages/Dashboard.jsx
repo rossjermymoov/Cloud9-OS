@@ -106,8 +106,8 @@ function prettyCourier(name) {
 }
 
 // Flexible trend chart — dual line (current vs previous) or monthly bars.
-const PREV_LABEL = { day: 'Yesterday', yesterday: 'Prev day', week: 'Last week', month: 'Last month', quarter: 'Prev quarter' };
-const CUR_LABEL  = { day: 'Today', yesterday: 'Yesterday', week: 'This week', month: 'This month', quarter: 'This quarter' };
+const PREV_LABEL = { day: 'Yesterday', yesterday: 'Prev day', week: 'Last week', month: 'Last month', quarter: 'Prev quarter', custom: 'Prev day' };
+const CUR_LABEL  = { day: 'Today', yesterday: 'Yesterday', week: 'This week', month: 'This month', quarter: 'This quarter', custom: 'Selected day' };
 const PERIOD_NOUN = { day: 'today', yesterday: 'yesterday', week: 'this week', month: 'this month', quarter: 'this quarter' };
 const VS_NOUN     = { day: 'yesterday', yesterday: 'prev day', week: 'last week', month: 'last month', quarter: 'last quarter' };
 function TrendChart({ trend, metric }) {
@@ -283,11 +283,16 @@ export default function Dashboard() {
   const [period, setPeriod] = useState('day');
   const [metric, setMetric] = useState('parcels');
   const [boardSort, setBoardSort] = useState('volume');
+  const isoOf = (d) => { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+  const todayStr = isoOf(new Date());
+  const minStr = isoOf(new Date(Date.now() - 90 * 86400000));
+  const [customDate, setCustomDate] = useState(todayStr);
+  const dateParam = period === 'custom' ? customDate : null;
 
   const { data: stats }  = useQuery({ queryKey: ['tracking-stats'], queryFn: () => api.get('/tracking/stats').then(r => r.data) });
   const { data: notifs } = useQuery({ queryKey: ['dashboard-notifs'], queryFn: () => listNotifications({ limit: 7 }) });
-  const { data: trend }  = useQuery({ queryKey: ['volume-trend', period], queryFn: () => volumeTrend(period) });
-  const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort }) });
+  const { data: trend }  = useQuery({ queryKey: ['volume-trend', period, dateParam], queryFn: () => volumeTrend(period, dateParam) });
+  const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort, dateParam], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort, date: dateParam }) });
 
   const byStatus = stats?.by_status || {};
   const statusRows = Object.entries(byStatus).sort((a, b) => b[1] - a[1]);
@@ -298,8 +303,9 @@ export default function Dashboard() {
     : [...(trend.current || []), ...(trend.previous || [])].some(d => d && (d.parcels > 0 || d.items > 0)));
   const cur = trend?.totals?.current  || { parcels: 0, items: 0, picks: 0 };
   const prv = trend?.totals?.previous || { parcels: 0, items: 0, picks: 0 };
-  const periodNoun = PERIOD_NOUN[period] || `this ${period}`;
-  const vsNoun     = VS_NOUN[period] || `last ${period}`;
+  const prettyCustom = new Date(`${customDate}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const periodNoun = period === 'custom' ? `on ${prettyCustom}` : (PERIOD_NOUN[period] || `this ${period}`);
+  const vsNoun     = period === 'custom' ? 'prev day' : (VS_NOUN[period] || `last ${period}`);
   const tc = cur[metric] ?? 0;
   const tp = prv[metric] ?? 0;
   const trendPct = tp > 0 ? Math.round(((tc - tp) / tp) * 1000) / 10 : (tc > 0 ? null : 0);
@@ -330,7 +336,12 @@ export default function Dashboard() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Seg value={metric} onChange={setMetric} options={[{ v: 'parcels', l: 'Parcels' }, { v: 'items', l: 'Items' }]} />
-          <Seg value={period} onChange={setPeriod} options={[{ v: 'day', l: 'Day' }, { v: 'yesterday', l: 'Yesterday' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }]} />
+          <Seg value={period} onChange={setPeriod} options={[{ v: 'day', l: 'Day' }, { v: 'yesterday', l: 'Yesterday' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }, { v: 'custom', l: 'Custom' }]} />
+          {period === 'custom' && (
+            <input type="date" value={customDate} min={minStr} max={todayStr}
+              onChange={e => setCustomDate(e.target.value || todayStr)}
+              style={{ border: '1px solid #E2E8F0', borderRadius: 9, padding: '7px 10px', fontSize: 12.5, fontWeight: 600, color: TITLE, fontFamily: 'inherit' }} />
+          )}
         </div>
       </div>
 

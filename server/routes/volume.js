@@ -75,9 +75,44 @@ router.get('/weekly', async (_req, res, next) => {
 function ymd(d) { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 
+// A single custom day, clamped to the last 90 days (today inclusive). Returns a
+// Date at local midnight, or null if no/invalid date was supplied.
+function parseCustomDate(s) {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(String(s))) return null;
+  const d = new Date(`${s}T00:00:00`);
+  if (isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const min = new Date(today); min.setDate(today.getDate() - 90);
+  if (d > today) return today;
+  if (d < min) return min;
+  return d;
+}
+
 router.get('/trend', async (req, res, next) => {
   try {
     const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'week';
+
+    // Custom single day — parcels/items from snapshots, picks from the picks table.
+    const customDate = parseCustomDate(req.query.date);
+    if (customDate) {
+      const addD = (base, n) => { const x = new Date(base); x.setDate(base.getDate() + n); return x; };
+      const dayStr = ymd(customDate), startStr = ymd(addD(customDate, -13));
+      const [snap, pk] = await Promise.all([
+        query(`SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
+               FROM customer_volume_snapshots WHERE snapshot_date BETWEEN $1 AND $2 GROUP BY snapshot_date`, [startStr, dayStr]),
+        query(`SELECT pick_date::text AS d, COUNT(*)::int AS k
+               FROM picks WHERE status = 1 AND pick_date BETWEEN $1 AND $2 GROUP BY pick_date`, [startStr, dayStr]),
+      ]);
+      const m = {};
+      for (const r of snap.rows) m[r.d] = { parcels: r.p, items: r.i, picks: 0 };
+      for (const r of pk.rows) (m[r.d] ||= { parcels: 0, items: 0, picks: 0 }).picks = r.k;
+      const g = (d) => m[ymd(d)] || { parcels: 0, items: 0, picks: 0 };
+      const labels = [], series = [];
+      for (let k = 13; k >= 0; k--) { const d = addD(customDate, -k); const v = g(d); labels.push(`${d.getDate()}/${d.getMonth() + 1}`); series.push({ parcels: v.parcels, items: v.items, picks: v.picks, dow: d.getDay() }); }
+      return res.json({ period: 'custom', date: dayStr, mode: 'bars', labels, series,
+        totals: { current: g(customDate), previous: g(addD(customDate, -1)) } });
+    }
     const [snap, picks] = await Promise.all([
       query(`SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
              FROM customer_volume_snapshots WHERE snapshot_date >= CURRENT_DATE - 220 GROUP BY snapshot_date`),
@@ -188,8 +223,11 @@ router.get('/leaderboard', async (req, res, next) => {
     // current period-to-date vs the same elapsed length in the previous period
     const now = new Date(); now.setHours(0, 0, 0, 0);
     const add = (d, n) => { const x = new Date(d); x.setDate(d.getDate() + n); return x; };
+    const customDate = parseCustomDate(req.query.date);
     let curStart, curEnd, prevStart, prevEnd;
-    if (period === 'day') {
+    if (customDate) {
+      curStart = customDate; curEnd = customDate; prevStart = add(customDate, -1); prevEnd = add(customDate, -1);
+    } else if (period === 'day') {
       curStart = now; curEnd = now; prevStart = add(now, -1); prevEnd = add(now, -1);
     } else if (period === 'yesterday') {
       curStart = add(now, -1); curEnd = add(now, -1); prevStart = add(now, -2); prevEnd = add(now, -2);
@@ -226,7 +264,7 @@ router.get('/leaderboard', async (req, res, next) => {
       return bv - av;
     }).slice(0, limit);
 
-    res.json({ period, metric: req.query.metric === 'items' ? 'items' : 'parcels', sort, rows: ranked });
+    res.json({ period: customDate ? 'custom' : period, metric: req.query.metric === 'items' ? 'items' : 'parcels', sort, rows: ranked });
   } catch (err) { next(err); }
 });
 
