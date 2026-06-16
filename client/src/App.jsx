@@ -6,6 +6,7 @@ import CustomerList from './pages/customers/CustomerList';
 import CustomerRecord from './pages/customers/CustomerRecord';
 import TrackingPage from './pages/tracking/TrackingPage';
 import PurchaseOrdersPage from './pages/purchaseOrders/PurchaseOrdersPage';
+import PickingPage from './pages/picking/PickingPage';
 import ReturnsPage from './pages/returns/ReturnsPage';
 import NotificationCenter from './pages/notifications/NotificationCenter';
 import Placeholder from './pages/Placeholder';
@@ -22,6 +23,7 @@ function AppRoutes() {
         </Route>
         <Route path="tracking"        element={<TrackingPage />} />
         <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
+        <Route path="picking"         element={<PickingPage />} />
         <Route path="returns"         element={<ReturnsPage />} />
         <Route path="notifications"   element={<NotificationCenter />} />
         <Route path="queries"       element={<Placeholder name="Queries & Claims" note="Copied from Moov OS in a later phase." />} />

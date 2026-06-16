@@ -200,3 +200,49 @@ export function aggregateDispatchVolume(orders) {
 export async function fetchHelmContacts() {
   return fetchAllPages('/customers');
 }
+
+// ─── Picking (warehouse pick performance) ────────────────────────────────────
+//
+// List Picks → page of pick headers; Get Pick Detail → pick_inventories[]
+// (quantities + picked_by) and time_tracking_data[] (durations). Pick data is
+// pull-only and not available to fulfilment-client users.
+// Status: 0 OPEN, 1 COMPLETED, 2 CANCELLED, 3 INPROGRESS, 4 IDLE.
+
+/** Warehouse users — used to turn picker IDs into names. */
+export async function fetchUsers() {
+  return fetchAllPages('/users');
+}
+
+/**
+ * List picks created within a window. `from`/`to` are Date objects or ms epochs.
+ * Helm filters on `created_at` via two comma-joined UNIX (seconds) timestamps.
+ * Optionally restrict to certain status IDs (e.g. [1] = completed only).
+ * Paginates on current_page/last_page (the picks envelope has no next_page_url).
+ */
+export async function fetchPicks({ from, to, statuses = [], perPage = 100, maxPages = 200 } = {}) {
+  const fromSec = Math.floor((from instanceof Date ? from.getTime() : Number(from)) / 1000);
+  const toSec   = Math.floor((to   instanceof Date ? to.getTime()   : Number(to))   / 1000);
+  const all = [];
+  let page = 1;
+  for (let i = 0; i < maxPages; i++) {
+    const qs = new URLSearchParams();
+    qs.set('page', String(page));
+    qs.set('per_page', String(perPage));
+    qs.set('filters[create_date_range]', `${fromSec},${toSec}`);
+    for (const s of statuses) qs.append('filters[status][]', String(s));
+
+    const res = await authedGet(`/picks?${qs.toString()}`);
+    const rows = res.data || [];
+    all.push(...rows);
+    const lastPage = parseInt(res.last_page) || 1;
+    const curPage  = parseInt(res.current_page) || page;
+    if (rows.length === 0 || curPage >= lastPage) break;
+    page++;
+  }
+  return all;
+}
+
+/** Full pick: header + pick_inventories[] + time_tracking_data[]. */
+export async function fetchPickDetail(pickId) {
+  return authedGet(`/picks/${pickId}`);
+}

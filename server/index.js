@@ -18,6 +18,8 @@ import purchaseOrdersRouter from './routes/purchaseOrders.js';
 import returnsRouter        from './routes/returns.js';
 import voilaRouter, { runVoilaBackfill } from './routes/voila.js';
 import { voilaConfigured }  from './services/voilaClient.js';
+import pickingRouter        from './routes/picking.js';
+import { syncPicks }        from './services/pickingService.js';
 
 dotenv.config();
 
@@ -44,6 +46,7 @@ app.use('/api/volume',        volumeRouter);
 app.use('/api/purchase-orders', purchaseOrdersRouter);
 app.use('/api/returns',         returnsRouter);
 app.use('/api/voila',           voilaRouter);
+app.use('/api/picking',         pickingRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'cloud9-os' }));
 
@@ -80,6 +83,12 @@ async function start() {
     setTimeout(() => syncPurchaseOrders().catch(e => console.warn('[po-auto-sync]', e.message)), 60 * 1000);
     setInterval(() => syncPurchaseOrders().catch(e => console.warn('[po-auto-sync]', e.message)), POLL);
     console.log('🗓️  PO auto-sync scheduled every 30 minutes');
+
+    // Pick performance: refresh recent picks hourly (light — detail only for
+    // completed picks). A 2-day window catches same-day + late completions.
+    setTimeout(() => syncPicks(2, { pickDelayMs: 60 }).catch(e => console.warn('[picking-sync]', e.message)), 90 * 1000);
+    setInterval(() => syncPicks(2, { pickDelayMs: 60 }).catch(e => console.warn('[picking-sync]', e.message)), 60 * 60 * 1000);
+    console.log('🧺 Picking auto-sync scheduled hourly');
   }
 
   // Nightly full Voila backfill at 19:00 UK time — runs gently overnight so the
