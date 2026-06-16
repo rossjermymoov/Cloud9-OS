@@ -28,14 +28,14 @@ router.get('/summary', async (_req, res, next) => {
       `),
       query(`
         SELECT
-          COUNT(*) FILTER (WHERE picked_at >= CURRENT_DATE)::int        AS picks_today,
+          COUNT(*) FILTER (WHERE completed_at >= CURRENT_DATE)::int        AS picks_today,
           -- yesterday up to the current time-of-day, for a like-for-like compare
           COUNT(*) FILTER (
-            WHERE picked_at >= CURRENT_DATE - INTERVAL '1 day'
-              AND picked_at <  (CURRENT_DATE - INTERVAL '1 day') + (NOW() - CURRENT_DATE)
+            WHERE completed_at >= CURRENT_DATE - INTERVAL '1 day'
+              AND completed_at <  (CURRENT_DATE - INTERVAL '1 day') + (NOW() - CURRENT_DATE)
           )::int AS picks_yesterday_to_hour,
-          COUNT(*) FILTER (WHERE picked_at >= CURRENT_DATE - 6)::int    AS picks_7d
-        FROM pick_events
+          COUNT(*) FILTER (WHERE completed_at >= CURRENT_DATE - 6)::int    AS picks_7d
+        FROM picks WHERE status = 1
       `),
     ]);
     res.json({ ...vol.rows[0], ...picks.rows[0] });
@@ -116,8 +116,8 @@ router.get('/trend', async (req, res, next) => {
     const [snap, picks] = await Promise.all([
       query(`SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
              FROM customer_volume_snapshots WHERE snapshot_date >= CURRENT_DATE - 220 GROUP BY snapshot_date`),
-      query(`SELECT picked_at::date::text AS d, COUNT(*)::int AS k FROM pick_events
-             WHERE picked_at >= CURRENT_DATE - 220 GROUP BY picked_at::date`),
+      query(`SELECT pick_date::text AS d, COUNT(*)::int AS k FROM picks
+             WHERE status = 1 AND pick_date >= CURRENT_DATE - 220 GROUP BY pick_date`),
     ]);
     const map = {};
     for (const r of snap.rows) map[r.d] = { parcels: r.p, items: r.i, picks: 0 };
@@ -139,10 +139,10 @@ router.get('/trend', async (req, res, next) => {
     if (period === 'day') {
       // Day-on-day: today vs yesterday (picks compared to the same hour yesterday).
       const ph = await query(`
-        SELECT COUNT(*) FILTER (WHERE picked_at >= CURRENT_DATE)::int AS today,
-               COUNT(*) FILTER (WHERE picked_at >= CURRENT_DATE - INTERVAL '1 day'
-                                  AND picked_at < (CURRENT_DATE - INTERVAL '1 day') + (NOW() - CURRENT_DATE))::int AS yhour
-        FROM pick_events`);
+        SELECT COUNT(*) FILTER (WHERE completed_at >= CURRENT_DATE)::int AS today,
+               COUNT(*) FILTER (WHERE completed_at >= CURRENT_DATE - INTERVAL '1 day'
+                                  AND completed_at < (CURRENT_DATE - INTERVAL '1 day') + (NOW() - CURRENT_DATE))::int AS yhour
+        FROM picks WHERE status = 1`);
       const today = get(now), yest = get(addDays(now, -1));
       const labels = [], series = [];
       for (let k = 13; k >= 0; k--) { const d = addDays(now, -k); const g = get(d); labels.push(`${d.getDate()}/${d.getMonth() + 1}`); series.push({ parcels: g.parcels, items: g.items, picks: g.picks, dow: d.getDay() }); }
@@ -156,9 +156,9 @@ router.get('/trend', async (req, res, next) => {
     if (period === 'yesterday') {
       // Yesterday vs the day before — the daily management-review metric.
       const ph = await query(`
-        SELECT COUNT(*) FILTER (WHERE picked_at >= CURRENT_DATE - INTERVAL '1 day' AND picked_at < CURRENT_DATE)::int AS yest,
-               COUNT(*) FILTER (WHERE picked_at >= CURRENT_DATE - INTERVAL '2 day' AND picked_at < CURRENT_DATE - INTERVAL '1 day')::int AS dby
-        FROM pick_events`);
+        SELECT COUNT(*) FILTER (WHERE completed_at >= CURRENT_DATE - INTERVAL '1 day' AND completed_at < CURRENT_DATE)::int AS yest,
+               COUNT(*) FILTER (WHERE completed_at >= CURRENT_DATE - INTERVAL '2 day' AND completed_at < CURRENT_DATE - INTERVAL '1 day')::int AS dby
+        FROM picks WHERE status = 1`);
       const yest = get(addDays(now, -1)), dby = get(addDays(now, -2));
       const labels = [], series = [];
       for (let k = 13; k >= 0; k--) { const d = addDays(now, -k); const g = get(d); labels.push(`${d.getDate()}/${d.getMonth() + 1}`); series.push({ parcels: g.parcels, items: g.items, picks: g.picks, dow: d.getDay() }); }
@@ -272,10 +272,10 @@ router.get('/picks', async (req, res, next) => {
   try {
     const days = Math.min(Math.max(parseInt(req.query.days) || 14, 1), 180);
     const { rows } = await query(`
-      SELECT picked_at::date::text AS date, COUNT(*)::int AS picks
-      FROM pick_events
-      WHERE picked_at >= CURRENT_DATE - ($1::int - 1)
-      GROUP BY picked_at::date ORDER BY picked_at::date ASC
+      SELECT pick_date::text AS date, COUNT(*)::int AS picks
+      FROM picks
+      WHERE status = 1 AND pick_date >= CURRENT_DATE - ($1::int - 1)
+      GROUP BY pick_date ORDER BY pick_date ASC
     `, [days]);
     res.json(rows);
   } catch (err) { next(err); }
