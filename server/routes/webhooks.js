@@ -29,10 +29,17 @@ const WEBHOOK_TOKEN = process.env.CLOUD9_WEBHOOK_TOKEN || 'change-me';
 // Pull the token from wherever the sender put it: Authorization (with or without
 // a "Bearer " prefix), a common custom header, or a ?token= query param.
 function extractToken(req) {
+  // Custom header names first (Voila sends `cloud9_webhook_token`).
+  const h = req.headers['cloud9_webhook_token']
+         || req.headers['cloud9-webhook-token']
+         || req.headers['x-cloud9-token']
+         || req.headers['x-webhook-token']
+         || req.headers['x-api-key']
+         || req.headers['token']
+         || '';
+  if (h) return String(h).trim();
   const auth = (req.headers['authorization'] || '').trim();
   if (auth) return (auth.startsWith('Bearer ') ? auth.slice(7) : auth).trim();
-  const h = req.headers['x-webhook-token'] || req.headers['x-api-key'] || req.headers['token'] || '';
-  if (h) return String(h).trim();
   if (req.query.token) return String(req.query.token).trim();
   return '';
 }
