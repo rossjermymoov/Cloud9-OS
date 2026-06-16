@@ -259,6 +259,39 @@ router.get('/daily', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Diagnose where a customer's parcels are: GET /api/volume/diagnose?account=Ccell
+router.get('/diagnose', async (req, res, next) => {
+  try {
+    const acct = req.query.account;
+    if (!acct) return res.status(400).json({ error: 'account query param required (e.g. ?account=Ccell)' });
+    const cust = await query(
+      `SELECT id, business_name, helm_accounts_id FROM customers WHERE helm_accounts_id = $1 OR business_name ILIKE $1 LIMIT 1`, [acct]
+    );
+    const customerId = cust.rows[0]?.id || null;
+
+    const [byDate, totals, unattrib, nullDisp, distinctAccts] = await Promise.all([
+      query(`SELECT dispatched_at::text AS date, COUNT(*)::int AS shipments, SUM(parcel_count)::int AS parcels, SUM(item_count)::int AS items
+             FROM shipments WHERE (customer_account = $1 OR customer_id = $2) AND cancelled = false
+             GROUP BY dispatched_at ORDER BY dispatched_at DESC NULLS LAST LIMIT 15`, [acct, customerId]),
+      query(`SELECT COUNT(*)::int AS shipments, COALESCE(SUM(parcel_count),0)::int AS parcels, COALESCE(SUM(item_count),0)::int AS items
+             FROM shipments WHERE customer_account = $1 OR customer_id = $2`, [acct, customerId]),
+      query(`SELECT COUNT(*)::int AS n FROM shipments WHERE customer_account = $1 AND customer_id IS NULL`, [acct]),
+      query(`SELECT COUNT(*)::int AS n FROM shipments WHERE (customer_account = $1 OR customer_id = $2) AND dispatched_at IS NULL`, [acct, customerId]),
+      query(`SELECT customer_account, COUNT(*)::int AS shipments FROM shipments WHERE customer_account ILIKE '%' || $1 || '%' GROUP BY customer_account ORDER BY shipments DESC LIMIT 10`, [acct]),
+    ]);
+
+    res.json({
+      customer: cust.rows[0] || null,
+      resolved_customer_id: customerId,
+      total: totals.rows[0],
+      unattributed_shipments: unattrib.rows[0].n,
+      shipments_missing_dispatch_date: nullDisp.rows[0].n,
+      by_dispatch_date: byDate.rows,
+      distinct_account_strings: distinctAccts.rows,
+    });
+  } catch (err) { next(err); }
+});
+
 // Daily volume for a single customer over an arbitrary date range.
 router.get('/customer/:id', async (req, res, next) => {
   try {
