@@ -147,7 +147,7 @@ export async function recordVoilaShipment(body) {
   const collectionDate = shipment.collection_date || tu.collection_date || tu.received_date || null;
   // Despatch date = when the shipment/label was created. This is the day the
   // volume is counted on (collection dates are often null or forward-dated).
-  const despatched = shipment.created_at || collectionDate || tu.received_date || null;
+  const despatched = shipment.created_at || shipment.date_created || rs.collection_date || collectionDate || tu.received_date || null;
   const day = despatched ? String(despatched).slice(0, 10) : null;
 
   await query(`

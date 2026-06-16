@@ -39,16 +39,20 @@ async function voilaGet(path, params = {}) {
  * start / end: ISO datetime strings, e.g. '2026-06-01T00:00:00'.
  */
 export async function fetchShipmentsByDateRange(start, end, { onPage } = {}) {
-  const PAGE = 50;
+  const PAGE = 100;
   let page = 1;
   const all = [];
-  while (page <= 1000) {
+  let lastFirstId = null;
+  while (page <= 2000) {
     const data = await voilaGet('/shipments.json', { startDateFilter: start, endDateFilter: end, page, per_page: PAGE });
     const list = Array.isArray(data) ? data : (data.shipments || data.data || []);
     if (!list.length) break;
+    // Guard against an API that ignores the page param and returns the same page.
+    const firstId = list[0] && list[0].id;
+    if (firstId != null && firstId === lastFirstId) break;
+    lastFirstId = firstId;
     all.push(...list);
     if (onPage) onPage({ page, total: all.length });
-    if (list.length < PAGE) break;
     page++;
   }
   return all;

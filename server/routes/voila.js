@@ -17,6 +17,34 @@ const router = express.Router();
 
 router.get('/status', (_req, res) => res.json({ configured: voilaConfigured() }));
 
+// GET /api/voila/probe?days=3 — see how many shipments the API returns + a sample shape.
+router.get('/probe', async (req, res, next) => {
+  try {
+    if (!voilaConfigured()) return res.status(503).json({ error: 'Voila API not configured' });
+    const days = Math.min(Math.max(parseInt(req.query.days) || 3, 1), 31);
+    const to = new Date(), from = new Date(Date.now() - (days - 1) * 86400000);
+    const p = (n) => String(n).padStart(2, '0');
+    const iso = (d) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T00:00:00`;
+    const list = await fetchShipmentsByDateRange(iso(from), iso(to));
+    const s = list[0] || null;
+    const parseRS = (v) => { try { return typeof v === 'string' ? JSON.parse(v) : v; } catch { return null; } };
+    const rs = s ? parseRS(s.request_shipment) : null;
+    res.json({
+      base: process.env.VOILA_API_BASE || 'https://app.heyvoila.io/api',
+      range: { from: iso(from), to: iso(to) },
+      count: list.length,
+      sample_keys: s ? Object.keys(s) : [],
+      sample: s ? {
+        id: s.id, created_at: s.created_at, date_created: s.date_created, collection_date: s.collection_date,
+        account_name: s.account_name, account_number: s.account_number,
+        create_label_parcels_len: Array.isArray(s.create_label_parcels) ? s.create_label_parcels.length : null,
+        rs_accounts_id: rs?.accounts_id, rs_collection_date: rs?.collection_date,
+        rs_parcels_len: Array.isArray(rs?.parcels) ? rs.parcels.length : null,
+      } : null,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 function isoDay(d) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T00:00:00`;
@@ -49,8 +77,10 @@ router.post('/backfill', async (req, res, next) => {
 
         // Backfill despatch date for any shipment missing it (from stored created_at),
         // then fully rebuild the daily parcels + items totals by DESPATCH date.
-        await query(`UPDATE shipments SET dispatched_at = LEFT(raw_payload->>'created_at', 10)::date
-                     WHERE dispatched_at IS NULL AND raw_payload->>'created_at' ~ '^\\d{4}-\\d{2}-\\d{2}'`);
+        await query(`UPDATE shipments SET dispatched_at = COALESCE(
+                       CASE WHEN raw_payload->>'created_at' ~ '^\\d{4}-\\d{2}-\\d{2}' THEN LEFT(raw_payload->>'created_at', 10)::date END,
+                       collection_date
+                     ) WHERE dispatched_at IS NULL`);
         await query(`DELETE FROM customer_volume_snapshots`);
         await query(`
           INSERT INTO customer_volume_snapshots (customer_id, snapshot_date, parcel_count, item_count)
