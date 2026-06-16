@@ -19,12 +19,14 @@ import { query } from '../db/index.js';
  * @param {string} [n.link_url]
  * @param {string} [n.source_event]
  * @param {object} [n.payload]
+ * @param {string} [n.ref]   external reference (e.g. consignment number) used to
+ *                           auto-resolve the alert later. See resolveNotifications.
  */
 export async function createNotification(n) {
   const { rows } = await query(
     `INSERT INTO notifications
-       (type, severity, customer_id, customer_name, title, body, link_url, source_event, payload)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (type, severity, customer_id, customer_name, title, body, link_url, source_event, payload, ref)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      RETURNING *`,
     [
       n.type,
@@ -36,9 +38,26 @@ export async function createNotification(n) {
       n.link_url || null,
       n.source_event || null,
       n.payload ? JSON.stringify(n.payload) : null,
+      n.ref || null,
     ]
   );
   return rows[0];
+}
+
+/**
+ * Mark open notifications of a given type + ref as resolved. Used when a
+ * tracking parcel moves out of an exception state, so its stale alert drops
+ * out of the live feed. Returns the number resolved.
+ */
+export async function resolveNotifications({ type, ref }) {
+  if (!type || !ref) return 0;
+  const { rows } = await query(
+    `UPDATE notifications SET resolved_at = NOW()
+      WHERE type = $1::notification_type AND ref = $2 AND resolved_at IS NULL
+      RETURNING id`,
+    [type, String(ref)]
+  );
+  return rows.length;
 }
 
 /** Resolve a Helm/account reference to a Cloud9 customer row, or null. */

@@ -18,7 +18,7 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { normalisePayload, upsertEvent } from '../services/statusEngine.js';
-import { createNotification, resolveCustomer } from '../services/notificationService.js';
+import { createNotification, resolveCustomer, resolveNotifications } from '../services/notificationService.js';
 import { normaliseOrder, upsertOrder, recordVoilaShipment } from '../services/volumeService.js';
 import { mapFulfilmentClient } from '../services/helmClient.js';
 
@@ -478,11 +478,16 @@ router.post('/tracking-update', authMiddleware, (req, res) => {
 
   setImmediate(async () => {
     try {
+      const EXCEPTION_STATUSES = ['failed_delivery', 'exception', 'returned', 'customs_hold', 'damaged'];
+      // Statuses that mean the parcel is moving / cleared again — these resolve
+      // any open exception alert for that consignment.
+      const CLEARED_STATUSES   = ['collected', 'at_depot', 'in_transit', 'out_for_delivery', 'delivered'];
       const events = normalisePayload(body);
       for (const event of events) {
         const r = await upsertEvent(event);
+        if (!r.ok) continue;
         // Raise a notification on exception-type statuses.
-        if (r.ok && ['failed_delivery', 'exception', 'returned', 'customs_hold', 'damaged'].includes(r.status)) {
+        if (EXCEPTION_STATUSES.includes(r.status)) {
           const p = await query(
             `SELECT customer_id, customer_name, consignment_number, status_description FROM parcels WHERE id = $1`,
             [r.parcel_id]
@@ -498,8 +503,14 @@ router.post('/tracking-update', authMiddleware, (req, res) => {
               body:         `${row.consignment_number} — ${row.status_description || r.status}`,
               link_url:     `/tracking?search=${encodeURIComponent(row.consignment_number)}`,
               source_event: 'tracking-update',
+              ref:          row.consignment_number,
             });
           }
+        } else if (CLEARED_STATUSES.includes(r.status) && r.consignment) {
+          // Parcel has moved on — auto-resolve its open exception alert so it
+          // drops out of "Recent activity".
+          const n = await resolveNotifications({ type: 'tracking_exception', ref: r.consignment });
+          if (n) console.log(`↩️  resolved ${n} exception alert(s) for ${r.consignment} (now ${r.status})`);
         }
       }
       // Record the shipment's volume (parcels + items) for the customer's daily totals.

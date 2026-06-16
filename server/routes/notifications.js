@@ -14,7 +14,7 @@ const router = express.Router();
 
 router.get('/', async (req, res, next) => {
   try {
-    const { type, severity, unread, customer_id, limit = 50, offset = 0 } = req.query;
+    const { type, severity, unread, customer_id, resolved, limit = 50, offset = 0 } = req.query;
     const conditions = [];
     const values = [];
     let idx = 1;
@@ -23,6 +23,8 @@ router.get('/', async (req, res, next) => {
     if (severity)    { conditions.push(`severity = $${idx++}::notification_severity`); values.push(severity); }
     if (customer_id) { conditions.push(`customer_id = $${idx++}`); values.push(customer_id); }
     if (unread === 'true') conditions.push(`read_at IS NULL`);
+    // Hide resolved (auto-cleared) alerts by default; pass ?resolved=all to include them.
+    if (resolved !== 'all') conditions.push(`resolved_at IS NULL`);
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -45,6 +47,7 @@ router.get('/stats', async (_req, res, next) => {
         COUNT(*) FILTER (WHERE severity = 'amber' AND read_at IS NULL)::int   AS amber,
         COUNT(*)::int                                                         AS total
       FROM notifications
+      WHERE resolved_at IS NULL
     `);
     res.json(rows[0]);
   } catch (err) { next(err); }
