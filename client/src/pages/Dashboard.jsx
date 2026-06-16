@@ -323,7 +323,7 @@ export default function Dashboard() {
       <style>{STYLE}</style>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 22 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: '0 0 4px', letterSpacing: -0.6 }}>Air Traffic Control</h1>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: '0 0 4px', letterSpacing: -0.6 }}>Cloud9 Command Centre</h1>
           <p style={{ fontSize: 13, color: MUTED, margin: 0 }}>Live operational view across all 3PL activity.</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
