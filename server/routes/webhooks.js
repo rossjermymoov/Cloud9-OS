@@ -26,10 +26,19 @@ const router = express.Router();
 
 const WEBHOOK_TOKEN = process.env.CLOUD9_WEBHOOK_TOKEN || 'change-me';
 
+// Pull the token from wherever the sender put it: Authorization (with or without
+// a "Bearer " prefix), a common custom header, or a ?token= query param.
+function extractToken(req) {
+  const auth = (req.headers['authorization'] || '').trim();
+  if (auth) return (auth.startsWith('Bearer ') ? auth.slice(7) : auth).trim();
+  const h = req.headers['x-webhook-token'] || req.headers['x-api-key'] || req.headers['token'] || '';
+  if (h) return String(h).trim();
+  if (req.query.token) return String(req.query.token).trim();
+  return '';
+}
+
 function authMiddleware(req, res, next) {
-  const auth  = req.headers['authorization'] || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  if (token !== WEBHOOK_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+  if (extractToken(req) !== WEBHOOK_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
   next();
 }
 
@@ -38,15 +47,27 @@ function authMiddleware(req, res, next) {
 // to lock the parsers. Fire-and-forget; never blocks the handler.
 router.use((req, res, next) => {
   if (req.method === 'POST') {
-    const auth  = req.headers['authorization'] || '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
     const endpoint = req.path.replace(/^\//, '');
     query(
       `INSERT INTO webhook_log (endpoint, authorized, payload) VALUES ($1,$2,$3)`,
-      [endpoint.slice(0, 80), token === WEBHOOK_TOKEN, JSON.stringify(req.body ?? null)]
+      [endpoint.slice(0, 80), extractToken(req) === WEBHOOK_TOKEN, JSON.stringify(req.body ?? null)]
     ).catch(() => { /* logging must never break the webhook */ });
   }
   next();
+});
+
+// GET /api/v1/webhooks/auth-check — diagnose a 401 without exposing the secret.
+// Call it WITH the same auth header/token you put in Helm; it tells you whether
+// the server has a token configured and whether yours matches.
+router.get('/auth-check', (req, res) => {
+  const mask = (s) => (s ? `${s.slice(0, 2)}…${s.slice(-2)} (len ${s.length})` : '(none)');
+  const recv = extractToken(req);
+  res.json({
+    token_configured: WEBHOOK_TOKEN !== 'change-me',
+    expected: mask(WEBHOOK_TOKEN),
+    received: mask(recv),
+    matches: recv === WEBHOOK_TOKEN,
+  });
 });
 
 // GET /api/v1/webhooks/log?endpoint=order-created&limit=20 — inspect captures
