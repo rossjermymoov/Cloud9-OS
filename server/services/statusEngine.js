@@ -71,6 +71,13 @@ export function normaliseStatus(raw) {
   return STATUS_MAP[key] || 'unknown';
 }
 
+// request_shipment may arrive as a JSON string or an object; return it parsed.
+function parseRequestShipment(payload) {
+  let rs = payload.request_shipment ?? payload.requestShipment;
+  if (typeof rs === 'string') { try { rs = JSON.parse(rs); } catch { rs = {}; } }
+  return rs && typeof rs === 'object' ? rs : {};
+}
+
 function pick(obj, ...keys) {
   for (const k of keys) {
     const val = k.split('.').reduce((o, p) => (o && o[p] !== undefined ? o[p] : undefined), obj);
@@ -87,6 +94,11 @@ export function normalisePayload(body) {
   if (payload.tracking_update && Array.isArray(payload.tracking_update.parcels)) {
     const tu       = payload.tracking_update;
     const shipment = payload.shipment || {};
+    const rs       = parseRequestShipment(payload);
+    // Voila identifies the customer by accounts_id (e.g. "BEDDOES LTD") inside
+    // request_shipment — this maps to a Cloud9 customer's helm_accounts_id.
+    const accountsId = rs.accounts_id || shipment.accounts_id || shipment.account_name
+                      || rs.ship_from?.company_name || shipment.account_number || null;
     const events   = [];
 
     for (const parcel of tu.parcels) {
@@ -107,11 +119,12 @@ export function normalisePayload(body) {
           _courier_name:       shipment.courier || null,
           _courier_code:       shipment.courier ? shipment.courier.toLowerCase() : null,
           _service_name:       shipment.friendly_service_name || null,
-          _customer_name:      shipment.account_name || null,
-          _customer_account:   shipment.account_number || null,
-          _recipient_name:     shipment.ship_to_name || shipment.ship_to_company_name || null,
-          _recipient_postcode: shipment.ship_to_postcode || tu.address_information?.postcode || null,
-          _recipient_address:  shipment.ship_to_address || null,
+          _accounts_id:        accountsId,
+          _customer_name:      shipment.account_name || rs.ship_from?.company_name || accountsId || null,
+          _customer_account:   shipment.account_number || accountsId || null,
+          _recipient_name:     shipment.ship_to_name || shipment.ship_to_company_name || rs.ship_to?.name || null,
+          _recipient_postcode: shipment.ship_to_postcode || tu.address_information?.postcode || rs.ship_to?.postcode || null,
+          _recipient_address:  shipment.ship_to_address || rs.ship_to?.address_1 || null,
           _weight_kg:          parcel.weight || null,
           _estimated_delivery: tu.expected_delivery || shipment.tracking_expected_delivery_date || null,
           _tracking_url:       parcel.tracking_url || parcel.trackingUrl || null,
@@ -159,10 +172,15 @@ export async function upsertEvent(event) {
   const estDelivery    = event._estimated_delivery || pick(event, 'estimated_delivery', 'estimatedDelivery', 'eta', 'due_date');
   const trackingUrl    = event._tracking_url    || pick(event, 'tracking_url', 'trackingUrl', 'track_url', 'parcel_tracking_url');
 
-  // Resolve customer_id from account number (Helm account → Cloud9 customer)
+  // Resolve the customer. Voila identifies them by accounts_id (e.g. "BEDDOES LTD")
+  // which maps to a Cloud9 customer's helm_accounts_id. Fall back to account number.
+  const accountsId = event._accounts_id || pick(event, 'accounts_id', 'accountsId') || customerAccount;
   let customerId = null;
-  if (customerAccount) {
-    const cr = await query('SELECT id FROM customers WHERE account_number = $1 OR helm_customer_id = $1', [customerAccount]);
+  if (accountsId) {
+    const cr = await query(
+      `SELECT id FROM customers WHERE helm_accounts_id = $1 OR account_number = $1 OR helm_customer_id = $1 LIMIT 1`,
+      [String(accountsId).trim()]
+    );
     if (cr.rows.length) customerId = cr.rows[0].id;
   }
 
