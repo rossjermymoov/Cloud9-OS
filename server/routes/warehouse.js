@@ -35,6 +35,9 @@ const ST_IGNORE = [1, 3002, 3010, 3015, 3019];
 // Friendly display labels for the by-status breakdown (override Helm's name).
 const STATUS_LABELS = { 26: 'Importing from Neuro' };
 
+// Held / attention statuses to monitor with an ageing breakdown.
+const ST_HELD = { 3002: 'service', 3015: 'supervisor' };
+
 // Start-of-today in Europe/London as a timestamptz instant.
 const LONDON_MIDNIGHT = `(date_trunc('day', now() AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London')`;
 
@@ -73,7 +76,7 @@ router.get('/board', async (req, res, next) => {
 
     const TODAY_LON = `(now() AT TIME ZONE 'Europe/London')::date`;
     const pipe = (ids) => query(`SELECT COUNT(*)::int AS n FROM orders WHERE status_id = ANY($1) AND dispatched_at IS NULL`, [ids]);
-    const [picking, packing, dispatchReady, vol, couriers, topCustomers, topPickers, orders] = await Promise.all([
+    const [picking, packing, dispatchReady, vol, couriers, topCustomers, topPickers, held, orders] = await Promise.all([
       pipe(ST_PICKING),
       pipe(ST_PACKING),
       pipe(ST_DISPATCH_READY),
@@ -92,6 +95,15 @@ router.get('/board', async (req, res, next) => {
                     COALESCE(SUM(items) FILTER (WHERE handling_ms > 0),0)::int AS timed_items
               FROM pick_contributions WHERE pick_date = ${TODAY_LON}
               GROUP BY user_id ORDER BY items DESC LIMIT 6`),
+      // Held statuses (Service / Supervisor) with an ageing breakdown by days since received.
+      query(`SELECT status_id,
+                    COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE ${TODAY_LON} - (received_at AT TIME ZONE 'Europe/London')::date >= 1)::int AS d1,
+                    COUNT(*) FILTER (WHERE ${TODAY_LON} - (received_at AT TIME ZONE 'Europe/London')::date >= 3)::int AS d3,
+                    COUNT(*) FILTER (WHERE ${TODAY_LON} - (received_at AT TIME ZONE 'Europe/London')::date >= 5)::int AS d5
+              FROM orders WHERE status_id = ANY($1)
+                AND (status_label IS NULL OR status_label NOT ILIKE '%cancel%')
+              GROUP BY status_id`, [Object.keys(ST_HELD).map(Number)]),
       // All recent orders (dispatched or not) so we can judge "due today" with
       // the working-day rollover and split done vs outstanding. Parked statuses
       // (Draft/Service/Replenishment/Supervisor/Beddoes Review) are excluded.
@@ -124,6 +136,13 @@ router.get('/board', async (req, res, next) => {
       byCustomer[cust] = (byCustomer[cust] || 0) + 1;
     }
     const outstanding = buckets.green + buckets.amber + buckets.red + buckets.breached;
+
+    // Held statuses with ageing (Service / Supervisor).
+    const parked = { service: { total: 0, d1: 0, d3: 0, d5: 0 }, supervisor: { total: 0, d1: 0, d3: 0, d5: 0 } };
+    for (const r of held.rows) {
+      const key = ST_HELD[r.status_id];
+      if (key) parked[key] = { total: r.total, d1: r.d1, d3: r.d3, d5: r.d5 };
+    }
     const by_status = Object.entries(byStatus).map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n);
     const impacted_customers = Object.entries(byCustomer).map(([customer, n]) => ({ customer, n })).sort((a, b) => b.n - a.n);
 
@@ -147,6 +166,7 @@ router.get('/board', async (req, res, next) => {
         const hours = Number(p.total_ms) / 3600000;
         return { name: p.name, items: p.items, items_per_hour: hours > 0 ? Math.round(p.timed_items / hours) : null };
       }),
+      parked,
       sla: { ...buckets, outstanding, by_status, impacted_customers },
     });
   } catch (err) { next(err); }

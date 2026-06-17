@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 // Public, no-auth TV board. Rotating full-screen slides — nothing scrolls on a TV.
 const REFRESH_MS = 20000;     // data refresh
 // Per-slide dwell time, aligned to SLIDES below. The two important views linger.
-const SLIDE_MS = { kpis: 30000, cutoff: 30000, couriers: 10000, customers: 10000, pickers: 10000 };
+const SLIDE_MS = { kpis: 30000, cutoff: 30000, held: 15000, couriers: 10000, customers: 10000, pickers: 10000 };
 
 const C = {
   bg: '#0A0E1A', panel: '#121829', panel2: '#0F1422', line: 'rgba(255,255,255,0.08)',
@@ -145,6 +145,40 @@ function CouriersSlide({ d }) {
   );
 }
 
+function HeldCard({ name, accent, p }) {
+  const v = p || { total: 0, d1: 0, d3: 0, d5: 0 };
+  const totalColor = v.d5 > 0 ? C.red : v.d3 > 0 ? C.amber : v.total > 0 ? accent : C.mute;
+  const ages = [['1 day +', v.d1, C.mute], ['3 days +', v.d3, C.amber], ['5 days +', v.d5, C.red]];
+  return (
+    <div style={{ flex: 1, minWidth: 0, background: C.panel, borderRadius: 18, border: `1px solid ${C.line}`, padding: '3vh 2vw', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ fontSize: 'clamp(18px,2vw,30px)', fontWeight: 800, color: C.text, marginBottom: '1.5vh' }}>{name}</div>
+      <div style={{ fontSize: 'clamp(56px,9vw,150px)', fontWeight: 900, color: totalColor, lineHeight: 1 }}>{fmt(v.total)}</div>
+      <div style={{ fontSize: 'clamp(13px,1.3vw,20px)', color: C.mute, textTransform: 'uppercase', letterSpacing: 1, marginTop: 6, marginBottom: '2vh' }}>orders held</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1vh', marginTop: 'auto' }}>
+        {ages.map(([label, n, col]) => (
+          <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.2vh 1.4vw', background: C.panel2, borderRadius: 12, borderLeft: `5px solid ${n > 0 ? col : C.line}` }}>
+            <span style={{ fontSize: 'clamp(16px,1.8vw,26px)', fontWeight: 600, color: C.mute }}>{label}</span>
+            <span style={{ fontSize: 'clamp(22px,2.6vw,40px)', fontWeight: 900, color: n > 0 ? col : C.mute }}>{fmt(n)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HeldSlide({ d }) {
+  const p = d.parked || {};
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <SlideTitle accent={C.red}>Held for attention · how long</SlideTitle>
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', gap: '2vw' }}>
+        <HeldCard name="Service" accent={C.cyan} p={p.service} />
+        <HeldCard name="Supervisor" accent={C.purple} p={p.supervisor} />
+      </div>
+    </div>
+  );
+}
+
 function LeaderboardSlide({ title, accent, rows, render }) {
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -157,7 +191,7 @@ function LeaderboardSlide({ title, accent, rows, render }) {
   );
 }
 
-const SLIDES = ['kpis', 'cutoff', 'couriers', 'customers', 'pickers'];
+const SLIDES = ['kpis', 'cutoff', 'held', 'couriers', 'customers', 'pickers'];
 
 export default function WarehouseBoard() {
   const { data, err, forbidden, updated } = useBoard();
@@ -185,6 +219,7 @@ export default function WarehouseBoard() {
   let body;
   if (which === 'kpis') body = <KpiSlide d={d} cols={cols} vFont={typeof vFont === 'string' ? (phone ? 44 : 76) : vFont} />;
   else if (which === 'cutoff') body = <CutoffSlide d={d} />;
+  else if (which === 'held') body = <HeldSlide d={d} />;
   else if (which === 'couriers') body = <CouriersSlide d={d} />;
   else if (which === 'customers') body = <LeaderboardSlide title="Top customers today" accent={C.green} rows={d.top_customers}
     render={(r, i) => <RankRow key={i} i={i} name={r.name} value={fmt(r.parcels)} valueColor={C.green} sub={`${fmt(r.items)} items`} />} />;

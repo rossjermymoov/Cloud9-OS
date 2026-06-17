@@ -114,7 +114,7 @@ function Leaderboard({ rows }) {
       </tbody>
       <tfoot>
         <tr><td colSpan={6} style={{ padding: '10px 6px 0', fontSize: 11, color: '#94A3B8' }}>
-          Items/hr and avg time show only for picks recorded on the scan-tracked flow — others count toward picks &amp; items but not throughput.
+          Items/hr uses scan timing where available; for bulk picks (no scans) it's estimated from the gap between dispatches.
         </td></tr>
       </tfoot>
     </table>

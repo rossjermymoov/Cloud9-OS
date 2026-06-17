@@ -116,7 +116,7 @@ function summarisePick(detail, header) {
   const elapsedMs = (created && completed) ? Math.max(0, completed.getTime() - created.getTime()) : 0;
 
   return { items, lineCount: invs.length, orderCount: orders.size, handlingMs, elapsedMs,
-           pickerId, contributions, created, completed };
+           pickerId, contributions, created, completed, orderIds: [...orders] };
 }
 
 /**
@@ -151,7 +151,7 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
       const status = num(h.status);
 
       let s = { items: 0, lineCount: 0, orderCount: 0, handlingMs: 0, elapsedMs: 0,
-                pickerId: h.assigned_to != null ? String(h.assigned_to) : null, contributions: [],
+                pickerId: h.assigned_to != null ? String(h.assigned_to) : null, contributions: [], orderIds: [],
                 created: toDate(h.created_at), completed: toDate(h.completed_at) };
 
       // Only completed picks carry meaningful items/time — fetch detail for those.
@@ -185,14 +185,25 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
       const pickDate = (s.completed || s.created || null);
       const pickDateStr = pickDate ? pickDate.toISOString().slice(0, 10) : null;
 
+      // label_at = when this pick's last order was dispatched (shipment label made).
+      // Used to time bulk picks that have no scan timing (see gap pass below).
+      let labelAt = null;
+      if (s.orderIds && s.orderIds.length) {
+        try {
+          const lr = await query(`SELECT MAX(dispatched_at) AS m FROM orders WHERE helm_order_id = ANY($1)`, [s.orderIds]);
+          labelAt = lr.rows[0]?.m || null;
+        } catch { /* orders may not be loaded yet */ }
+      }
+      const timingSource = s.handlingMs > 0 ? 'scan' : null;
+
       try {
         await query(`
           INSERT INTO picks
             (helm_pick_id, pick_number, pick_type, pick_type_name, pick_option, pick_option_name,
              status, status_name, warehouse_id, created_by, picker_id, picker_name,
              item_count, line_count, order_count, handling_ms, elapsed_ms,
-             is_batch, is_split, ui_pick, force_completed, helm_created_at, completed_at, pick_date, raw_payload, contributor_count)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+             is_batch, is_split, ui_pick, force_completed, helm_created_at, completed_at, pick_date, raw_payload, contributor_count, label_at, timing_source)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
           ON CONFLICT (helm_pick_id) DO UPDATE SET
             pick_number=EXCLUDED.pick_number, pick_type=EXCLUDED.pick_type, pick_type_name=EXCLUDED.pick_type_name,
             pick_option=EXCLUDED.pick_option, pick_option_name=EXCLUDED.pick_option_name,
@@ -203,7 +214,8 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
             is_batch=EXCLUDED.is_batch, is_split=EXCLUDED.is_split, ui_pick=EXCLUDED.ui_pick,
             force_completed=EXCLUDED.force_completed, helm_created_at=EXCLUDED.helm_created_at,
             completed_at=EXCLUDED.completed_at, pick_date=EXCLUDED.pick_date,
-            raw_payload=EXCLUDED.raw_payload, contributor_count=EXCLUDED.contributor_count, updated_at=NOW()
+            raw_payload=EXCLUDED.raw_payload, contributor_count=EXCLUDED.contributor_count,
+            label_at=COALESCE(EXCLUDED.label_at, picks.label_at), timing_source=EXCLUDED.timing_source, updated_at=NOW()
         `, [
           pickId, h.pick_number || null, num(h.pick_type) || null, h.pick_type_name || TYPE_NAME[num(h.pick_type)] || null,
           num(h.pick_option) || null, h.pick_option_name || OPTION_NAME[num(h.pick_option)] || null,
@@ -214,6 +226,7 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
           h.ui_pick === '1' || h.ui_pick === 1, h.force_completed === '1' || h.force_completed === 1,
           s.created ? s.created.toISOString() : null, s.completed ? s.completed.toISOString() : null,
           pickDateStr, JSON.stringify(rawToStore).slice(0, 150000), s.contributions.length || 1,
+          labelAt, timingSource,
         ]);
         stored++;
 
@@ -232,7 +245,43 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
       } catch (e) { errors++; console.warn(`[picking-sync] upsert ${pickId}: ${e.message}`); }
     }
 
-    const detail = `${stored} picks (${detailed} detailed), ${errors} errors, ${userMap.size} users`;
+    // ── Gap timing for bulk picks (no scan timing) ────────────────────────────
+    // Time each untimed pick by the gap to the picker's previous pick (using the
+    // order's label/dispatch time), excluding idle gaps over 60 min. Then mirror
+    // the derived time onto its contribution so the leaderboard picks it up.
+    const fromDay = from.toISOString().slice(0, 10);
+    let gapped = 0;
+    try {
+      const g = await query(`
+        WITH ordered AS (
+          SELECT helm_pick_id, picker_id, label_at,
+                 LAG(label_at) OVER (PARTITION BY picker_id ORDER BY label_at) AS prev
+          FROM picks
+          WHERE status = 1 AND COALESCE(handling_ms,0) = 0 AND label_at IS NOT NULL
+            AND pick_date >= $1
+        )
+        UPDATE picks p
+           SET handling_ms = EXTRACT(EPOCH FROM (o.label_at - o.prev)) * 1000,
+               timing_source = 'gap', updated_at = NOW()
+          FROM ordered o
+         WHERE p.helm_pick_id = o.helm_pick_id
+           AND o.prev IS NOT NULL
+           AND (o.label_at - o.prev) > interval '0 minutes'
+           AND (o.label_at - o.prev) <= interval '60 minutes'
+        RETURNING p.helm_pick_id`, [fromDay]);
+      gapped = g.rows.length;
+      // Mirror the derived handling time onto each pick's (single) contribution.
+      if (gapped) {
+        await query(`
+          UPDATE pick_contributions c
+             SET handling_ms = p.handling_ms, updated_at = NOW()
+            FROM picks p
+           WHERE c.helm_pick_id = p.helm_pick_id AND p.timing_source = 'gap'
+             AND p.pick_date >= $1`, [fromDay]);
+      }
+    } catch (e) { console.warn('[picking-sync] gap pass:', e.message); }
+
+    const detail = `${stored} picks (${detailed} detailed), ${gapped} gap-timed, ${errors} errors, ${userMap.size} users`;
     if (logId) await query(`UPDATE helm_sync_log SET status='ok', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [stored, detail, logId]);
     else await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('picking','ok',$1,$2)`, [stored, detail]);
     console.log('✅ picking sync complete:', detail);

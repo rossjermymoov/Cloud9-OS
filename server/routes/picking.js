@@ -177,24 +177,60 @@ router.get('/picks', async (req, res, next) => {
 router.get('/inspect', async (req, res, next) => {
   try {
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 3, 1), 20);
+    const vals = [];
+    let where = `status = 1`;
+    if (req.query.picker) { vals.push(`%${req.query.picker}%`); where += ` AND picker_name ILIKE $${vals.length}`; }
+    vals.push(limit);
     const { rows } = await query(`
       SELECT helm_pick_id, pick_number, picker_name, item_count, status_name,
+             pick_type_name, pick_option_name, ui_pick, is_batch, force_completed,
              handling_ms, elapsed_ms, helm_created_at, completed_at, raw_payload
-      FROM picks WHERE status = 1 ORDER BY pick_date DESC NULLS LAST, completed_at DESC NULLS LAST
-      LIMIT $1
-    `, [limit]);
+      FROM picks WHERE ${where} ORDER BY pick_date DESC NULLS LAST, completed_at DESC NULLS LAST
+      LIMIT $${vals.length}
+    `, vals);
     res.json(rows.map(r => {
       const raw = r.raw_payload || {};
+      const tt = raw.time_tracking_data;
       return {
         pick_number: r.pick_number,
         picker_name: r.picker_name,
         item_count: r.item_count,
+        flags: { pick_type: r.pick_type_name, pick_option: r.pick_option_name,
+                 ui_pick: r.ui_pick, is_batch: r.is_batch, force_completed: r.force_completed },
         derived: { handling_ms: r.handling_ms, elapsed_ms: r.elapsed_ms,
                    helm_created_at: r.helm_created_at, completed_at: r.completed_at },
-        time_tracking_data: raw.time_tracking_data || '(no raw timing stored — re-run a pick sync after deploy)',
-        pick_inventories: raw.pick_inventories || null,
+        time_tracking_count: Array.isArray(tt) ? tt.length : 0,
+        time_tracking_data: tt || '(no raw timing stored — re-run a pick sync after deploy)',
       };
     }));
+  } catch (err) { next(err); }
+});
+
+// Compare pickers by the attributes that determine whether timing is captured —
+// reveals what's different about a picker whose picks never show times.
+router.get('/compare', async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 60, 1), 365);
+    const [summary, options] = await Promise.all([
+      query(`
+        SELECT picker_id, MAX(picker_name) AS picker_name,
+               COUNT(*)::int AS picks,
+               COUNT(*) FILTER (WHERE handling_ms > 0)::int AS timed,
+               COUNT(*) FILTER (WHERE handling_ms = 0)::int AS untimed,
+               COUNT(*) FILTER (WHERE force_completed)::int AS force_completed,
+               COUNT(*) FILTER (WHERE ui_pick)::int AS ui_picks,
+               COUNT(*) FILTER (WHERE is_batch)::int AS batched
+        FROM picks WHERE status = 1 AND picker_id IS NOT NULL AND pick_date >= CURRENT_DATE - ($1::int - 1)
+        GROUP BY picker_id ORDER BY picks DESC`, [days]),
+      query(`
+        SELECT picker_id, MAX(picker_name) AS picker_name,
+               COALESCE(pick_type_name,'?') || ' / ' || COALESCE(pick_option_name,'?') AS method,
+               COUNT(*)::int AS picks,
+               COUNT(*) FILTER (WHERE handling_ms > 0)::int AS timed
+        FROM picks WHERE status = 1 AND picker_id IS NOT NULL AND pick_date >= CURRENT_DATE - ($1::int - 1)
+        GROUP BY picker_id, method ORDER BY picks DESC`, [days]),
+    ]);
+    res.json({ days, by_picker: summary.rows, by_method: options.rows });
   } catch (err) { next(err); }
 });
 
