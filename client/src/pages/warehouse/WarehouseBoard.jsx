@@ -84,7 +84,7 @@ function SlaPanel({ sla, colSpan = 2, rowSpan = 2, statCols = 4 }) {
   const fmtLeft = (m) => m <= 0 ? 'OVERDUE' : m < 60 ? `${m}m left` : `${Math.floor(m / 60)}h ${m % 60}m left`;
   return (
     <div style={{ background: C.panel, borderRadius: 18, padding: 22, border: `1px solid ${C.line}`, gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 16 }}>Cutoff watch · due today</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 16 }}>Should ship today · cutoff watch</div>
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${statCols},1fr)`, gap: 10, marginBottom: 18 }}>
         {cells.map(c => (
           <div key={c.k} style={{ background: C.panel2, borderRadius: 14, padding: '16px 10px', textAlign: 'center', border: `1px solid ${c.v ? c.c : C.line}` }}>
@@ -123,6 +123,10 @@ export default function WarehouseBoard() {
   const slaRowSpan = cols === 4 ? 2 : 1;
   const statCols = cols === 1 ? 2 : 4;             // SLA stat cells: 2×2 on phone
 
+  // "Still outstanding" tile reflects the worst breach state of today's remaining orders.
+  const sla = d.sla || {};
+  const outColor = (sla.breached || sla.red) ? C.red : sla.amber ? C.amber : C.cyan;
+
   if (forbidden) return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.mute, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, padding: 24, textAlign: 'center', fontFamily: 'system-ui' }}>
       This board needs a valid access key in the URL.
@@ -144,13 +148,16 @@ export default function WarehouseBoard() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: 'minmax(120px, auto)', gap: phone ? 12 : 16 }}>
-        {/* Flow stages */}
-        <Tile label="Dispatch ready" value={fmt(d.dispatch_ready)} color={C.green} sub="ready for courier" vFont={vFont} />
+        {/* Today's commitment + the work still racing the cutoff */}
+        <Tile label="To dispatch today" value={fmt(d.due_today)} color={C.blue} sub="should ship today" vFont={vFont} />
+        <Tile label="Still outstanding" value={fmt(d.outstanding)} color={outColor} sub={`${fmt(d.dispatched)} already dispatched`} vFont={vFont} />
+        {/* Live workflow stages */}
         <Tile label="In picking" value={fmt(d.in_picking)} color={C.cyan} sub="being picked" vFont={vFont} />
         <Tile label="In packing" value={fmt(d.in_packing)} color={d.packing_stuck ? C.amber : C.purple} sub={d.packing_stuck ? '⚠ still packing after 3pm' : 'scanned, being packed'} vFont={vFont} />
-        <Tile label="Orders done" value={fmt(d.orders_done)} color={C.blue} sub="dispatched today" vFont={vFont} />
 
         <SlaPanel sla={d.sla} colSpan={span2} rowSpan={slaRowSpan} statCols={statCols} />
+        <Tile label="Dispatch ready" value={fmt(d.dispatch_ready)} color={C.green} sub="ready for courier" vFont={vFont} />
+        <Tile label="Dispatched" value={fmt(d.dispatched)} color={C.green} sub="of today's orders" vFont={vFont} />
         <Tile label="Parcels sent" value={fmt(d.parcels_sent)} color={C.blue} sub="today" vFont={vFont} />
         <Tile label="Items sent" value={fmt(d.items_sent)} color={C.pink} sub="today" vFont={vFont} />
 

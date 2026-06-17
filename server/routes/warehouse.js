@@ -14,6 +14,7 @@ import express from 'express';
 import { query } from '../db/index.js';
 import { dueDateFor, todayLondonYmd } from '../services/slaService.js';
 import { holidaySet } from '../services/bankHolidayService.js';
+import { helmConfigured } from '../services/helmClient.js';
 
 const router = express.Router();
 
@@ -37,48 +38,72 @@ function nowLondonMins() {
   return (parseInt(o.hour) % 24) * 60 + parseInt(o.minute);
 }
 
+// Diagnostic: what statuses are our undispatched orders actually in, and when
+// did the order syncs last run. Reveals whether status_id reflects live workflow.
+router.get('/diag', async (req, res, next) => {
+  try {
+    if (BOARD_KEY && req.query.key !== BOARD_KEY) return res.status(403).json({ error: 'Forbidden' });
+    const [byStatus, syncs] = await Promise.all([
+      query(`SELECT status_id, MAX(status_label) AS label, COUNT(*)::int AS total,
+                    COUNT(*) FILTER (WHERE dispatched_at IS NULL)::int AS undispatched
+             FROM orders WHERE received_at >= now() - interval '7 days'
+             GROUP BY status_id ORDER BY total DESC`),
+      query(`SELECT sync_type, status, records, detail, ran_at FROM helm_sync_log
+             WHERE sync_type IN ('sla_orders','volume','backfill') ORDER BY ran_at DESC LIMIT 5`),
+    ]);
+    res.json({ helm_configured: helmConfigured(), orders_by_status: byStatus.rows, recent_syncs: syncs.rows });
+  } catch (err) { next(err); }
+});
+
 router.get('/board', async (req, res, next) => {
   try {
     if (BOARD_KEY && req.query.key !== BOARD_KEY) return res.status(403).json({ error: 'Forbidden — invalid board key' });
 
-    const pipelineSql = (ids) => `SELECT COUNT(*)::int AS n FROM orders WHERE status_id = ANY($1) AND dispatched_at IS NULL`;
-    const [done, picking, packing, dispatchReady, vol, couriers, ordersDue] = await Promise.all([
-      query(`SELECT COUNT(*)::int AS n FROM orders WHERE dispatched_at >= ${LONDON_MIDNIGHT}`),
-      query(pipelineSql(), [ST_PICKING]),
-      query(pipelineSql(), [ST_PACKING]),
-      query(pipelineSql(), [ST_DISPATCH_READY]),
+    const pipe = (ids) => query(`SELECT COUNT(*)::int AS n FROM orders WHERE status_id = ANY($1) AND dispatched_at IS NULL`, [ids]);
+    const [picking, packing, dispatchReady, vol, couriers, orders] = await Promise.all([
+      pipe(ST_PICKING),
+      pipe(ST_PACKING),
+      pipe(ST_DISPATCH_READY),
       query(`SELECT COALESCE(SUM(parcel_count),0)::int AS parcels, COALESCE(SUM(item_count),0)::int AS items
               FROM customer_volume_snapshots WHERE snapshot_date = (now() AT TIME ZONE 'Europe/London')::date`),
       query(`SELECT COALESCE(courier_name,'Unknown') AS courier, COUNT(*)::int AS parcels
               FROM parcels WHERE created_at >= ${LONDON_MIDNIGHT} GROUP BY courier_name ORDER BY parcels DESC LIMIT 8`),
-      query(`SELECT o.id, o.received_at, c.business_name, c.cutoff_time::text AS cutoff
+      // All recent orders (dispatched or not) so we can judge "due today" with
+      // the working-day rollover and split done vs outstanding.
+      query(`SELECT o.received_at, o.dispatched_at, c.business_name, c.cutoff_time::text AS cutoff
               FROM orders o JOIN customers c ON c.id = o.customer_id
-              WHERE o.dispatched_at IS NULL AND o.received_at >= now() - interval '7 days'
+              WHERE o.received_at >= now() - interval '8 days'
                 AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')`),
     ]);
 
-    // Per-customer cutoff breach proximity (orders due TODAY only).
+    // The board's core question: of orders that SHOULD ship today (received before
+    // cutoff today, with weekend/bank-holiday rollover), what's done vs outstanding,
+    // and how close to breaching. Workflow status is irrelevant here.
     const hs = await holidaySet();
     const today = todayLondonYmd();
     const nowM = nowLondonMins();
     const buckets = { green: 0, amber: 0, red: 0, breached: 0 };
     const urgent = [];
-    for (const o of ordersDue.rows) {
-      if (dueDateFor(o.received_at, o.cutoff, hs) !== today) continue;
-      const left = cutoffMins(o.cutoff) - nowM;       // minutes to this customer's cutoff
+    let dispatched = 0;
+    for (const o of orders.rows) {
+      if (dueDateFor(o.received_at, o.cutoff, hs) !== today) continue;   // only today's commitments
+      if (o.dispatched_at) { dispatched++; continue; }                   // already out → done
+      const left = cutoffMins(o.cutoff) - nowM;                          // minutes to this customer's cutoff
       const st = left <= 0 ? 'breached' : left < 60 ? 'red' : left < 120 ? 'amber' : 'green';
       buckets[st]++;
-      if (st !== 'green') urgent.push({ customer: o.business_name, mins_left: left, status: st, cutoff: o.cutoff });
+      if (st !== 'green') urgent.push({ customer: o.business_name, mins_left: left, status: st });
     }
     urgent.sort((a, b) => a.mins_left - b.mins_left);
+    const outstanding = buckets.green + buckets.amber + buckets.red + buckets.breached;
 
-    // Packing should be empty by end of day — flag amber if anything is still
-    // in packing after 15:00 (it's been scanned but not dispatched = stuck).
+    // Packing should clear by end of day — amber if anything still packing after 3pm.
     const packingStuck = packing.rows[0].n > 0 && nowM >= 15 * 60;
 
     res.json({
       generated_at: new Date().toISOString(),
-      orders_done: done.rows[0].n,
+      due_today: dispatched + outstanding,   // total that should ship today
+      dispatched,                            // of those, already out
+      outstanding,                           // still to go
       in_picking: picking.rows[0].n,
       in_packing: packing.rows[0].n,
       packing_stuck: packingStuck,
@@ -86,11 +111,7 @@ router.get('/board', async (req, res, next) => {
       parcels_sent: vol.rows[0].parcels,
       items_sent: vol.rows[0].items,
       couriers: couriers.rows,
-      sla: {
-        ...buckets,
-        due_today: buckets.green + buckets.amber + buckets.red + buckets.breached,
-        urgent: urgent.slice(0, 14),
-      },
+      sla: { ...buckets, urgent: urgent.slice(0, 14) },
     });
   } catch (err) { next(err); }
 });
