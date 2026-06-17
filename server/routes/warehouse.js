@@ -32,10 +32,18 @@ const ST_DISPATCH_READY = [3, 2700, 82, 2711]; // Despatch Ready, Despatch Pendi
 //   1 Draft · 3002 Service · 3010 Replenishment Needed · 3015 Supervisor · 3019 Beddoes Review
 const ST_IGNORE = [1, 3002, 3010, 3015, 3019];
 
+// Friendly display labels for the by-status breakdown (override Helm's name).
+const STATUS_LABELS = { 26: 'Importing from Neuro' };
+
 // Start-of-today in Europe/London as a timestamptz instant.
 const LONDON_MIDNIGHT = `(date_trunc('day', now() AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London')`;
 
 function cutoffMins(t) { if (!t) return 14 * 60; const [h, m] = String(t).split(':'); return (parseInt(h) || 0) * 60 + (parseInt(m) || 0); }
+
+// Dispatch deadline = warehouse close / last courier collection (default 17:00).
+// The per-customer cutoff (e.g. 2pm) decides WHICH orders are due today; this is
+// the time they must actually be OUT by. red = within 1h, amber = within 2h.
+const CLOSE_MIN = (parseInt(process.env.WAREHOUSE_CLOSE_HOUR) || 17) * 60;
 function nowLondonMins() {
   const p = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
   const o = Object.fromEntries(p.map(x => [x.type, x.value]));
@@ -95,10 +103,10 @@ router.get('/board', async (req, res, next) => {
     for (const o of orders.rows) {
       if (dueDateFor(o.received_at, o.cutoff, hs) !== today) continue;   // only today's commitments
       if (o.dispatched_at) { dispatched++; continue; }                   // already out → done
-      const left = cutoffMins(o.cutoff) - nowM;                          // minutes to this customer's cutoff
+      const left = CLOSE_MIN - nowM;                                     // minutes to the 5pm dispatch deadline
       const st = left <= 0 ? 'breached' : left < 60 ? 'red' : left < 120 ? 'amber' : 'green';
       buckets[st]++;
-      const sLabel = o.status_label || (o.status_id != null ? `Status ${o.status_id}` : 'No status');
+      const sLabel = STATUS_LABELS[o.status_id] || o.status_label || (o.status_id != null ? `Status ${o.status_id}` : 'No status');
       byStatus[sLabel] = (byStatus[sLabel] || 0) + 1;
       const cust = o.business_name || 'Unattributed';
       byCustomer[cust] = (byCustomer[cust] || 0) + 1;
