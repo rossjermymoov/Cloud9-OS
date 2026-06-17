@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 
 // Public, no-auth TV board. Rotating full-screen slides — nothing scrolls on a TV.
 const REFRESH_MS = 20000;     // data refresh
-const ROTATE_MS = 14000;      // slide advance
+// Per-slide dwell time, aligned to SLIDES below. The two important views linger.
+const SLIDE_MS = { kpis: 30000, cutoff: 30000, couriers: 10000, customers: 10000, pickers: 10000 };
 
 const C = {
   bg: '#0A0E1A', panel: '#121829', panel2: '#0F1422', line: 'rgba(255,255,255,0.08)',
@@ -164,7 +165,11 @@ export default function WarehouseBoard() {
   const [slide, setSlide] = useState(0);
   const d = data || {};
 
-  useEffect(() => { const t = setInterval(() => setSlide(s => (s + 1) % SLIDES.length), ROTATE_MS); return () => clearInterval(t); }, []);
+  // Advance after the current slide's own dwell time (re-scheduled on each change).
+  useEffect(() => {
+    const t = setTimeout(() => setSlide(s => (s + 1) % SLIDES.length), SLIDE_MS[SLIDES[slide]] || 14000);
+    return () => clearTimeout(t);
+  }, [slide]);
 
   const phone = w < 640;
   const cols = w < 640 ? 2 : 4;
