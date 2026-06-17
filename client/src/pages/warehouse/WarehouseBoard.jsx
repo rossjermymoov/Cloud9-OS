@@ -12,16 +12,19 @@ const C = {
 function useBoard() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
   const [updated, setUpdated] = useState(null);
+  const key = new URLSearchParams(window.location.search).get('key') || '';
   const load = useCallback(async () => {
     try {
-      const r = await fetch('/api/warehouse/board', { headers: { Accept: 'application/json' } });
+      const r = await fetch(`/api/warehouse/board${key ? `?key=${encodeURIComponent(key)}` : ''}`, { headers: { Accept: 'application/json' } });
+      if (r.status === 403) { setForbidden(true); return; }
       if (!r.ok) throw new Error('bad');
-      setData(await r.json()); setErr(false); setUpdated(new Date());
+      setData(await r.json()); setErr(false); setForbidden(false); setUpdated(new Date());
     } catch { setErr(true); }
-  }, []);
+  }, [key]);
   useEffect(() => { load(); const t = setInterval(load, REFRESH_MS); return () => clearInterval(t); }, [load]);
-  return { data, err, updated };
+  return { data, err, forbidden, updated };
 }
 
 const fmt = (n) => (n ?? 0).toLocaleString();
@@ -97,8 +100,15 @@ function SlaPanel({ sla }) {
 }
 
 export default function WarehouseBoard() {
-  const { data, err, updated } = useBoard();
+  const { data, err, forbidden, updated } = useBoard();
   const d = data || {};
+
+  if (forbidden) return (
+    <div style={{ minHeight: '100vh', background: C.bg, color: C.mute, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontFamily: 'system-ui' }}>
+      This board needs a valid access key in the URL.
+    </div>
+  );
+
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, padding: '28px 34px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -112,11 +122,13 @@ export default function WarehouseBoard() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gridAutoRows: 'minmax(150px, auto)', gap: 16 }}>
-        <Tile label="Orders done" value={fmt(d.orders_done)} color={C.green} sub="dispatched today" />
-        <Tile label="In picking" value={fmt(d.in_picking)} color={C.cyan} sub="active picks" />
-        <Tile label="In packing" value={fmt(d.in_packing)} color={C.purple} sub="awaiting dispatch" />
-        <SlaPanel sla={d.sla} />
+        {/* Flow stages */}
+        <Tile label="Dispatch ready" value={fmt(d.dispatch_ready)} color={C.green} sub="ready for courier" />
+        <Tile label="In picking" value={fmt(d.in_picking)} color={C.cyan} sub="being picked" />
+        <Tile label="In packing" value={fmt(d.in_packing)} color={d.packing_stuck ? C.amber : C.purple} sub={d.packing_stuck ? '⚠ still packing after 3pm' : 'scanned, being packed'} />
+        <Tile label="Orders done" value={fmt(d.orders_done)} color={C.blue} sub="dispatched today" />
 
+        <SlaPanel sla={d.sla} />
         <Tile label="Parcels sent" value={fmt(d.parcels_sent)} color={C.blue} sub="today" />
         <Tile label="Items sent" value={fmt(d.items_sent)} color={C.pink} sub="today" />
 

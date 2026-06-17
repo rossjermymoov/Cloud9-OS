@@ -17,6 +17,16 @@ import { holidaySet } from '../services/bankHolidayService.js';
 
 const router = express.Router();
 
+// Optional URL key — set WAREHOUSE_KEY in Railway to lock the board to
+// /warehouse?key=<value>. If unset, the board stays open (logs a warning).
+const BOARD_KEY = process.env.WAREHOUSE_KEY || null;
+if (!BOARD_KEY) console.warn('⚠️  WAREHOUSE_KEY not set — the warehouse board is open to anyone with the URL.');
+
+// Helm order status_id groups (from the 3.6 spec).
+const ST_PICKING       = [4, 2990];            // Picking, Partially Picked
+const ST_PACKING       = [8, 10];              // Packing, Picked (scanned, awaiting dispatch)
+const ST_DISPATCH_READY = [3, 2700, 82, 2711]; // Despatch Ready, Despatch Pending, Printed, Sorted
+
 // Start-of-today in Europe/London as a timestamptz instant.
 const LONDON_MIDNIGHT = `(date_trunc('day', now() AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London')`;
 
@@ -27,16 +37,16 @@ function nowLondonMins() {
   return (parseInt(o.hour) % 24) * 60 + parseInt(o.minute);
 }
 
-router.get('/board', async (_req, res, next) => {
+router.get('/board', async (req, res, next) => {
   try {
-    const [done, picking, packing, vol, couriers, ordersDue] = await Promise.all([
+    if (BOARD_KEY && req.query.key !== BOARD_KEY) return res.status(403).json({ error: 'Forbidden — invalid board key' });
+
+    const pipelineSql = (ids) => `SELECT COUNT(*)::int AS n FROM orders WHERE status_id = ANY($1) AND dispatched_at IS NULL`;
+    const [done, picking, packing, dispatchReady, vol, couriers, ordersDue] = await Promise.all([
       query(`SELECT COUNT(*)::int AS n FROM orders WHERE dispatched_at >= ${LONDON_MIDNIGHT}`),
-      // In picking = picks not finished (OPEN/INPROGRESS/IDLE).
-      query(`SELECT COUNT(*)::int AS n FROM picks WHERE status IN (0,3,4)`),
-      // Awaiting dispatch (pack queue) = received, not dispatched, not cancelled.
-      query(`SELECT COUNT(*)::int AS n FROM orders
-              WHERE dispatched_at IS NULL AND received_at >= now() - interval '3 days'
-                AND (status_label IS NULL OR status_label NOT ILIKE '%cancel%')`),
+      query(pipelineSql(), [ST_PICKING]),
+      query(pipelineSql(), [ST_PACKING]),
+      query(pipelineSql(), [ST_DISPATCH_READY]),
       query(`SELECT COALESCE(SUM(parcel_count),0)::int AS parcels, COALESCE(SUM(item_count),0)::int AS items
               FROM customer_volume_snapshots WHERE snapshot_date = (now() AT TIME ZONE 'Europe/London')::date`),
       query(`SELECT COALESCE(courier_name,'Unknown') AS courier, COUNT(*)::int AS parcels
@@ -62,11 +72,17 @@ router.get('/board', async (_req, res, next) => {
     }
     urgent.sort((a, b) => a.mins_left - b.mins_left);
 
+    // Packing should be empty by end of day — flag amber if anything is still
+    // in packing after 15:00 (it's been scanned but not dispatched = stuck).
+    const packingStuck = packing.rows[0].n > 0 && nowM >= 15 * 60;
+
     res.json({
       generated_at: new Date().toISOString(),
       orders_done: done.rows[0].n,
       in_picking: picking.rows[0].n,
       in_packing: packing.rows[0].n,
+      packing_stuck: packingStuck,
+      dispatch_ready: dispatchReady.rows[0].n,
       parcels_sent: vol.rows[0].parcels,
       items_sent: vol.rows[0].items,
       couriers: couriers.rows,

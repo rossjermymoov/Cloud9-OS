@@ -12,7 +12,7 @@
  */
 
 import { query } from '../db/index.js';
-import { helmConfigured, fetchOrdersForClient } from './helmClient.js';
+import { helmConfigured, fetchOrdersForClient, fetchOrdersUpdatedRange } from './helmClient.js';
 import { pickParcelCount } from './volumeService.js';
 import { holidaySet, isWorkingDay, firstWorkingAfter } from './bankHolidayService.js';
 
@@ -136,6 +136,58 @@ export async function syncRecentOrders(days = 14) {
   } catch (err) {
     const msg = `${err.message} (stored ${stored})`;
     if (logId) await query(`UPDATE helm_sync_log SET status='error', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [stored, msg, logId]).catch(() => {});
+    return { stored, error: err.message };
+  }
+}
+
+/**
+ * Lightweight, frequent sync of order STATUS across all clients (for the live
+ * warehouse pipeline: Picking / Packing / Despatch Ready). Pulls orders updated
+ * in the last `days` (any status) and upserts status_id + timestamps, attributing
+ * via fulfilment_client_id. No per-client loop, no snapshot recompute.
+ */
+export async function syncOrderStatuses(days = 1) {
+  if (!helmConfigured()) return { error: 'Helm not configured' };
+  const to = new Date(), from = new Date(Date.now() - days * 86400000);
+  const cm = await query(`SELECT id, helm_customer_id FROM customers WHERE helm_customer_id IS NOT NULL`);
+  const byClient = new Map(cm.rows.map(r => [String(r.helm_customer_id), r.id]));
+
+  let stored = 0;
+  try {
+    const orders = await fetchOrdersUpdatedRange({ from, to });
+    for (const raw of orders) {
+      const o = raw.order || raw;
+      const helmOrderId = o.id != null ? String(o.id) : null;
+      if (!helmOrderId) continue;
+      const clientId = o.fulfilment_client_id != null ? String(o.fulfilment_client_id) : null;
+      const customerId = clientId ? (byClient.get(clientId) || null) : null;
+      const statusId = o.status_id != null ? parseInt(o.status_id) : null;
+      const received = cleanDate(o.date_received ?? o.created_at);
+      const dispatched = cleanDate(o.date_dispatched);
+      const parcels = pickParcelCount(o) || 0;
+      const items = parseInt(o.total_inventory_quantity ?? o.item_quantity ?? o.items) || 0;
+      await query(`
+        INSERT INTO orders
+          (helm_order_id, channel_order_id, customer_id, helm_client_id, status_id, status_label,
+           item_count, parcel_count, received_at, dispatched_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        ON CONFLICT (helm_order_id) DO UPDATE SET
+          customer_id   = COALESCE(EXCLUDED.customer_id, orders.customer_id),
+          helm_client_id= COALESCE(EXCLUDED.helm_client_id, orders.helm_client_id),
+          status_id     = EXCLUDED.status_id,
+          status_label  = EXCLUDED.status_label,
+          item_count    = EXCLUDED.item_count,
+          parcel_count  = GREATEST(EXCLUDED.parcel_count, orders.parcel_count),
+          received_at   = COALESCE(EXCLUDED.received_at, orders.received_at),
+          dispatched_at = COALESCE(EXCLUDED.dispatched_at, orders.dispatched_at),
+          updated_at    = NOW()
+      `, [helmOrderId, o.channel_order_id || null, customerId, clientId, statusId,
+          o.status || o.status_label || null, items, parcels, received, dispatched]);
+      stored++;
+    }
+    return { stored };
+  } catch (err) {
+    console.warn('[order-status-sync]', err.message);
     return { stored, error: err.message };
   }
 }

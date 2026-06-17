@@ -21,7 +21,7 @@ import { voilaConfigured }  from './services/voilaClient.js';
 import pickingRouter        from './routes/picking.js';
 import { syncPicks }        from './services/pickingService.js';
 import slaRouter            from './routes/sla.js';
-import { syncRecentOrders } from './services/slaService.js';
+import { syncRecentOrders, syncOrderStatuses } from './services/slaService.js';
 import { syncBankHolidays } from './services/bankHolidayService.js';
 import authRouter, { requireAuth } from './routes/auth.js';
 import warehouseRouter      from './routes/warehouse.js';
@@ -107,6 +107,12 @@ async function start() {
     setTimeout(() => syncRecentOrders(14).catch(e => console.warn('[sla-sync]', e.message)), 120 * 1000);
     setInterval(() => syncRecentOrders(14).catch(e => console.warn('[sla-sync]', e.message)), 60 * 60 * 1000);
     console.log('⏱️  SLA order auto-sync scheduled hourly');
+
+    // Live warehouse pipeline: refresh order statuses (Picking/Packing/etc) every
+    // 5 minutes so the TV board reflects what's actually moving.
+    setTimeout(() => syncOrderStatuses(1).catch(e => console.warn('[status-sync]', e.message)), 30 * 1000);
+    setInterval(() => syncOrderStatuses(1).catch(e => console.warn('[status-sync]', e.message)), 5 * 60 * 1000);
+    console.log('🏭 Order-status auto-sync scheduled every 5 minutes');
   }
 
   // Clear "pending collection" to 0 every night at 20:00 UK — couriers have been
