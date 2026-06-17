@@ -75,7 +75,7 @@ router.get('/board', async (req, res, next) => {
       // All recent orders (dispatched or not) so we can judge "due today" with
       // the working-day rollover and split done vs outstanding. Parked statuses
       // (Draft/Service/Replenishment/Supervisor/Beddoes Review) are excluded.
-      query(`SELECT o.received_at, o.dispatched_at, c.business_name, c.cutoff_time::text AS cutoff
+      query(`SELECT o.received_at, o.dispatched_at, o.status_id, o.status_label, c.business_name, c.cutoff_time::text AS cutoff
               FROM orders o JOIN customers c ON c.id = o.customer_id
               WHERE o.received_at >= now() - interval '8 days'
                 AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')
@@ -89,7 +89,8 @@ router.get('/board', async (req, res, next) => {
     const today = todayLondonYmd();
     const nowM = nowLondonMins();
     const buckets = { green: 0, amber: 0, red: 0, breached: 0 };
-    const urgent = [];
+    const byStatus = {};      // which statuses the outstanding orders sit in
+    const byCustomer = {};    // distinct impacted customers
     let dispatched = 0;
     for (const o of orders.rows) {
       if (dueDateFor(o.received_at, o.cutoff, hs) !== today) continue;   // only today's commitments
@@ -97,10 +98,14 @@ router.get('/board', async (req, res, next) => {
       const left = cutoffMins(o.cutoff) - nowM;                          // minutes to this customer's cutoff
       const st = left <= 0 ? 'breached' : left < 60 ? 'red' : left < 120 ? 'amber' : 'green';
       buckets[st]++;
-      if (st !== 'green') urgent.push({ customer: o.business_name, mins_left: left, status: st });
+      const sLabel = o.status_label || (o.status_id != null ? `Status ${o.status_id}` : 'No status');
+      byStatus[sLabel] = (byStatus[sLabel] || 0) + 1;
+      const cust = o.business_name || 'Unattributed';
+      byCustomer[cust] = (byCustomer[cust] || 0) + 1;
     }
-    urgent.sort((a, b) => a.mins_left - b.mins_left);
     const outstanding = buckets.green + buckets.amber + buckets.red + buckets.breached;
+    const by_status = Object.entries(byStatus).map(([label, n]) => ({ label, n })).sort((a, b) => b.n - a.n);
+    const impacted_customers = Object.entries(byCustomer).map(([customer, n]) => ({ customer, n })).sort((a, b) => b.n - a.n);
 
     // Packing should clear by end of day — amber if anything still packing after 3pm.
     const packingStuck = packing.rows[0].n > 0 && nowM >= 15 * 60;
@@ -117,7 +122,7 @@ router.get('/board', async (req, res, next) => {
       parcels_sent: vol.rows[0].parcels,
       items_sent: vol.rows[0].items,
       couriers: couriers.rows,
-      sla: { ...buckets, urgent: urgent.slice(0, 14) },
+      sla: { ...buckets, outstanding, by_status, impacted_customers },
     });
   } catch (err) { next(err); }
 });

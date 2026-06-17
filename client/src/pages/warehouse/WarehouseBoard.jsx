@@ -73,15 +73,31 @@ function CourierBars({ couriers, span = 2 }) {
   );
 }
 
+function MiniList({ title, rows, keyName }) {
+  return (
+    <div style={{ flex: 1, minWidth: 150 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>{title}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        {(rows || []).slice(0, 7).map((r, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: C.panel2, borderRadius: 9 }}>
+            <div style={{ flex: 1, fontSize: 17, fontWeight: 600, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r[keyName] || '—'}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: C.text }}>{r.n}</div>
+          </div>
+        ))}
+        {(!rows || rows.length === 0) && <div style={{ color: C.mute, fontSize: 15, padding: '6px 0' }}>—</div>}
+      </div>
+    </div>
+  );
+}
+
 function SlaPanel({ sla, colSpan = 2, rowSpan = 2, statCols = 4 }) {
-  const s = sla || { green: 0, amber: 0, red: 0, breached: 0, urgent: [] };
+  const s = sla || { green: 0, amber: 0, red: 0, breached: 0, outstanding: 0, by_status: [], impacted_customers: [] };
   const cells = [
     { k: 'On track', v: s.green, c: C.green },
     { k: '< 2 hrs', v: s.amber, c: C.amber },
     { k: '< 1 hr', v: s.red, c: C.red },
     { k: 'Breached', v: s.breached, c: '#B91C1C' },
   ];
-  const fmtLeft = (m) => m <= 0 ? 'OVERDUE' : m < 60 ? `${m}m left` : `${Math.floor(m / 60)}h ${m % 60}m left`;
   return (
     <div style={{ background: C.panel, borderRadius: 18, padding: 22, border: `1px solid ${C.line}`, gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column' }}>
       <div style={{ fontSize: 16, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 16 }}>Should ship today · cutoff watch</div>
@@ -93,19 +109,12 @@ function SlaPanel({ sla, colSpan = 2, rowSpan = 2, statCols = 4 }) {
           </div>
         ))}
       </div>
-      <div style={{ fontSize: 13, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 }}>Most urgent</div>
-      <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {(s.urgent || []).slice(0, 8).map((u, i) => {
-          const col = u.status === 'breached' ? '#B91C1C' : u.status === 'red' ? C.red : C.amber;
-          return (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', background: C.panel2, borderRadius: 10, borderLeft: `5px solid ${col}` }}>
-              <div style={{ flex: 1, fontSize: 20, fontWeight: 700, color: C.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.customer || 'Unattributed'}</div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: col }}>{fmtLeft(u.mins_left)}</div>
-            </div>
-          );
-        })}
-        {(!s.urgent || s.urgent.length === 0) && <div style={{ color: C.green, fontSize: 22, fontWeight: 700, padding: '14px 0' }}>✓ Everything on track</div>}
-      </div>
+      {(s.outstanding > 0)
+        ? <div style={{ flex: 1, display: 'flex', gap: 22, flexWrap: 'wrap' }}>
+            <MiniList title="By status" rows={s.by_status} keyName="label" />
+            <MiniList title="Impacted customers" rows={s.impacted_customers} keyName="customer" />
+          </div>
+        : <div style={{ color: C.green, fontSize: 22, fontWeight: 700, padding: '14px 0' }}>✓ Everything on track</div>}
     </div>
   );
 }
