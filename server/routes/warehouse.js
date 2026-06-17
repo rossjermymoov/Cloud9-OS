@@ -71,15 +71,27 @@ router.get('/board', async (req, res, next) => {
   try {
     if (BOARD_KEY && req.query.key !== BOARD_KEY) return res.status(403).json({ error: 'Forbidden — invalid board key' });
 
+    const TODAY_LON = `(now() AT TIME ZONE 'Europe/London')::date`;
     const pipe = (ids) => query(`SELECT COUNT(*)::int AS n FROM orders WHERE status_id = ANY($1) AND dispatched_at IS NULL`, [ids]);
-    const [picking, packing, dispatchReady, vol, couriers, orders] = await Promise.all([
+    const [picking, packing, dispatchReady, vol, couriers, topCustomers, topPickers, orders] = await Promise.all([
       pipe(ST_PICKING),
       pipe(ST_PACKING),
       pipe(ST_DISPATCH_READY),
       query(`SELECT COALESCE(SUM(parcel_count),0)::int AS parcels, COALESCE(SUM(item_count),0)::int AS items
-              FROM customer_volume_snapshots WHERE snapshot_date = (now() AT TIME ZONE 'Europe/London')::date`),
+              FROM customer_volume_snapshots WHERE snapshot_date = ${TODAY_LON}`),
       query(`SELECT COALESCE(courier_name,'Unknown') AS courier, COUNT(*)::int AS parcels
               FROM parcels WHERE created_at >= ${LONDON_MIDNIGHT} GROUP BY courier_name ORDER BY parcels DESC LIMIT 8`),
+      // Top customers by today's despatch volume.
+      query(`SELECT c.business_name AS name, SUM(s.parcel_count)::int AS parcels, SUM(s.item_count)::int AS items
+              FROM customer_volume_snapshots s JOIN customers c ON c.id = s.customer_id
+              WHERE s.snapshot_date = ${TODAY_LON} AND s.parcel_count > 0
+              GROUP BY c.business_name ORDER BY parcels DESC LIMIT 6`),
+      // Top pickers today (from per-person contributions).
+      query(`SELECT MAX(picker_name) AS name, SUM(items)::int AS items,
+                    COALESCE(SUM(handling_ms),0)::bigint AS total_ms,
+                    COALESCE(SUM(items) FILTER (WHERE handling_ms > 0),0)::int AS timed_items
+              FROM pick_contributions WHERE pick_date = ${TODAY_LON}
+              GROUP BY user_id ORDER BY items DESC LIMIT 6`),
       // All recent orders (dispatched or not) so we can judge "due today" with
       // the working-day rollover and split done vs outstanding. Parked statuses
       // (Draft/Service/Replenishment/Supervisor/Beddoes Review) are excluded.
@@ -130,6 +142,11 @@ router.get('/board', async (req, res, next) => {
       parcels_sent: vol.rows[0].parcels,
       items_sent: vol.rows[0].items,
       couriers: couriers.rows,
+      top_customers: topCustomers.rows,
+      top_pickers: topPickers.rows.map(p => {
+        const hours = Number(p.total_ms) / 3600000;
+        return { name: p.name, items: p.items, items_per_hour: hours > 0 ? Math.round(p.timed_items / hours) : null };
+      }),
       sla: { ...buckets, outstanding, by_status, impacted_customers },
     });
   } catch (err) { next(err); }
