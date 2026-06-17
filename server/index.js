@@ -24,6 +24,7 @@ import slaRouter            from './routes/sla.js';
 import { syncRecentOrders } from './services/slaService.js';
 import { syncBankHolidays } from './services/bankHolidayService.js';
 import authRouter, { requireAuth } from './routes/auth.js';
+import warehouseRouter      from './routes/warehouse.js';
 
 dotenv.config();
 
@@ -47,6 +48,7 @@ app.use(morgan(isProd ? 'combined' : 'dev'));
 // first-run setup, when no users exist yet).
 app.use('/api/auth',          authRouter);
 app.use('/api/v1/webhooks',   webhooksRouter);
+app.use('/api/warehouse',     warehouseRouter);   // public, read-only TV board
 
 app.use('/api/customers',     requireAuth, customersRouter);
 app.use('/api/tracking',      requireAuth, trackingRouter);

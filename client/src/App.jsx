@@ -11,10 +11,21 @@ import OnTimePage from './pages/sla/OnTimePage';
 import ReturnsPage from './pages/returns/ReturnsPage';
 import NotificationCenter from './pages/notifications/NotificationCenter';
 import UsersPage from './pages/users/UsersPage';
+import WarehouseBoard from './pages/warehouse/WarehouseBoard';
 import { LoginScreen, SetupScreen, AuthLoading } from './pages/auth/AuthScreens';
 import Placeholder from './pages/Placeholder';
 
+// Public, login-free TV board lives outside the auth gate and the app shell.
 function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/warehouse" element={<WarehouseBoard />} />
+      <Route path="/*" element={<GatedApp />} />
+    </Routes>
+  );
+}
+
+function GatedApp() {
   const { user, needsSetup, loading } = useAuth();
   if (loading) return <AuthLoading />;
   if (needsSetup) return <SetupScreen />;
