@@ -441,7 +441,10 @@ export default function CustomerRecord() {
   const c = data.customer;
 
   return (
-    <div style={{ width: '100%', maxWidth: 1280 }}>
+    // Full-width, edge-to-edge — matches the dashboard. The AppShell scroll
+    // container already supplies the fluid 24px horizontal padding (≈ px-6),
+    // so no max-width cap or auto-centering here.
+    <div style={{ width: '100%', maxWidth: 'none' }}>
       <button onClick={() => navigate('/customers')} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', color: MUTED, fontSize: 13, cursor: 'pointer', marginBottom: 14, padding: 0 }}>
         <ArrowLeft size={15} /> Customers
       </button>

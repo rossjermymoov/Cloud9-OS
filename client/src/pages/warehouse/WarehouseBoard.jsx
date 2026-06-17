@@ -130,7 +130,9 @@ export default function WarehouseBoard() {
   );
 
   return (
-    <div style={{ minHeight: '100vh', background: C.bg, color: C.text, padding: phone ? '16px 14px' : '28px 34px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
+    // Own full-viewport scroll container — the global `body { overflow:hidden }`
+    // (for the app shell) would otherwise stop this public page scrolling on a phone.
+    <div style={{ position: 'fixed', inset: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch', background: C.bg, color: C.text, padding: phone ? '16px 14px' : '28px 34px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: phone ? 16 : 24, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: phone ? 36 : 44, height: phone ? 36 : 44, borderRadius: 12, background: 'linear-gradient(135deg,#00BCD4,#7B2FBE)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: phone ? 15 : 18 }}>C9</div>
