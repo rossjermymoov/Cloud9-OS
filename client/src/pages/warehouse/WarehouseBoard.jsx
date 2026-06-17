@@ -29,22 +29,33 @@ function useBoard() {
 
 const fmt = (n) => (n ?? 0).toLocaleString();
 
-function Tile({ label, value, color, sub }) {
+// Track viewport width so the board reflows for tablet / phone.
+function useViewport() {
+  const [w, setW] = useState(typeof window !== 'undefined' ? window.innerWidth : 1280);
+  useEffect(() => {
+    const f = () => setW(window.innerWidth);
+    window.addEventListener('resize', f);
+    return () => window.removeEventListener('resize', f);
+  }, []);
+  return w;
+}
+
+function Tile({ label, value, color, sub, vFont = 76 }) {
   return (
-    <div style={{ background: C.panel, borderRadius: 18, padding: '26px 28px', border: `1px solid ${C.line}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1.2 }}>{label}</div>
-      <div style={{ fontSize: 76, fontWeight: 900, color, lineHeight: 1, letterSpacing: -2, marginTop: 12 }}>{value}</div>
-      {sub && <div style={{ fontSize: 15, color: C.mute, marginTop: 8 }}>{sub}</div>}
+    <div style={{ background: C.panel, borderRadius: 18, padding: vFont < 56 ? '18px 20px' : '26px 28px', border: `1px solid ${C.line}`, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+      <div style={{ fontSize: vFont < 56 ? 13 : 16, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1.2 }}>{label}</div>
+      <div style={{ fontSize: vFont, fontWeight: 900, color, lineHeight: 1, letterSpacing: -2, marginTop: 10 }}>{value}</div>
+      {sub && <div style={{ fontSize: vFont < 56 ? 13 : 15, color: C.mute, marginTop: 7 }}>{sub}</div>}
     </div>
   );
 }
 
-function CourierBars({ couriers }) {
+function CourierBars({ couriers, span = 2 }) {
   const rows = couriers || [];
   const max = Math.max(...rows.map(r => r.parcels), 1);
   const pretty = (c) => ({ royal_mail: 'Royal Mail', dpd: 'DPD', dhl: 'DHL', evri: 'Evri', ups: 'UPS', fedex: 'FedEx' }[String(c).toLowerCase()] || c);
   return (
-    <div style={{ background: C.panel, borderRadius: 18, padding: 26, border: `1px solid ${C.line}`, gridColumn: 'span 2' }}>
+    <div style={{ background: C.panel, borderRadius: 18, padding: 22, border: `1px solid ${C.line}`, gridColumn: `span ${span}` }}>
       <div style={{ fontSize: 16, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 18 }}>Couriers today</div>
       {rows.length === 0 && <div style={{ color: C.mute, fontSize: 18, padding: '20px 0' }}>No parcels booked yet today.</div>}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -62,7 +73,7 @@ function CourierBars({ couriers }) {
   );
 }
 
-function SlaPanel({ sla }) {
+function SlaPanel({ sla, colSpan = 2, rowSpan = 2, statCols = 4 }) {
   const s = sla || { green: 0, amber: 0, red: 0, breached: 0, urgent: [] };
   const cells = [
     { k: 'On track', v: s.green, c: C.green },
@@ -72,9 +83,9 @@ function SlaPanel({ sla }) {
   ];
   const fmtLeft = (m) => m <= 0 ? 'OVERDUE' : m < 60 ? `${m}m left` : `${Math.floor(m / 60)}h ${m % 60}m left`;
   return (
-    <div style={{ background: C.panel, borderRadius: 18, padding: 26, border: `1px solid ${C.line}`, gridColumn: 'span 2', gridRow: 'span 2', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 18 }}>Cutoff watch · due today</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
+    <div style={{ background: C.panel, borderRadius: 18, padding: 22, border: `1px solid ${C.line}`, gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: C.mute, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 16 }}>Cutoff watch · due today</div>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${statCols},1fr)`, gap: 10, marginBottom: 18 }}>
         {cells.map(c => (
           <div key={c.k} style={{ background: C.panel2, borderRadius: 14, padding: '16px 10px', textAlign: 'center', border: `1px solid ${c.v ? c.c : C.line}` }}>
             <div style={{ fontSize: 52, fontWeight: 900, color: c.v ? c.c : C.mute, lineHeight: 1 }}>{c.v}</div>
@@ -101,38 +112,47 @@ function SlaPanel({ sla }) {
 
 export default function WarehouseBoard() {
   const { data, err, forbidden, updated } = useBoard();
+  const w = useViewport();
   const d = data || {};
 
+  // Responsive sizing: 4-col TV → 2-col tablet → 1-col phone.
+  const cols = w < 640 ? 1 : w < 1024 ? 2 : 4;
+  const phone = w < 640;
+  const vFont = w < 640 ? 46 : w < 1024 ? 58 : 76;
+  const span2 = Math.min(2, cols);                 // wide blocks span 2, or 1 on phone
+  const slaRowSpan = cols === 4 ? 2 : 1;
+  const statCols = cols === 1 ? 2 : 4;             // SLA stat cells: 2×2 on phone
+
   if (forbidden) return (
-    <div style={{ minHeight: '100vh', background: C.bg, color: C.mute, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontFamily: 'system-ui' }}>
+    <div style={{ minHeight: '100vh', background: C.bg, color: C.mute, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, padding: 24, textAlign: 'center', fontFamily: 'system-ui' }}>
       This board needs a valid access key in the URL.
     </div>
   );
 
   return (
-    <div style={{ minHeight: '100vh', background: C.bg, color: C.text, padding: '28px 34px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={{ width: 44, height: 44, borderRadius: 12, background: 'linear-gradient(135deg,#00BCD4,#7B2FBE)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: 18 }}>C9</div>
-          <div style={{ fontSize: 30, fontWeight: 900, letterSpacing: -0.5 }}>Warehouse — Live</div>
+    <div style={{ minHeight: '100vh', background: C.bg, color: C.text, padding: phone ? '16px 14px' : '28px 34px', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: phone ? 16 : 24, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ width: phone ? 36 : 44, height: phone ? 36 : 44, borderRadius: 12, background: 'linear-gradient(135deg,#00BCD4,#7B2FBE)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: phone ? 15 : 18 }}>C9</div>
+          <div style={{ fontSize: phone ? 22 : 30, fontWeight: 900, letterSpacing: -0.5 }}>Warehouse — Live</div>
         </div>
-        <div style={{ fontSize: 15, color: err ? C.red : C.mute, fontWeight: 600 }}>
-          {err ? '⚠ Reconnecting…' : updated ? `Updated ${updated.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} · refreshes every 20s` : 'Loading…'}
+        <div style={{ fontSize: phone ? 12 : 15, color: err ? C.red : C.mute, fontWeight: 600 }}>
+          {err ? '⚠ Reconnecting…' : updated ? `Updated ${updated.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} · every 20s` : 'Loading…'}
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gridAutoRows: 'minmax(150px, auto)', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: 'minmax(120px, auto)', gap: phone ? 12 : 16 }}>
         {/* Flow stages */}
-        <Tile label="Dispatch ready" value={fmt(d.dispatch_ready)} color={C.green} sub="ready for courier" />
-        <Tile label="In picking" value={fmt(d.in_picking)} color={C.cyan} sub="being picked" />
-        <Tile label="In packing" value={fmt(d.in_packing)} color={d.packing_stuck ? C.amber : C.purple} sub={d.packing_stuck ? '⚠ still packing after 3pm' : 'scanned, being packed'} />
-        <Tile label="Orders done" value={fmt(d.orders_done)} color={C.blue} sub="dispatched today" />
+        <Tile label="Dispatch ready" value={fmt(d.dispatch_ready)} color={C.green} sub="ready for courier" vFont={vFont} />
+        <Tile label="In picking" value={fmt(d.in_picking)} color={C.cyan} sub="being picked" vFont={vFont} />
+        <Tile label="In packing" value={fmt(d.in_packing)} color={d.packing_stuck ? C.amber : C.purple} sub={d.packing_stuck ? '⚠ still packing after 3pm' : 'scanned, being packed'} vFont={vFont} />
+        <Tile label="Orders done" value={fmt(d.orders_done)} color={C.blue} sub="dispatched today" vFont={vFont} />
 
-        <SlaPanel sla={d.sla} />
-        <Tile label="Parcels sent" value={fmt(d.parcels_sent)} color={C.blue} sub="today" />
-        <Tile label="Items sent" value={fmt(d.items_sent)} color={C.pink} sub="today" />
+        <SlaPanel sla={d.sla} colSpan={span2} rowSpan={slaRowSpan} statCols={statCols} />
+        <Tile label="Parcels sent" value={fmt(d.parcels_sent)} color={C.blue} sub="today" vFont={vFont} />
+        <Tile label="Items sent" value={fmt(d.items_sent)} color={C.pink} sub="today" vFont={vFont} />
 
-        <CourierBars couriers={d.couriers} />
+        <CourierBars couriers={d.couriers} span={span2} />
       </div>
     </div>
   );
