@@ -28,6 +28,10 @@ const ST_PICKING       = [4, 2990];            // Picking, Partially Picked
 const ST_PACKING       = [8, 10];              // Packing, Picked (scanned, awaiting dispatch)
 const ST_DISPATCH_READY = [3, 2700, 82, 2711]; // Despatch Ready, Despatch Pending, Printed, Sorted
 
+// Parked / non-actionable statuses to EXCLUDE from "should ship today" + breaches.
+//   1 Draft · 3002 Service · 3010 Replenishment Needed · 3015 Supervisor · 3019 Beddoes Review
+const ST_IGNORE = [1, 3002, 3010, 3015, 3019];
+
 // Start-of-today in Europe/London as a timestamptz instant.
 const LONDON_MIDNIGHT = `(date_trunc('day', now() AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London')`;
 
@@ -69,11 +73,13 @@ router.get('/board', async (req, res, next) => {
       query(`SELECT COALESCE(courier_name,'Unknown') AS courier, COUNT(*)::int AS parcels
               FROM parcels WHERE created_at >= ${LONDON_MIDNIGHT} GROUP BY courier_name ORDER BY parcels DESC LIMIT 8`),
       // All recent orders (dispatched or not) so we can judge "due today" with
-      // the working-day rollover and split done vs outstanding.
+      // the working-day rollover and split done vs outstanding. Parked statuses
+      // (Draft/Service/Replenishment/Supervisor/Beddoes Review) are excluded.
       query(`SELECT o.received_at, o.dispatched_at, c.business_name, c.cutoff_time::text AS cutoff
               FROM orders o JOIN customers c ON c.id = o.customer_id
               WHERE o.received_at >= now() - interval '8 days'
-                AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')`),
+                AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')
+                AND (o.status_id IS NULL OR o.status_id <> ALL($1))`, [ST_IGNORE]),
     ]);
 
     // The board's core question: of orders that SHOULD ship today (received before
