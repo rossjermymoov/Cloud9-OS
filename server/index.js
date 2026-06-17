@@ -25,6 +25,10 @@ import { syncRecentOrders, syncOrderStatuses } from './services/slaService.js';
 import { syncBankHolidays } from './services/bankHolidayService.js';
 import authRouter, { requireAuth } from './routes/auth.js';
 import warehouseRouter      from './routes/warehouse.js';
+import queriesRouter        from './routes/queries.js';
+import emailRouter          from './routes/email.js';
+import gmailRouter          from './routes/gmail.js';
+import slaRulesRouter       from './routes/slaRules.js';
 
 dotenv.config();
 
@@ -60,6 +64,13 @@ app.use('/api/returns',         requireAuth, returnsRouter);
 app.use('/api/voila',           requireAuth, voilaRouter);
 app.use('/api/picking',         requireAuth, pickingRouter);
 app.use('/api/sla',             requireAuth, slaRouter);
+
+// Queries & Claims module (ported from Moov OS). slaRules mounts at /api/sla-rules
+// to avoid clashing with Cloud9's dispatch SLA above.
+app.use('/api/queries',         requireAuth, queriesRouter);
+app.use('/api/email',           requireAuth, emailRouter);
+app.use('/api/gmail',           requireAuth, gmailRouter);
+app.use('/api/sla-rules',       requireAuth, slaRulesRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'cloud9-os' }));
 
