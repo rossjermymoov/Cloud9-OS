@@ -15,8 +15,15 @@ import {
 import axios from 'axios';
 import { startOfDay, endOfDay, startOfMonth, subDays, format } from 'date-fns';
 import { getCourierLogo } from '../../utils/courierLogos';
+import { getAuthToken } from '../../context/AuthContext';
 
 const api = axios.create({ baseURL: '/api' });
+// Attach the login token — tracking endpoints now require auth.
+api.interceptors.request.use((config) => {
+  const token = getAuthToken();
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
 
 // Small inline logo for table rows / drawer
 function CourierBadge({ name, code }) {
