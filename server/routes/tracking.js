@@ -15,6 +15,28 @@ import { normalisePayload, upsertEvent } from '../services/statusEngine.js';
 
 const router = express.Router();
 
+/**
+ * Clear "pending collection" — anything still showing as booked/awaiting
+ * collection is marked collected. Runs nightly (couriers have been by 8pm) so
+ * the pending count resets to 0; also exposed as a manual endpoint.
+ */
+export async function clearPendingCollection() {
+  const { rows } = await query(`
+    UPDATE parcels
+       SET status = 'collected', last_location = COALESCE(last_location, 'Collected'),
+           last_event_at = NOW(), updated_at = NOW()
+     WHERE status IN ('booked', 'awaiting_collection')
+     RETURNING id`);
+  console.log(`🌙 Pending collection cleared: ${rows.length} parcel(s) marked collected`);
+  return rows.length;
+}
+
+// POST /api/tracking/clear-pending — manual trigger for the nightly clear.
+router.post('/clear-pending', async (_req, res, next) => {
+  try { res.json({ ok: true, cleared: await clearPendingCollection() }); }
+  catch (err) { next(err); }
+});
+
 // ─── POST /api/tracking/webhook ──────────────────────────────────────────────
 router.post('/webhook', async (req, res, next) => {
   try {

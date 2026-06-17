@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 
 import { runMigrations } from './db/migrate.js';
 import customersRouter     from './routes/customers.js';
-import trackingRouter      from './routes/tracking.js';
+import trackingRouter, { clearPendingCollection } from './routes/tracking.js';
 import webhooksRouter      from './routes/webhooks.js';
 import notificationsRouter from './routes/notifications.js';
 import helmRouter, { syncPurchaseOrders } from './routes/helm.js';
@@ -105,6 +105,21 @@ async function start() {
     setTimeout(() => syncRecentOrders(14).catch(e => console.warn('[sla-sync]', e.message)), 120 * 1000);
     setInterval(() => syncRecentOrders(14).catch(e => console.warn('[sla-sync]', e.message)), 60 * 60 * 1000);
     console.log('⏱️  SLA order auto-sync scheduled hourly');
+  }
+
+  // Clear "pending collection" to 0 every night at 20:00 UK — couriers have been
+  // by then, so anything still awaiting collection is marked collected.
+  {
+    let lastClear = null;
+    setInterval(() => {
+      const uk = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/London' }));
+      const key = `${uk.getFullYear()}-${uk.getMonth()}-${uk.getDate()}`;
+      if (uk.getHours() === 20 && uk.getMinutes() === 0 && lastClear !== key) {
+        lastClear = key;
+        clearPendingCollection().catch(e => console.warn('[clear-pending]', e.message));
+      }
+    }, 60 * 1000);
+    console.log('🌙 Pending-collection clear scheduled for 20:00 UK');
   }
 
   // UK bank holidays — refresh on boot and weekly (independent of Helm).
