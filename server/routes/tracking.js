@@ -20,21 +20,29 @@ const router = express.Router();
  * collection is marked collected. Runs nightly (couriers have been by 8pm) so
  * the pending count resets to 0; also exposed as a manual endpoint.
  */
-export async function clearPendingCollection() {
+export async function clearPendingCollection({ staleOnly = false } = {}) {
+  // staleOnly = clear only what was booked BEFORE today (Europe/London), so the
+  // pending count reflects just today's bookings. Default clears everything.
+  const cond = staleOnly
+    ? `AND last_event_at < (date_trunc('day', now() AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London')`
+    : '';
   const { rows } = await query(`
     UPDATE parcels
        SET status = 'collected', last_location = COALESCE(last_location, 'Collected'),
            last_event_at = NOW(), updated_at = NOW()
-     WHERE status IN ('booked', 'awaiting_collection')
+     WHERE status IN ('booked', 'awaiting_collection') ${cond}
      RETURNING id`);
-  console.log(`🌙 Pending collection cleared: ${rows.length} parcel(s) marked collected`);
+  console.log(`🌙 Pending collection cleared${staleOnly ? ' (stale only)' : ''}: ${rows.length} parcel(s)`);
   return rows.length;
 }
 
-// POST /api/tracking/clear-pending — manual trigger for the nightly clear.
-router.post('/clear-pending', async (_req, res, next) => {
-  try { res.json({ ok: true, cleared: await clearPendingCollection() }); }
-  catch (err) { next(err); }
+// POST /api/tracking/clear-pending[?stale=1] — manual trigger.
+//   ?stale=1 → clear only pre-today bookings (leave today's pending).
+router.post('/clear-pending', async (req, res, next) => {
+  try {
+    const staleOnly = req.query.stale === '1' || req.query.stale === 'true';
+    res.json({ ok: true, staleOnly, cleared: await clearPendingCollection({ staleOnly }) });
+  } catch (err) { next(err); }
 });
 
 // ─── POST /api/tracking/webhook ──────────────────────────────────────────────
