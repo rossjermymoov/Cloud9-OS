@@ -21,16 +21,27 @@ const router = express.Router();
 // that dimensions are being read in the wrong unit.
 router.get('/debug', async (_req, res, next) => {
   try {
-    const top = await query(`
-      SELECT s.sku, s.name, s.location_name, s.qty,
-             s.unit_m3::float AS unit_m3, s.volume_m3::float AS volume_m3,
-             c.business_name AS customer
-      FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
-      WHERE s.has_dimensions
-      ORDER BY s.volume_m3 DESC LIMIT 20`);
+    const [top, coverage] = await Promise.all([
+      query(`
+        SELECT s.sku, s.name, s.location_name, s.qty,
+               s.unit_m3::float AS unit_m3, s.volume_m3::float AS volume_m3,
+               c.business_name AS customer
+        FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE s.has_dimensions
+        ORDER BY s.volume_m3 DESC LIMIT 20`),
+      query(`
+        SELECT COUNT(*)::int                                              AS total_lines,
+               COUNT(*) FILTER (WHERE has_dimensions)::int                AS with_dims,
+               COUNT(*) FILTER (WHERE NOT has_dimensions)::int            AS without_dims,
+               COALESCE(MAX(unit_m3),0)::float                            AS max_unit_m3,
+               COALESCE(SUM(volume_m3),0)::float                          AS total_m3,
+               COUNT(*) FILTER (WHERE unit_m3 > 1)::int                   AS lines_unit_over_1m3
+        FROM storage_lines`),
+    ]);
     res.json({
       dimensions: dimUnitInfo(),
-      note: 'unit_m3 is the volume of ONE unit. Ordinary stock should be well under 1 m³; values in the hundreds/thousands mean dimensions are being read as the wrong unit.',
+      note: 'Zero-dimension SKUs are excluded (has_dimensions=false, 0 m³) and only counted in without_dims. unit_m3 is the volume of ONE unit — ordinary stock should be well under 1 m³; hundreds/thousands means the wrong unit. lines_unit_over_1m3 should normally be 0.',
+      coverage: coverage.rows[0],
       biggest_lines: top.rows,
     });
   } catch (err) { next(err); }
