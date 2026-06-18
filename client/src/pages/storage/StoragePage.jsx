@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Warehouse, RefreshCw, Boxes, MapPin, Package } from 'lucide-react';
-import { storageSummary, storageByCustomer, storageByLocation, storageFreshness, triggerStorageSync } from '../../api/storage';
+import { Warehouse, RefreshCw, Boxes, MapPin, Package, Search } from 'lucide-react';
+import { storageSummary, storageByCustomer, storageByLocation, storageFreshness, triggerStorageSync, storageCustomerDebug } from '../../api/storage';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
 const SHADOW = '0 1px 2px rgba(16,24,40,0.06), 0 1px 3px rgba(16,24,40,0.10)';
@@ -67,6 +67,79 @@ function StorageMap({ rows, navigate }) {
         );
       })}
     </svg>
+  );
+}
+
+// Live inspector — pulls a customer's inventory from Helm and shows what builds
+// their m³ total (raw dims, stock, per-unit + total volume per SKU).
+function CustomerInspector() {
+  const [q, setQ] = useState('Ccell');
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  async function run() {
+    setLoading(true); setErr(null); setData(null);
+    try {
+      const d = await storageCustomerDebug(q.trim() || 'Ccell');
+      if (d.error) setErr(d.error); else setData(d);
+    } catch (e) { setErr(e?.response?.data?.error || e.message); }
+    finally { setLoading(false); }
+  }
+
+  const t = data?.totals;
+  return (
+    <Card style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 4 }}>Inspect a customer (live from Helm)</div>
+      <div style={{ fontSize: 12, color: '#94A3B8', marginBottom: 12 }}>See exactly which SKUs build a customer's total — raw dimensions, stock and volume.</div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && run()}
+          placeholder="Customer name e.g. Ccell"
+          style={{ flex: '0 0 260px', border: '1px solid #E2E8F0', borderRadius: 9, padding: '8px 11px', fontSize: 13, fontFamily: 'inherit', color: TITLE }} />
+        <button onClick={run} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: 'none', background: ACCENT, color: '#fff', cursor: loading ? 'default' : 'pointer', borderRadius: 9, padding: '8px 15px', fontSize: 13, fontWeight: 700, opacity: loading ? 0.6 : 1 }}>
+          <Search size={14} /> {loading ? 'Pulling…' : 'Inspect'}
+        </button>
+      </div>
+
+      {err && <div style={{ fontSize: 12.5, color: '#EF4444', padding: '6px 0' }}>{err}</div>}
+
+      {data && (
+        <>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, fontSize: 12.5, marginBottom: 12, padding: '10px 12px', background: '#F8FAFC', borderRadius: 9 }}>
+            <span><strong style={{ color: TITLE }}>{data.customer}</strong></span>
+            <span style={{ color: MUTED }}>Total: <strong style={{ color: ACCENT }}>{m3(t.total_m3)}</strong></span>
+            <span style={{ color: MUTED }}>SKUs: <strong style={{ color: TITLE }}>{t.sku_count}</strong></span>
+            <span style={{ color: MUTED }}>With dims: <strong style={{ color: '#10B981' }}>{t.with_dims}</strong></span>
+            <span style={{ color: MUTED }}>Zero dims: <strong style={{ color: t.zero_dims ? '#F59E0B' : MUTED }}>{t.zero_dims}</strong></span>
+            <span style={{ color: MUTED }}>Dropped (huge): <strong style={{ color: t.oversize_dropped ? '#EF4444' : MUTED }}>{t.oversize_dropped}</strong></span>
+            <span style={{ color: '#94A3B8' }}>Unit: {data.dimensions?.effective_unit} (÷{data.dimensions?.divisor.toLocaleString()})</span>
+          </div>
+          <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11, position: 'sticky', top: 0, background: '#fff' }}>
+                <th style={{ padding: '6px 6px' }}>SKU</th><th style={{ padding: '6px 6px' }}>Name</th>
+                <th style={{ padding: '6px 6px', textAlign: 'right' }}>L×W×H (cm)</th>
+                <th style={{ padding: '6px 6px', textAlign: 'right' }}>Units</th>
+                <th style={{ padding: '6px 6px', textAlign: 'right' }}>m³ / unit</th>
+                <th style={{ padding: '6px 6px', textAlign: 'right' }}>Total m³</th>
+              </tr></thead>
+              <tbody>
+                {data.top_skus.map((r, i) => (
+                  <tr key={i} style={{ borderTop: '1px solid rgba(0,0,0,0.05)', background: r.flag ? '#FEF2F2' : 'transparent' }}>
+                    <td style={{ padding: '7px 6px', fontWeight: 600, color: TITLE }}>{r.sku || '—'}</td>
+                    <td style={{ padding: '7px 6px', color: MUTED, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}{r.flag && <span style={{ color: '#EF4444', fontWeight: 700 }}> · {r.flag}</span>}</td>
+                    <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{r.L}×{r.W}×{r.H}</td>
+                    <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{(r.units ?? 0).toLocaleString()}</td>
+                    <td style={{ padding: '7px 6px', textAlign: 'right', color: r.unit_m3 == null ? '#CBD5E1' : MUTED }}>{r.unit_m3 == null ? '—' : r.unit_m3}</td>
+                    <td style={{ padding: '7px 6px', textAlign: 'right', fontWeight: 700, color: ACCENT }}>{(r.volume_m3 ?? 0).toFixed(3)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
 
@@ -170,6 +243,8 @@ export default function StoragePage() {
               </div>
             </Card>
           </div>
+
+          <CustomerInspector />
         </>
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
