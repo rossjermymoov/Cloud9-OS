@@ -110,7 +110,7 @@ function CustomerInspector() {
             <span style={{ color: MUTED }}>Total: <strong style={{ color: ACCENT }}>{m3(t.total_m3)}</strong></span>
             <span style={{ color: MUTED }}>SKUs: <strong style={{ color: TITLE }}>{t.sku_count}</strong></span>
             <span style={{ color: MUTED }}>Counted: <strong style={{ color: '#10B981' }}>{t.counted}</strong></span>
-            <span style={{ color: MUTED }}>Groups excluded: <strong style={{ color: t.groups_excluded ? '#F59E0B' : MUTED }}>{t.groups_excluded}</strong></span>
+            <span style={{ color: MUTED }}>Components/Groups excluded: <strong style={{ color: t.components_groups_excluded ? '#F59E0B' : MUTED }}>{t.components_groups_excluded}</strong></span>
             <span style={{ color: MUTED }}>Zero dims: <strong style={{ color: t.zero_dims ? '#F59E0B' : MUTED }}>{t.zero_dims}</strong></span>
             <span style={{ color: MUTED }}>Dropped (huge): <strong style={{ color: t.oversize_dropped ? '#EF4444' : MUTED }}>{t.oversize_dropped}</strong></span>
             <span style={{ color: '#94A3B8' }}>Unit: {data.dimensions?.effective_unit} (÷{data.dimensions?.divisor.toLocaleString()})</span>
@@ -135,7 +135,7 @@ function CustomerInspector() {
                   <tr key={i} style={{ borderTop: '1px solid rgba(0,0,0,0.05)', background: r.flag ? '#FEF2F2' : 'transparent' }}>
                     <td style={{ padding: '7px 6px', fontWeight: 600, color: TITLE }}>{r.sku || '—'}</td>
                     <td style={{ padding: '7px 6px', color: MUTED, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}{r.flag && <span style={{ color: '#EF4444', fontWeight: 700 }}> · {r.flag}</span>}</td>
-                    <td style={{ padding: '7px 6px', color: r.type === 'Group' ? '#F59E0B' : MUTED }}>{r.type}</td>
+                    <td style={{ padding: '7px 6px', color: (r.type === 'Group' || r.type === 'Component') ? '#F59E0B' : MUTED }}>{r.type}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{r.L}×{r.W}×{r.H}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{(r.units ?? 0).toLocaleString()}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', color: r.unit_m3 == null ? '#CBD5E1' : MUTED }}>{r.unit_m3 == null ? '—' : r.unit_m3}</td>

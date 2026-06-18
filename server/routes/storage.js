@@ -155,13 +155,13 @@ router.get('/customer-debug', async (req, res, next) => {
     const MAX_UNIT_M3 = 30;
     const TYPE_NAME = { 1: 'Inventory', 2: 'Component', 3: 'Group', 4: 'Packaging', 5: 'Auxiliary Packaging' };
 
-    let total_m3 = 0, with_dims = 0, zero_dims = 0, oversize_dropped = 0, groups_excluded = 0;
+    let total_m3 = 0, with_dims = 0, zero_dims = 0, oversize_dropped = 0, excluded_type = 0;
     const by_type = {};
     const rows = items.map(it => {
       const tnum = parseInt(it.type ?? it.product_type);
       const tname = TYPE_NAME[tnum] || (Number.isFinite(tnum) ? `Type ${tnum}` : 'Unknown');
       by_type[tname] = (by_type[tname] || 0) + 1;
-      const isGroup = tnum === 3;
+      const isExcludedType = tnum === 2 || tnum === 3;   // Component or Group
 
       const L = num(it.product_length), W = num(it.product_width), H = num(it.product_height);
       const locs = Array.isArray(it.locations) ? it.locations : [];
@@ -171,7 +171,7 @@ router.get('/customer-debug', async (req, res, next) => {
       const hasAll = L > 0 && W > 0 && H > 0;
       let unit_m3 = hasAll ? (L * W * H) / 1e6 : null;
       let flag = null, counted = false;
-      if (isGroup) { groups_excluded++; flag = 'Group — excluded (double-counts)'; }
+      if (isExcludedType) { excluded_type++; flag = `${tname} — excluded (double-counts)`; }
       else if (!hasAll) { zero_dims++; flag = 'zero/blank dimension'; }
       else if (unit_m3 > MAX_UNIT_M3) { oversize_dropped++; flag = 'implausible — dropped'; unit_m3 = null; }
       else { with_dims++; counted = true; }
@@ -185,14 +185,14 @@ router.get('/customer-debug', async (req, res, next) => {
       };
     });
 
-    // Surface counted SKUs first (by volume), then excluded rows so groups are visible.
+    // Surface counted SKUs first (by volume), then excluded rows so they're visible.
     rows.sort((a, b) => b.volume_m3 - a.volume_m3 || (a.flag ? 1 : 0) - (b.flag ? 1 : 0));
     res.json({
       customer: c.business_name, helm_client_id: c.helm_customer_id,
       dimensions: dimUnitInfo(),
-      totals: { total_m3: +total_m3.toFixed(2), sku_count: items.length, counted: with_dims, zero_dims, oversize_dropped, groups_excluded },
+      totals: { total_m3: +total_m3.toFixed(2), sku_count: items.length, counted: with_dims, zero_dims, oversize_dropped, components_groups_excluded: excluded_type },
       by_type,
-      note: 'Everything counts toward total_m3 except Groups (type 3), which would double-count their components. Inventory, Components and Packaging are all included. L/W/H are raw cm; unit_m3 = L·W·H ÷ 1,000,000; volume_m3 = units × unit_m3.',
+      note: 'total_m3 counts only Inventory (1) and Packaging (4/5). Components (2) and Groups (3) are shown but excluded — they would double-count the real stocked items. L/W/H are raw cm; unit_m3 = L·W·H ÷ 1,000,000; volume_m3 = units × unit_m3.',
       top_skus: rows.slice(0, 40),
     });
   } catch (err) { res.status(500).json({ error: err.message }); }

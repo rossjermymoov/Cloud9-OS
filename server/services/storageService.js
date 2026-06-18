@@ -49,17 +49,20 @@ export async function syncStorage({ pageDelayMs = 80 } = {}) {
     logId = lr.rows[0]?.id || null;
   } catch (e) { console.warn('[storage-sync] start row:', e.message); }
 
-  let lines = 0, skus = 0, noDims = 0, errors = 0, skippedGroups = 0, cloud9Skus = 0;
+  let lines = 0, skus = 0, noDims = 0, errors = 0, skippedNonStock = 0, cloud9Skus = 0;
   const seenIds = new Set();   // every inventory id touched, so the Cloud9 pass skips assigned stock
 
   // Write one storage line per stocked location for a single inventory item.
-  // Skips Groups (type 3) — virtual bundles whose stock is their components.
+  // Skips Components (type 2) and Groups (type 3): a Group is a virtual bundle of
+  // its components, and Components are the parts that make up a SKU — counting
+  // either alongside the real stocked Inventory/Packaging would double-count.
   async function writeItemLines(it, customerId, helmClientId, isCloud9 = false) {
     const invId = it.id != null ? String(it.id) : null;
     if (!invId) return;
     seenIds.add(invId);
     // type: 1=Inventory, 2=Component, 3=Group, 4=Packaging, 5=Aux Packaging.
-    if (parseInt(it.type ?? it.product_type) === 3) { skippedGroups++; return; }
+    const t = parseInt(it.type ?? it.product_type);
+    if (t === 2 || t === 3) { skippedNonStock++; return; }
     skus++; if (isCloud9) cloud9Skus++;
 
     const unitM3 = unitVolumeM3(it);
@@ -114,7 +117,7 @@ export async function syncStorage({ pageDelayMs = 80 } = {}) {
       }
     } catch (e) { errors++; console.warn(`[storage-sync] cloud9 pass: ${e.message}`); }
 
-    const detail = `${lines} lines, ${skus} SKUs (${cloud9Skus} Cloud9), ${noDims} without dimensions, ${skippedGroups} groups skipped, ${errors} errors`;
+    const detail = `${lines} lines, ${skus} SKUs (${cloud9Skus} Cloud9), ${noDims} without dimensions, ${skippedNonStock} components/groups skipped, ${errors} errors`;
     if (logId) await query(`UPDATE helm_sync_log SET status='ok', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [lines, detail, logId]);
     else await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('storage','ok',$1,$2)`, [lines, detail]);
     console.log('✅ storage sync complete:', detail);
