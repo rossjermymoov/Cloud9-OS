@@ -133,6 +133,60 @@ router.get('/inspect', async (req, res, next) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Live per-customer inspection — pulls inventory straight from Helm and shows
+// what drives the m³ total (raw dims, stock, per-unit + total volume per SKU),
+// so we can tell bad dimensions / stock from a conversion problem.
+//   GET /api/storage/customer-debug?q=ccell
+router.get('/customer-debug', async (req, res, next) => {
+  try {
+    if (!helmConfigured()) return res.status(503).json({ error: 'Helm not configured' });
+    const q = (req.query.q || 'ccell').toString();
+    const cm = await query(
+      `SELECT id, business_name, helm_customer_id FROM customers
+       WHERE helm_customer_id IS NOT NULL AND business_name ILIKE $1
+       ORDER BY business_name LIMIT 1`, [`%${q}%`]);
+    const c = cm.rows[0];
+    if (!c) return res.json({ error: `No customer matching "${q}" with a Helm id` });
+
+    const items = await fetchInventoryForClient({ helmClientId: c.helm_customer_id });
+    const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+    const MAX_UNIT_M3 = 30;
+
+    let total_m3 = 0, with_dims = 0, zero_dims = 0, oversize_dropped = 0;
+    const rows = items.map(it => {
+      const L = num(it.product_length), W = num(it.product_width), H = num(it.product_height);
+      const locs = Array.isArray(it.locations) ? it.locations : [];
+      const stocked = locs.filter(l => (parseInt(l.stock_level) || 0) > 0);
+      const units = stocked.length ? stocked.reduce((a, l) => a + (parseInt(l.stock_level) || 0), 0)
+                                   : (parseInt(it.stock_level) || 0);
+      const hasAll = L > 0 && W > 0 && H > 0;
+      const unit_cm3 = hasAll ? L * W * H : 0;
+      let unit_m3 = hasAll ? unit_cm3 / 1e6 : null;
+      let flag = null;
+      if (!hasAll) { zero_dims++; flag = 'zero/blank dimension'; }
+      else if (unit_m3 > MAX_UNIT_M3) { oversize_dropped++; flag = 'implausible — dropped'; unit_m3 = null; }
+      else with_dims++;
+      const vol = unit_m3 != null ? +(units * unit_m3).toFixed(4) : 0;
+      total_m3 += vol;
+      return {
+        sku: it.sku, name: it.name, L, W, H, units,
+        locations: stocked.length,
+        unit_m3: unit_m3 != null ? +unit_m3.toFixed(6) : null,
+        volume_m3: vol, flag,
+      };
+    });
+
+    rows.sort((a, b) => b.volume_m3 - a.volume_m3);
+    res.json({
+      customer: c.business_name, helm_client_id: c.helm_customer_id,
+      dimensions: dimUnitInfo(),
+      totals: { total_m3: +total_m3.toFixed(2), sku_count: items.length, with_dims, zero_dims, oversize_dropped },
+      note: 'L/W/H are the raw Helm product dimensions (cm). unit_m3 = L·W·H ÷ 1,000,000. volume_m3 = units × unit_m3. Rows flagged "implausible" (>30 m³/unit) are excluded from total_m3.',
+      top_skus: rows.slice(0, 30),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.get('/freshness', async (_req, res, next) => {
   try {
     const { rows } = await query(`SELECT status, records, detail, ran_at FROM helm_sync_log WHERE sync_type='storage' ORDER BY ran_at DESC LIMIT 1`);
