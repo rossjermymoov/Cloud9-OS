@@ -55,9 +55,9 @@ router.get('/summary', async (_req, res, next) => {
                     COUNT(DISTINCT helm_inventory_id)::int AS skus,
                     COUNT(*) FILTER (WHERE NOT has_dimensions)::int AS lines_without_dims
              FROM storage_lines`),
-      query(`SELECT c.id, c.business_name AS name, COALESCE(SUM(s.volume_m3),0)::float AS m3,
+      query(`SELECT c.id, COALESCE(c.business_name,'Cloud9') AS name, COALESCE(SUM(s.volume_m3),0)::float AS m3,
                     COUNT(DISTINCT s.location_id) FILTER (WHERE s.location_id IS NOT NULL)::int AS locations
-             FROM storage_lines s JOIN customers c ON c.id = s.customer_id
+             FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
              GROUP BY c.id, c.business_name HAVING SUM(s.volume_m3) > 0
              ORDER BY m3 DESC LIMIT 12`),
     ]);
@@ -68,12 +68,12 @@ router.get('/summary', async (_req, res, next) => {
 router.get('/by-customer', async (_req, res, next) => {
   try {
     const { rows } = await query(`
-      SELECT c.id, c.business_name AS name,
+      SELECT c.id, COALESCE(c.business_name,'Cloud9') AS name,
              COALESCE(SUM(s.volume_m3),0)::float AS m3,
              COUNT(DISTINCT s.helm_inventory_id)::int AS skus,
              COUNT(DISTINCT s.location_id) FILTER (WHERE s.location_id IS NOT NULL)::int AS locations,
              COALESCE(SUM(s.qty),0)::int AS units
-      FROM storage_lines s JOIN customers c ON c.id = s.customer_id
+      FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
       GROUP BY c.id, c.business_name
       ORDER BY m3 DESC`);
     res.json(rows);
@@ -87,7 +87,7 @@ router.get('/by-location', async (_req, res, next) => {
              COALESCE(SUM(s.volume_m3),0)::float AS m3,
              COUNT(DISTINCT s.customer_id)::int AS customers,
              COUNT(DISTINCT s.helm_inventory_id)::int AS skus,
-             (ARRAY_AGG(c.business_name ORDER BY s.volume_m3 DESC))[1] AS top_customer
+             (ARRAY_AGG(COALESCE(c.business_name,'Cloud9') ORDER BY s.volume_m3 DESC))[1] AS top_customer
       FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
       WHERE s.location_id IS NOT NULL
       GROUP BY s.location_id
@@ -148,41 +148,52 @@ router.get('/customer-debug', async (req, res, next) => {
     const c = cm.rows[0];
     if (!c) return res.json({ error: `No customer matching "${q}" with a Helm id` });
 
+    // Fetch ALL types so groups are visible here; everything counts toward the
+    // total EXCEPT Groups (type 3), which would double-count their components.
     const items = await fetchInventoryForClient({ helmClientId: c.helm_customer_id });
     const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
     const MAX_UNIT_M3 = 30;
+    const TYPE_NAME = { 1: 'Inventory', 2: 'Component', 3: 'Group', 4: 'Packaging', 5: 'Auxiliary Packaging' };
 
-    let total_m3 = 0, with_dims = 0, zero_dims = 0, oversize_dropped = 0;
+    let total_m3 = 0, with_dims = 0, zero_dims = 0, oversize_dropped = 0, groups_excluded = 0;
+    const by_type = {};
     const rows = items.map(it => {
+      const tnum = parseInt(it.type ?? it.product_type);
+      const tname = TYPE_NAME[tnum] || (Number.isFinite(tnum) ? `Type ${tnum}` : 'Unknown');
+      by_type[tname] = (by_type[tname] || 0) + 1;
+      const isGroup = tnum === 3;
+
       const L = num(it.product_length), W = num(it.product_width), H = num(it.product_height);
       const locs = Array.isArray(it.locations) ? it.locations : [];
       const stocked = locs.filter(l => (parseInt(l.stock_level) || 0) > 0);
       const units = stocked.length ? stocked.reduce((a, l) => a + (parseInt(l.stock_level) || 0), 0)
                                    : (parseInt(it.stock_level) || 0);
       const hasAll = L > 0 && W > 0 && H > 0;
-      const unit_cm3 = hasAll ? L * W * H : 0;
-      let unit_m3 = hasAll ? unit_cm3 / 1e6 : null;
-      let flag = null;
-      if (!hasAll) { zero_dims++; flag = 'zero/blank dimension'; }
+      let unit_m3 = hasAll ? (L * W * H) / 1e6 : null;
+      let flag = null, counted = false;
+      if (isGroup) { groups_excluded++; flag = 'Group — excluded (double-counts)'; }
+      else if (!hasAll) { zero_dims++; flag = 'zero/blank dimension'; }
       else if (unit_m3 > MAX_UNIT_M3) { oversize_dropped++; flag = 'implausible — dropped'; unit_m3 = null; }
-      else with_dims++;
-      const vol = unit_m3 != null ? +(units * unit_m3).toFixed(4) : 0;
-      total_m3 += vol;
+      else { with_dims++; counted = true; }
+      const vol = (counted && unit_m3 != null) ? +(units * unit_m3).toFixed(4) : 0;
+      if (counted) total_m3 += vol;
       return {
-        sku: it.sku, name: it.name, L, W, H, units,
+        sku: it.sku, name: it.name, type: tname, L, W, H, units,
         locations: stocked.length,
         unit_m3: unit_m3 != null ? +unit_m3.toFixed(6) : null,
         volume_m3: vol, flag,
       };
     });
 
-    rows.sort((a, b) => b.volume_m3 - a.volume_m3);
+    // Surface counted SKUs first (by volume), then excluded rows so groups are visible.
+    rows.sort((a, b) => b.volume_m3 - a.volume_m3 || (a.flag ? 1 : 0) - (b.flag ? 1 : 0));
     res.json({
       customer: c.business_name, helm_client_id: c.helm_customer_id,
       dimensions: dimUnitInfo(),
-      totals: { total_m3: +total_m3.toFixed(2), sku_count: items.length, with_dims, zero_dims, oversize_dropped },
-      note: 'L/W/H are the raw Helm product dimensions (cm). unit_m3 = L·W·H ÷ 1,000,000. volume_m3 = units × unit_m3. Rows flagged "implausible" (>30 m³/unit) are excluded from total_m3.',
-      top_skus: rows.slice(0, 30),
+      totals: { total_m3: +total_m3.toFixed(2), sku_count: items.length, counted: with_dims, zero_dims, oversize_dropped, groups_excluded },
+      by_type,
+      note: 'Everything counts toward total_m3 except Groups (type 3), which would double-count their components. Inventory, Components and Packaging are all included. L/W/H are raw cm; unit_m3 = L·W·H ÷ 1,000,000; volume_m3 = units × unit_m3.',
+      top_skus: rows.slice(0, 40),
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

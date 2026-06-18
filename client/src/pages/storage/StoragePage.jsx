@@ -105,19 +105,26 @@ function CustomerInspector() {
 
       {data && (
         <>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, fontSize: 12.5, marginBottom: 12, padding: '10px 12px', background: '#F8FAFC', borderRadius: 9 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, fontSize: 12.5, marginBottom: 6, padding: '10px 12px', background: '#F8FAFC', borderRadius: 9 }}>
             <span><strong style={{ color: TITLE }}>{data.customer}</strong></span>
             <span style={{ color: MUTED }}>Total: <strong style={{ color: ACCENT }}>{m3(t.total_m3)}</strong></span>
             <span style={{ color: MUTED }}>SKUs: <strong style={{ color: TITLE }}>{t.sku_count}</strong></span>
-            <span style={{ color: MUTED }}>With dims: <strong style={{ color: '#10B981' }}>{t.with_dims}</strong></span>
+            <span style={{ color: MUTED }}>Counted: <strong style={{ color: '#10B981' }}>{t.counted}</strong></span>
+            <span style={{ color: MUTED }}>Groups excluded: <strong style={{ color: t.groups_excluded ? '#F59E0B' : MUTED }}>{t.groups_excluded}</strong></span>
             <span style={{ color: MUTED }}>Zero dims: <strong style={{ color: t.zero_dims ? '#F59E0B' : MUTED }}>{t.zero_dims}</strong></span>
             <span style={{ color: MUTED }}>Dropped (huge): <strong style={{ color: t.oversize_dropped ? '#EF4444' : MUTED }}>{t.oversize_dropped}</strong></span>
             <span style={{ color: '#94A3B8' }}>Unit: {data.dimensions?.effective_unit} (÷{data.dimensions?.divisor.toLocaleString()})</span>
           </div>
+          {data.by_type && (
+            <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 12 }}>
+              By type: {Object.entries(data.by_type).map(([k, v]) => `${k} ${v}`).join(' · ')}
+            </div>
+          )}
           <div style={{ maxHeight: 420, overflowY: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11, position: 'sticky', top: 0, background: '#fff' }}>
                 <th style={{ padding: '6px 6px' }}>SKU</th><th style={{ padding: '6px 6px' }}>Name</th>
+                <th style={{ padding: '6px 6px' }}>Type</th>
                 <th style={{ padding: '6px 6px', textAlign: 'right' }}>L×W×H (cm)</th>
                 <th style={{ padding: '6px 6px', textAlign: 'right' }}>Units</th>
                 <th style={{ padding: '6px 6px', textAlign: 'right' }}>m³ / unit</th>
@@ -127,7 +134,8 @@ function CustomerInspector() {
                 {data.top_skus.map((r, i) => (
                   <tr key={i} style={{ borderTop: '1px solid rgba(0,0,0,0.05)', background: r.flag ? '#FEF2F2' : 'transparent' }}>
                     <td style={{ padding: '7px 6px', fontWeight: 600, color: TITLE }}>{r.sku || '—'}</td>
-                    <td style={{ padding: '7px 6px', color: MUTED, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}{r.flag && <span style={{ color: '#EF4444', fontWeight: 700 }}> · {r.flag}</span>}</td>
+                    <td style={{ padding: '7px 6px', color: MUTED, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}{r.flag && <span style={{ color: '#EF4444', fontWeight: 700 }}> · {r.flag}</span>}</td>
+                    <td style={{ padding: '7px 6px', color: r.type === 'Group' ? '#F59E0B' : MUTED }}>{r.type}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{r.L}×{r.W}×{r.H}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{(r.units ?? 0).toLocaleString()}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', color: r.unit_m3 == null ? '#CBD5E1' : MUTED }}>{r.unit_m3 == null ? '—' : r.unit_m3}</td>
@@ -213,7 +221,7 @@ export default function StoragePage() {
                 </tr></thead>
                 <tbody>
                   {(byCust.data || []).filter(c => c.m3 > 0).slice(0, 18).map(c => (
-                    <tr key={c.id} className="c9-row" onClick={() => navigate(`/customers/${c.id}`)} style={{ borderTop: '1px solid rgba(0,0,0,0.05)', cursor: 'pointer' }}>
+                    <tr key={c.id || 'cloud9'} className="c9-row" onClick={() => c.id && navigate(`/customers/${c.id}`)} style={{ borderTop: '1px solid rgba(0,0,0,0.05)', cursor: c.id ? 'pointer' : 'default' }}>
                       <td style={{ padding: '8px 6px', fontWeight: 600, color: TITLE }}>{c.name}</td>
                       <td style={{ padding: '8px 6px', textAlign: 'right', fontWeight: 700, color: ACCENT }}>{(c.m3 ?? 0).toFixed(1)}</td>
                       <td style={{ padding: '8px 6px', textAlign: 'right', color: '#334155' }}>{c.skus}</td>

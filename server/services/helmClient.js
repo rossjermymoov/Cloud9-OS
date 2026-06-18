@@ -303,7 +303,7 @@ export async function fetchPickDetail(pickId) {
  * and a locations[] array (which bins hold it + how much), but NOT package
  * dimensions — those need the detail call.
  */
-export async function fetchInventoryForClient({ helmClientId, perPage = 100, maxPages = 200 }) {
+export async function fetchInventoryForClient({ helmClientId, perPage = 100, maxPages = 200, productTypes = null }) {
   const all = [];
   let page = 1;
   for (let i = 0; i < maxPages; i++) {
@@ -311,6 +311,8 @@ export async function fetchInventoryForClient({ helmClientId, perPage = 100, max
     qs.set('page', String(page));
     qs.set('per_page', String(perPage));
     if (helmClientId != null) qs.append('filters[fulfilment_clients][]', String(helmClientId));
+    // type: 1=Inventory, 2=Component, 3=Group, 4=Packaging, 5=Auxiliary Packaging.
+    if (Array.isArray(productTypes)) for (const t of productTypes) qs.append('filters[product_types][]', String(t));
     const res = await authedGet(`/inventory?${qs.toString()}`);
     const rows = res.data || [];
     all.push(...rows);

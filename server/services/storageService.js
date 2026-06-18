@@ -49,52 +49,72 @@ export async function syncStorage({ pageDelayMs = 80 } = {}) {
     logId = lr.rows[0]?.id || null;
   } catch (e) { console.warn('[storage-sync] start row:', e.message); }
 
-  let lines = 0, skus = 0, noDims = 0, errors = 0;
+  let lines = 0, skus = 0, noDims = 0, errors = 0, skippedGroups = 0, cloud9Skus = 0;
+  const seenIds = new Set();   // every inventory id touched, so the Cloud9 pass skips assigned stock
+
+  // Write one storage line per stocked location for a single inventory item.
+  // Skips Groups (type 3) — virtual bundles whose stock is their components.
+  async function writeItemLines(it, customerId, helmClientId, isCloud9 = false) {
+    const invId = it.id != null ? String(it.id) : null;
+    if (!invId) return;
+    seenIds.add(invId);
+    // type: 1=Inventory, 2=Component, 3=Group, 4=Packaging, 5=Aux Packaging.
+    if (parseInt(it.type ?? it.product_type) === 3) { skippedGroups++; return; }
+    skus++; if (isCloud9) cloud9Skus++;
+
+    const unitM3 = unitVolumeM3(it);
+    const hasDims = unitM3 != null && unitM3 > 0;
+    if (!hasDims) noDims++;
+
+    const locs = Array.isArray(it.locations) ? it.locations : [];
+    await query(`DELETE FROM storage_lines WHERE helm_inventory_id = $1`, [invId]);
+    const stocked = locs.filter(l => (parseInt(l.stock_level) || 0) > 0);
+    const rows = stocked.length ? stocked : [{ location_id: null, location_name: null, warehouse_id: null, stock_level: it.stock_level }];
+    for (const l of rows) {
+      const qty = parseInt(l.stock_level) || 0;
+      const vol = hasDims ? +(qty * unitM3).toFixed(4) : 0;
+      await query(`
+        INSERT INTO storage_lines
+          (helm_inventory_id, sku, name, customer_id, helm_client_id, location_id, location_name,
+           warehouse_id, qty, unit_m3, volume_m3, has_dimensions, computed_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
+        ON CONFLICT (helm_inventory_id, location_id) DO UPDATE SET
+          sku=EXCLUDED.sku, name=EXCLUDED.name, customer_id=EXCLUDED.customer_id,
+          helm_client_id=EXCLUDED.helm_client_id, location_name=EXCLUDED.location_name, warehouse_id=EXCLUDED.warehouse_id,
+          qty=EXCLUDED.qty, unit_m3=EXCLUDED.unit_m3, volume_m3=EXCLUDED.volume_m3,
+          has_dimensions=EXCLUDED.has_dimensions, computed_at=NOW()
+      `, [
+        invId, it.sku || null, it.name || null, customerId, helmClientId,
+        l.location_id != null ? String(l.location_id) : null, l.location_name || null,
+        l.warehouse_id != null ? parseInt(l.warehouse_id) : null,
+        qty, hasDims ? +unitM3.toFixed(6) : 0, vol, hasDims,
+      ]);
+      lines++;
+    }
+  }
+
   try {
     const cm = await query(`SELECT id, helm_customer_id FROM customers WHERE helm_customer_id IS NOT NULL AND account_status = 'active'`);
     for (const c of cm.rows) {
       let items;
       try { items = await fetchInventoryForClient({ helmClientId: c.helm_customer_id }); }
       catch (e) { errors++; console.warn(`[storage-sync] list ${c.helm_customer_id}: ${e.message}`); continue; }
-
-      for (const it of items) {
-        const invId = it.id != null ? String(it.id) : null;
-        if (!invId) continue;
-        skus++;
-        // Dimensions are on the inventory item itself — no per-SKU detail call needed.
-        const unitM3 = unitVolumeM3(it);
-        const hasDims = unitM3 != null && unitM3 > 0;
-        if (!hasDims) noDims++;
-
-        const locs = Array.isArray(it.locations) ? it.locations : [];
-        // Clear this item's previous lines, then write one per stocked location.
-        await query(`DELETE FROM storage_lines WHERE helm_inventory_id = $1`, [invId]);
-        const stocked = locs.filter(l => (parseInt(l.stock_level) || 0) > 0);
-        const rows = stocked.length ? stocked : [{ location_id: null, location_name: null, warehouse_id: null, stock_level: it.stock_level }];
-        for (const l of rows) {
-          const qty = parseInt(l.stock_level) || 0;
-          const vol = hasDims ? +(qty * unitM3).toFixed(4) : 0;
-          await query(`
-            INSERT INTO storage_lines
-              (helm_inventory_id, sku, name, customer_id, helm_client_id, location_id, location_name,
-               warehouse_id, qty, unit_m3, volume_m3, has_dimensions, computed_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
-            ON CONFLICT (helm_inventory_id, location_id) DO UPDATE SET
-              sku=EXCLUDED.sku, name=EXCLUDED.name, customer_id=EXCLUDED.customer_id,
-              location_name=EXCLUDED.location_name, warehouse_id=EXCLUDED.warehouse_id,
-              qty=EXCLUDED.qty, unit_m3=EXCLUDED.unit_m3, volume_m3=EXCLUDED.volume_m3,
-              has_dimensions=EXCLUDED.has_dimensions, computed_at=NOW()
-          `, [
-            invId, it.sku || null, it.name || null, c.id, String(c.helm_customer_id),
-            l.location_id != null ? String(l.location_id) : null, l.location_name || null,
-            l.warehouse_id != null ? parseInt(l.warehouse_id) : null,
-            qty, hasDims ? +unitM3.toFixed(6) : 0, vol, hasDims,
-          ]);
-          lines++;
-        }
-      }
+      for (const it of items) await writeItemLines(it, c.id, String(c.helm_customer_id));
     }
-    const detail = `${lines} lines, ${skus} SKUs, ${noDims} without dimensions, ${errors} errors`;
+
+    // Cloud9-owned stock: any inventory item NOT returned for any fulfilment
+    // client has no client assigned → it's ours (e.g. our packaging). Attribute
+    // it to Cloud9 (customer_id NULL, shown as "Cloud9" in the breakdowns).
+    try {
+      const all = await fetchInventoryForClient({ helmClientId: null });
+      for (const it of all) {
+        const invId = it.id != null ? String(it.id) : null;
+        if (!invId || seenIds.has(invId)) continue;
+        await writeItemLines(it, null, null, true);
+      }
+    } catch (e) { errors++; console.warn(`[storage-sync] cloud9 pass: ${e.message}`); }
+
+    const detail = `${lines} lines, ${skus} SKUs (${cloud9Skus} Cloud9), ${noDims} without dimensions, ${skippedGroups} groups skipped, ${errors} errors`;
     if (logId) await query(`UPDATE helm_sync_log SET status='ok', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [lines, detail, logId]);
     else await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('storage','ok',$1,$2)`, [lines, detail]);
     console.log('✅ storage sync complete:', detail);
