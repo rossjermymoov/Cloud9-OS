@@ -80,7 +80,9 @@ router.get('/summary', async (req, res, next) => {
         COALESCE(SUM(order_count),0)::int                          AS orders,
         COALESCE(SUM(${TIME_BASIS}),0)::bigint                     AS total_ms,
         COUNT(*) FILTER (WHERE ${TIME_BASIS} > 0)::int             AS timed_picks,
-        COALESCE(SUM(item_count) FILTER (WHERE ${TIME_BASIS} > 0),0)::int AS timed_items
+        COALESCE(SUM(item_count) FILTER (WHERE ${TIME_BASIS} > 0),0)::int AS timed_items,
+        COALESCE(SUM(item_scan_ms),0)::bigint                      AS item_scan_ms,
+        COALESCE(SUM(item_scan_count),0)::int                      AS item_scan_count
       FROM picks
       WHERE ${COMPLETED} AND pick_date >= $1 AND pick_date <= $2
     `, [from, to]);
@@ -92,6 +94,10 @@ router.get('/summary', async (req, res, next) => {
       orders: r.orders,
       avg_items_per_pick: r.picks ? +(r.items / r.picks).toFixed(1) : 0,
       avg_secs_per_pick:  r.timed_picks ? Math.round((Number(r.total_ms) / r.timed_picks) / 1000) : null,
+      // A Helm "pick" is a WAVE; a true pick = one ITEM_SCAN. Average time per
+      // pick = total item-scan time ÷ number of item scans (scan-based only).
+      avg_secs_per_item:  r.item_scan_count ? +((Number(r.item_scan_ms) / r.item_scan_count) / 1000).toFixed(1) : null,
+      item_picks:         r.item_scan_count,   // number of individual item-scan picks (the denominator)
       items_per_hour:     safeItemsPerHour({ picks: r.picks, timedPicks: r.timed_picks, timedItems: r.timed_items, totalMs: r.total_ms }),
       timed_picks: r.timed_picks,          // how many picks had usable timing
       timing_complete: r.picks > 0 && r.timed_picks >= r.picks,
@@ -127,7 +133,9 @@ router.get('/leaderboard', async (req, res, next) => {
         COALESCE(SUM(items),0)::int                                   AS items,
         COALESCE(SUM(handling_ms),0)::bigint                          AS total_ms,
         COUNT(DISTINCT helm_pick_id) FILTER (WHERE handling_ms > 0)::int  AS timed_picks,
-        COALESCE(SUM(items) FILTER (WHERE handling_ms > 0),0)::int    AS timed_items
+        COALESCE(SUM(items) FILTER (WHERE handling_ms > 0),0)::int    AS timed_items,
+        COALESCE(SUM(item_scan_ms),0)::bigint                         AS item_scan_ms,
+        COALESCE(SUM(item_scan_count),0)::int                         AS item_scan_count
       FROM pick_contributions
       WHERE pick_date >= $1 AND pick_date <= $2
       GROUP BY user_id
@@ -141,6 +149,8 @@ router.get('/leaderboard', async (req, res, next) => {
       hours: +(Number(r.total_ms) / 3600000).toFixed(2),
       items_per_hour: safeItemsPerHour({ timedPicks: r.timed_picks, timedItems: r.timed_items, totalMs: r.total_ms }),
       avg_secs_per_pick: r.timed_picks ? Math.round((Number(r.total_ms) / r.timed_picks) / 1000) : null,
+      avg_secs_per_item: r.item_scan_count ? +((Number(r.item_scan_ms) / r.item_scan_count) / 1000).toFixed(1) : null,
+      item_picks: r.item_scan_count,
       timed_picks: r.timed_picks,
     })).sort((a, b) =>
       // Real throughput first (desc), then by items as a fallback.

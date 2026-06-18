@@ -67,25 +67,34 @@ function summarisePick(detail, header) {
   // Helm `duration` is ACTIVE time on each action, in SECONDS (decimals). Each
   // action also carries the user_id who performed it, and ITEM_SCAN actions carry
   // the quantity confirmed — so we split BOTH time and items per user.
+  // A Helm "pick" is a WAVE; the true unit of picking work is a single ITEM_SCAN
+  // (one scan of an item line). So alongside total handling time we track the
+  // ITEM_SCAN duration + count — both overall and per user — to report a real
+  // "average time per pick" (item_scan time ÷ number of item scans).
   const tt = Array.isArray(detail?.time_tracking_data) ? detail.time_tracking_data : [];
-  let handlingSec = 0;
-  const byUser = {};   // user_id -> { sec, items, scans }
+  let handlingSec = 0, itemScanSec = 0, itemScanCount = 0;
+  const byUser = {};   // user_id -> { sec, items, scans, itemSec, itemScans }
   for (const t of tt) {
     const d = parseFloat(t.duration); const dur = isNaN(d) ? 0 : d;
     handlingSec += dur;
+    const isItemScan = String(t.type || '').toUpperCase() === 'ITEM_SCAN';
+    if (isItemScan) { itemScanSec += dur; itemScanCount += 1; }
     const uid = t.user_id != null ? String(t.user_id) : null;
     if (!uid) continue;
-    const b = (byUser[uid] ||= { sec: 0, items: 0, scans: 0 });
+    const b = (byUser[uid] ||= { sec: 0, items: 0, scans: 0, itemSec: 0, itemScans: 0 });
     b.sec += dur; b.scans += 1;
+    if (isItemScan) { b.itemSec += dur; b.itemScans += 1; }
     const q = parseInt(t.quantity);
     if (!isNaN(q) && q > 0) b.items += q;
   }
-  const handlingMs = Math.round(handlingSec * 1000);
+  const handlingMs    = Math.round(handlingSec * 1000);
+  const itemScanMs    = Math.round(itemScanSec * 1000);
 
   // Build per-user contributions. If ITEM_SCAN quantities didn't account for all
   // picked items, credit the shortfall to whoever spent the most time.
   const contributions = Object.entries(byUser).map(([user_id, b]) => ({
     user_id, items: b.items, handlingMs: Math.round(b.sec * 1000), scans: b.scans,
+    itemScanMs: Math.round(b.itemSec * 1000), itemScanCount: b.itemScans,
   }));
   const scannedItems = contributions.reduce((a, c) => a + c.items, 0);
   if (items > scannedItems && contributions.length) {
@@ -108,7 +117,7 @@ function summarisePick(detail, header) {
   // items (with zero measured time) so they appear on the leaderboard — otherwise
   // pickers whose flow doesn't log scan timing (e.g. Mark Lewis) vanish entirely.
   if (contributions.length === 0 && pickerId) {
-    contributions.push({ user_id: pickerId, items, handlingMs: 0, scans: 0 });
+    contributions.push({ user_id: pickerId, items, handlingMs: 0, scans: 0, itemScanMs: 0, itemScanCount: 0 });
   }
 
   const created   = toDate(detail?.created_at || header?.created_at);
@@ -116,6 +125,7 @@ function summarisePick(detail, header) {
   const elapsedMs = (created && completed) ? Math.max(0, completed.getTime() - created.getTime()) : 0;
 
   return { items, lineCount: invs.length, orderCount: orders.size, handlingMs, elapsedMs,
+           itemScanMs, itemScanCount,
            pickerId, contributions, created, completed, orderIds: [...orders] };
 }
 
@@ -151,6 +161,7 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
       const status = num(h.status);
 
       let s = { items: 0, lineCount: 0, orderCount: 0, handlingMs: 0, elapsedMs: 0,
+                itemScanMs: 0, itemScanCount: 0,
                 pickerId: h.assigned_to != null ? String(h.assigned_to) : null, contributions: [], orderIds: [],
                 created: toDate(h.created_at), completed: toDate(h.completed_at) };
 
@@ -202,8 +213,9 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
             (helm_pick_id, pick_number, pick_type, pick_type_name, pick_option, pick_option_name,
              status, status_name, warehouse_id, created_by, picker_id, picker_name,
              item_count, line_count, order_count, handling_ms, elapsed_ms,
-             is_batch, is_split, ui_pick, force_completed, helm_created_at, completed_at, pick_date, raw_payload, contributor_count, label_at, timing_source)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+             is_batch, is_split, ui_pick, force_completed, helm_created_at, completed_at, pick_date, raw_payload, contributor_count, label_at, timing_source,
+             item_scan_ms, item_scan_count)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
           ON CONFLICT (helm_pick_id) DO UPDATE SET
             pick_number=EXCLUDED.pick_number, pick_type=EXCLUDED.pick_type, pick_type_name=EXCLUDED.pick_type_name,
             pick_option=EXCLUDED.pick_option, pick_option_name=EXCLUDED.pick_option_name,
@@ -215,7 +227,8 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
             force_completed=EXCLUDED.force_completed, helm_created_at=EXCLUDED.helm_created_at,
             completed_at=EXCLUDED.completed_at, pick_date=EXCLUDED.pick_date,
             raw_payload=EXCLUDED.raw_payload, contributor_count=EXCLUDED.contributor_count,
-            label_at=COALESCE(EXCLUDED.label_at, picks.label_at), timing_source=EXCLUDED.timing_source, updated_at=NOW()
+            label_at=COALESCE(EXCLUDED.label_at, picks.label_at), timing_source=EXCLUDED.timing_source,
+            item_scan_ms=EXCLUDED.item_scan_ms, item_scan_count=EXCLUDED.item_scan_count, updated_at=NOW()
         `, [
           pickId, h.pick_number || null, num(h.pick_type) || null, h.pick_type_name || TYPE_NAME[num(h.pick_type)] || null,
           num(h.pick_option) || null, h.pick_option_name || OPTION_NAME[num(h.pick_option)] || null,
@@ -226,7 +239,7 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
           h.ui_pick === '1' || h.ui_pick === 1, h.force_completed === '1' || h.force_completed === 1,
           s.created ? s.created.toISOString() : null, s.completed ? s.completed.toISOString() : null,
           pickDateStr, JSON.stringify(rawToStore).slice(0, 150000), s.contributions.length || 1,
-          labelAt, timingSource,
+          labelAt, timingSource, s.itemScanMs || 0, s.itemScanCount || 0,
         ]);
         stored++;
 
@@ -235,12 +248,13 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
         for (const c of s.contributions) {
           const cName = userMap.get(c.user_id) || `User ${c.user_id}`;
           await query(`
-            INSERT INTO pick_contributions (helm_pick_id, user_id, picker_name, items, handling_ms, scans, pick_date, warehouse_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            INSERT INTO pick_contributions (helm_pick_id, user_id, picker_name, items, handling_ms, scans, pick_date, warehouse_id, item_scan_ms, item_scan_count)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             ON CONFLICT (helm_pick_id, user_id) DO UPDATE SET
               picker_name=EXCLUDED.picker_name, items=EXCLUDED.items, handling_ms=EXCLUDED.handling_ms,
-              scans=EXCLUDED.scans, pick_date=EXCLUDED.pick_date, warehouse_id=EXCLUDED.warehouse_id, updated_at=NOW()
-          `, [pickId, c.user_id, cName, c.items, c.handlingMs, c.scans, pickDateStr, num(h.warehouse_id) || null]);
+              scans=EXCLUDED.scans, pick_date=EXCLUDED.pick_date, warehouse_id=EXCLUDED.warehouse_id,
+              item_scan_ms=EXCLUDED.item_scan_ms, item_scan_count=EXCLUDED.item_scan_count, updated_at=NOW()
+          `, [pickId, c.user_id, cName, c.items, c.handlingMs, c.scans, pickDateStr, num(h.warehouse_id) || null, c.itemScanMs || 0, c.itemScanCount || 0]);
         }
       } catch (e) { errors++; console.warn(`[picking-sync] upsert ${pickId}: ${e.message}`); }
     }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal } from 'lucide-react';
+import { ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal, Hand } from 'lucide-react';
 import {
   pickingSummary, pickingDaily, pickingLeaderboard, pickingPicks, pickingFreshness, triggerPickSync,
 } from '../../api/picking';
@@ -96,6 +96,7 @@ function Leaderboard({ rows }) {
           <th style={{ padding: '8px 6px', textAlign: 'right' }}>Items</th>
           <th style={{ padding: '8px 6px', textAlign: 'right' }}>Waves</th>
           <th style={{ padding: '8px 6px', textAlign: 'right' }}>Avg / wave</th>
+          <th style={{ padding: '8px 6px', textAlign: 'right' }}>Avg / pick</th>
         </tr>
       </thead>
       <tbody>
@@ -109,12 +110,13 @@ function Leaderboard({ rows }) {
             <td style={{ padding: '10px 6px', textAlign: 'right', color: '#334155' }}>{r.items.toLocaleString()}</td>
             <td style={{ padding: '10px 6px', textAlign: 'right', color: '#334155' }}>{r.picks}</td>
             <td title={r.avg_secs_per_pick == null ? 'No scan timing recorded for these picks' : undefined} style={{ padding: '10px 6px', textAlign: 'right', color: r.avg_secs_per_pick == null ? '#CBD5E1' : MUTED }}>{fmtDuration(r.avg_secs_per_pick)}</td>
+            <td title={r.avg_secs_per_item == null ? 'No item scans recorded (bulk picking)' : `${(r.item_picks || 0).toLocaleString()} item scans`} style={{ padding: '10px 6px', textAlign: 'right', color: r.avg_secs_per_item == null ? '#CBD5E1' : MUTED }}>{fmtDuration(r.avg_secs_per_item)}</td>
           </tr>
         ))}
       </tbody>
       <tfoot>
-        <tr><td colSpan={6} style={{ padding: '10px 6px 0', fontSize: 11, color: '#94A3B8' }}>
-          Items/hr uses scan timing where available; for bulk picks (no scans) it's estimated from the gap between dispatches.
+        <tr><td colSpan={7} style={{ padding: '10px 6px 0', fontSize: 11, color: '#94A3B8' }}>
+          Avg / wave is the whole batch; Avg / pick is the time per individual item scan. Items/hr uses scan timing where available; for bulk picks (no scans) it's estimated from the gap between dispatches, and per-pick time isn't available.
         </td></tr>
       </tfoot>
     </table>
@@ -241,6 +243,8 @@ export default function PickingPage() {
             <Kpi Icon={ListChecks} label="Waves completed" value={s?.picks ?? '—'} sub={s?.orders ? `${s.orders} orders` : null} />
             <Kpi Icon={Boxes} label="Items picked" value={(s?.items ?? 0).toLocaleString()} sub={s?.avg_items_per_pick != null ? `${s.avg_items_per_pick} per wave` : null} />
             <Kpi Icon={Timer} label="Avg time per wave" value={fmtDuration(s?.avg_secs_per_pick)} sub="Active handling time" />
+            <Kpi Icon={Hand} label="Avg time per pick" value={fmtDuration(s?.avg_secs_per_item)}
+              sub={s?.item_picks ? `Per item scanned · ${s.item_picks.toLocaleString()} picks` : 'Scan-based picks only'} />
           </div>
 
           <Card>
