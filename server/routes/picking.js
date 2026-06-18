@@ -108,6 +108,32 @@ router.get('/summary', async (req, res, next) => {
 router.get('/daily', async (req, res, next) => {
   try {
     const { period, from, to } = rangeFor(req.query.period, req.query.date);
+
+    // Single day (today / yesterday / a custom date) → break the day into HOURS so
+    // you can see throughput across the working day. A range → one bar per day.
+    if (from === to) {
+      const { rows } = await query(`
+        SELECT EXTRACT(HOUR FROM completed_at AT TIME ZONE 'UTC')::int AS hour,
+               COUNT(*)::int AS picks,
+               COALESCE(SUM(item_count),0)::int AS items
+        FROM picks
+        WHERE ${COMPLETED} AND pick_date = $1 AND completed_at IS NOT NULL
+        GROUP BY hour ORDER BY hour ASC
+      `, [from]);
+      const byHour = new Map(rows.map(r => [r.hour, r]));
+      // Build a continuous run of hours from first to last activity (min 06–18) so
+      // quiet hours show as gaps rather than collapsing the axis.
+      const active = rows.map(r => r.hour);
+      const startH = Math.min(6, ...(active.length ? active : [6]));
+      const endH   = Math.max(18, ...(active.length ? active : [18]));
+      const buckets = [];
+      for (let h = startH; h <= endH; h++) {
+        const r = byHour.get(h);
+        buckets.push({ label: `${String(h).padStart(2, '0')}:00`, picks: r?.picks || 0, items: r?.items || 0 });
+      }
+      return res.json({ period, from, to, granularity: 'hour', buckets, days: buckets });
+    }
+
     const { rows } = await query(`
       SELECT pick_date::text AS date,
              COUNT(*)::int AS picks,
@@ -116,7 +142,8 @@ router.get('/daily', async (req, res, next) => {
       WHERE ${COMPLETED} AND pick_date >= $1 AND pick_date <= $2
       GROUP BY pick_date ORDER BY pick_date ASC
     `, [from, to]);
-    res.json({ period, from, to, days: rows });
+    const days = rows.map(r => ({ ...r, label: r.date }));
+    res.json({ period, from, to, granularity: 'day', buckets: days, days });
   } catch (err) { next(err); }
 });
 

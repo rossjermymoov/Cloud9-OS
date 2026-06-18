@@ -200,13 +200,16 @@ export async function evaluateOrders({ fromYmd, toYmd, customerId = null }) {
   const hs = await holidaySet();
   const today = todayLondonYmd();
   const vals = [`${fromYmd} 00:00:00`, `${toYmd} 23:59:59`];
+  // Exclude cancelled orders, and Draft orders (status_id 1) — a draft isn't a
+  // committed order yet, so it must never count as a breach even if it's overdue.
   let where = `o.received_at IS NOT NULL AND o.received_at >= $1 AND o.received_at <= $2
-               AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')`;
+               AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')
+               AND (o.status_id IS NULL OR o.status_id <> 1)`;
   if (customerId) { vals.push(customerId); where += ` AND o.customer_id = $${vals.length}`; }
 
   const { rows } = await query(`
     SELECT o.id, o.helm_order_id, o.channel_order_id, o.customer_id, o.received_at, o.dispatched_at,
-           o.parcel_count, o.item_count, o.status_label, c.business_name, c.cutoff_time
+           o.parcel_count, o.item_count, o.status_label, o.status_id, c.business_name, c.cutoff_time
     FROM orders o JOIN customers c ON c.id = o.customer_id
     WHERE ${where}
     ORDER BY o.received_at DESC

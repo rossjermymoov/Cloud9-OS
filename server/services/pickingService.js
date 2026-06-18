@@ -222,12 +222,18 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
             status=EXCLUDED.status, status_name=EXCLUDED.status_name, warehouse_id=EXCLUDED.warehouse_id,
             created_by=EXCLUDED.created_by, picker_id=EXCLUDED.picker_id, picker_name=EXCLUDED.picker_name,
             item_count=EXCLUDED.item_count, line_count=EXCLUDED.line_count, order_count=EXCLUDED.order_count,
-            handling_ms=EXCLUDED.handling_ms, elapsed_ms=EXCLUDED.elapsed_ms,
+            -- Only overwrite timing when this sync actually measured scan time.
+            -- Bulk picks come back with 0 (no scans); keep the previously gap-derived
+            -- estimate instead of wiping it to 0 every sync — otherwise the headline
+            -- average flickers whenever a read lands mid-sync (before the gap pass re-fills).
+            handling_ms = CASE WHEN COALESCE(EXCLUDED.handling_ms,0) > 0 THEN EXCLUDED.handling_ms ELSE picks.handling_ms END,
+            timing_source = CASE WHEN COALESCE(EXCLUDED.handling_ms,0) > 0 THEN EXCLUDED.timing_source ELSE picks.timing_source END,
+            elapsed_ms=EXCLUDED.elapsed_ms,
             is_batch=EXCLUDED.is_batch, is_split=EXCLUDED.is_split, ui_pick=EXCLUDED.ui_pick,
             force_completed=EXCLUDED.force_completed, helm_created_at=EXCLUDED.helm_created_at,
             completed_at=EXCLUDED.completed_at, pick_date=EXCLUDED.pick_date,
             raw_payload=EXCLUDED.raw_payload, contributor_count=EXCLUDED.contributor_count,
-            label_at=COALESCE(EXCLUDED.label_at, picks.label_at), timing_source=EXCLUDED.timing_source,
+            label_at=COALESCE(EXCLUDED.label_at, picks.label_at),
             item_scan_ms=EXCLUDED.item_scan_ms, item_scan_count=EXCLUDED.item_scan_count, updated_at=NOW()
         `, [
           pickId, h.pick_number || null, num(h.pick_type) || null, h.pick_type_name || TYPE_NAME[num(h.pick_type)] || null,
@@ -251,7 +257,8 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
             INSERT INTO pick_contributions (helm_pick_id, user_id, picker_name, items, handling_ms, scans, pick_date, warehouse_id, item_scan_ms, item_scan_count)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             ON CONFLICT (helm_pick_id, user_id) DO UPDATE SET
-              picker_name=EXCLUDED.picker_name, items=EXCLUDED.items, handling_ms=EXCLUDED.handling_ms,
+              picker_name=EXCLUDED.picker_name, items=EXCLUDED.items,
+              handling_ms = CASE WHEN COALESCE(EXCLUDED.handling_ms,0) > 0 THEN EXCLUDED.handling_ms ELSE pick_contributions.handling_ms END,
               scans=EXCLUDED.scans, pick_date=EXCLUDED.pick_date, warehouse_id=EXCLUDED.warehouse_id,
               item_scan_ms=EXCLUDED.item_scan_ms, item_scan_count=EXCLUDED.item_scan_count, updated_at=NOW()
           `, [pickId, c.user_id, cName, c.items, c.handlingMs, c.scans, pickDateStr, num(h.warehouse_id) || null, c.itemScanMs || 0, c.itemScanCount || 0]);

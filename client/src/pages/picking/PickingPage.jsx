@@ -56,25 +56,28 @@ function Kpi({ Icon, label, value, sub, headline }) {
   );
 }
 
-function DailyChart({ days }) {
+function DailyChart({ buckets, granularity }) {
   const [hover, setHover] = useState(null);
-  if (!days?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '40px 0', textAlign: 'center' }}>No waves in this period.</div>;
-  const max = Math.max(...days.map(d => d.picks), 1);
-  const many = days.length > 14;                                   // month/quarter → fixed-width + scroll
-  const labelEvery = days.length > 24 ? 5 : days.length > 14 ? 2 : 1;
+  const data = buckets || [];
+  const hourly = granularity === 'hour';
+  if (!data.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '40px 0', textAlign: 'center' }}>{hourly ? 'No waves on this day.' : 'No waves in this period.'}</div>;
+  const max = Math.max(...data.map(d => d.picks), 1);
+  const many = data.length > 14;                                   // long range / full day → fixed-width + scroll
+  const labelEvery = data.length > 24 ? 3 : data.length > 14 ? 2 : 1;
+  // Day labels arrive as ISO dates → format; hour labels ("09:00") are used as-is.
+  const fmtLabel = (d) => hourly ? d.label : new Date(d.label).toLocaleDateString('en-GB', many ? { day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric' });
   return (
     <div style={{ overflowX: many ? 'auto' : 'visible', paddingBottom: 2 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 180, paddingTop: 10, minWidth: many ? days.length * 26 : '100%' }}>
-        {days.map((d, i) => {
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 180, paddingTop: 10, minWidth: many ? data.length * 26 : '100%' }}>
+        {data.map((d, i) => {
           const h = Math.round((d.picks / max) * 150) + 2;
           const isHover = hover === i;
-          const label = new Date(d.date).toLocaleDateString('en-GB', many ? { day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric' });
           return (
-            <div key={d.date} style={{ flex: many ? '0 0 auto' : 1, width: many ? 24 : 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 0 }}
+            <div key={d.label || i} style={{ flex: many ? '0 0 auto' : 1, width: many ? 24 : 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, minWidth: 0 }}
               onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: isHover ? GREEN : TITLE, height: 14, whiteSpace: 'nowrap' }}>{isHover ? `${d.picks} · ${d.items} items` : d.picks}</div>
-              <div style={{ width: '100%', maxWidth: many ? 22 : 46, height: h, borderRadius: 6, background: isHover ? GREEN_HOVER : GREEN, transition: 'all .12s' }} />
-              <div style={{ fontSize: 10, color: '#94A3B8', whiteSpace: 'nowrap', height: 12 }}>{i % labelEvery === 0 ? label : ''}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: isHover ? GREEN : TITLE, height: 14, whiteSpace: 'nowrap' }}>{isHover ? `${d.picks} · ${d.items} items` : (d.picks || '')}</div>
+              <div style={{ width: '100%', maxWidth: many ? 22 : 46, height: h, borderRadius: 6, background: isHover ? GREEN_HOVER : (d.picks ? GREEN : '#E2E8F0'), transition: 'all .12s' }} />
+              <div style={{ fontSize: 10, color: '#94A3B8', whiteSpace: 'nowrap', height: 12 }}>{i % labelEvery === 0 ? fmtLabel(d) : ''}</div>
             </div>
           );
         })}
@@ -248,8 +251,10 @@ export default function PickingPage() {
           </div>
 
           <Card>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 6 }}>Waves per day</div>
-            <DailyChart days={daily.data?.days} />
+            <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 6 }}>
+              {daily.data?.granularity === 'hour' ? 'Waves per hour' : 'Waves per day'}
+            </div>
+            <DailyChart buckets={daily.data?.buckets} granularity={daily.data?.granularity} />
           </Card>
 
           <Card style={{ marginTop: 16 }}>
