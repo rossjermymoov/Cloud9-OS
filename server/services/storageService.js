@@ -8,26 +8,18 @@
  */
 
 import { query } from '../db/index.js';
-import { helmConfigured, fetchInventoryForClient, fetchInventoryDetail } from './helmClient.js';
-
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+import { helmConfigured, fetchInventoryForClient } from './helmClient.js';
 
 // cm³ → m³ = ÷1e6; mm³ → m³ = ÷1e9; m stays ÷1.
 const UNIT_DIVISOR = { cm: 1e6, mm: 1e9, m: 1 }[(process.env.STORAGE_DIM_UNIT || 'cm').toLowerCase()] || 1e6;
 
 const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 
-/** Per-single-unit volume in m³ from an item's package configurations. */
-function unitVolumeM3(detail) {
-  const configs = Array.isArray(detail?.package_configurations) ? detail.package_configurations
-    : Array.isArray(detail?.package_configuration) ? detail.package_configuration : [];
-  // Prefer a single-unit box (quantity 1); else the first config with real dimensions.
-  const withDims = configs.filter(c => num(c.length) > 0 && num(c.width) > 0 && num(c.height) > 0);
-  if (!withDims.length) return null;
-  const c = withDims.find(x => (parseInt(x.quantity) || 1) === 1) || withDims[0];
-  const boxQty = Math.max(parseInt(c.quantity) || 1, 1);
-  const boxVol = (num(c.length) * num(c.width) * num(c.height)) / UNIT_DIVISOR;  // m³ per box
-  return boxVol / boxQty;                                                        // m³ per unit
+/** Per-single-unit volume in m³ from the item's own product dimensions. */
+function unitVolumeM3(item) {
+  const L = num(item.product_length), W = num(item.product_width), H = num(item.product_height);
+  if (L > 0 && W > 0 && H > 0) return (L * W * H) / UNIT_DIVISOR;
+  return null;
 }
 
 export async function syncStorage({ pageDelayMs = 80 } = {}) {
@@ -54,12 +46,8 @@ export async function syncStorage({ pageDelayMs = 80 } = {}) {
         const invId = it.id != null ? String(it.id) : null;
         if (!invId) continue;
         skus++;
-        let unitM3 = null;
-        try {
-          const detail = await fetchInventoryDetail(invId);
-          unitM3 = unitVolumeM3(detail);
-          if (pageDelayMs) await sleep(pageDelayMs);
-        } catch (e) { errors++; console.warn(`[storage-sync] detail ${invId}: ${e.message}`); }
+        // Dimensions are on the inventory item itself — no per-SKU detail call needed.
+        const unitM3 = unitVolumeM3(it);
         const hasDims = unitM3 != null && unitM3 > 0;
         if (!hasDims) noDims++;
 
