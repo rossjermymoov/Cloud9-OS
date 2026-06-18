@@ -1,0 +1,104 @@
+/**
+ * Cloud9 OS — Storage footprint (m³ per client)
+ *
+ * Pulls each fulfilment client's inventory from Helm, reads package dimensions
+ * (L×W×H + items-per-box) from the item detail, and computes the storage volume
+ * each SKU occupies per location:  volume_m³ = stock × (L·W·H ÷ box_qty).
+ * Helm dimensions are centimetres by default (STORAGE_DIM_UNIT to override).
+ */
+
+import { query } from '../db/index.js';
+import { helmConfigured, fetchInventoryForClient, fetchInventoryDetail } from './helmClient.js';
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// cm³ → m³ = ÷1e6; mm³ → m³ = ÷1e9; m stays ÷1.
+const UNIT_DIVISOR = { cm: 1e6, mm: 1e9, m: 1 }[(process.env.STORAGE_DIM_UNIT || 'cm').toLowerCase()] || 1e6;
+
+const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+
+/** Per-single-unit volume in m³ from an item's package configurations. */
+function unitVolumeM3(detail) {
+  const configs = Array.isArray(detail?.package_configurations) ? detail.package_configurations
+    : Array.isArray(detail?.package_configuration) ? detail.package_configuration : [];
+  // Prefer a single-unit box (quantity 1); else the first config with real dimensions.
+  const withDims = configs.filter(c => num(c.length) > 0 && num(c.width) > 0 && num(c.height) > 0);
+  if (!withDims.length) return null;
+  const c = withDims.find(x => (parseInt(x.quantity) || 1) === 1) || withDims[0];
+  const boxQty = Math.max(parseInt(c.quantity) || 1, 1);
+  const boxVol = (num(c.length) * num(c.width) * num(c.height)) / UNIT_DIVISOR;  // m³ per box
+  return boxVol / boxQty;                                                        // m³ per unit
+}
+
+export async function syncStorage({ pageDelayMs = 80 } = {}) {
+  if (!helmConfigured()) return { error: 'Helm not configured' };
+
+  let logId = null;
+  try {
+    const lr = await query(
+      `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('storage','running',0,$1) RETURNING id`,
+      [`started storage sync at ${new Date().toISOString()}`]
+    );
+    logId = lr.rows[0]?.id || null;
+  } catch (e) { console.warn('[storage-sync] start row:', e.message); }
+
+  let lines = 0, skus = 0, noDims = 0, errors = 0;
+  try {
+    const cm = await query(`SELECT id, helm_customer_id FROM customers WHERE helm_customer_id IS NOT NULL AND account_status = 'active'`);
+    for (const c of cm.rows) {
+      let items;
+      try { items = await fetchInventoryForClient({ helmClientId: c.helm_customer_id }); }
+      catch (e) { errors++; console.warn(`[storage-sync] list ${c.helm_customer_id}: ${e.message}`); continue; }
+
+      for (const it of items) {
+        const invId = it.id != null ? String(it.id) : null;
+        if (!invId) continue;
+        skus++;
+        let unitM3 = null;
+        try {
+          const detail = await fetchInventoryDetail(invId);
+          unitM3 = unitVolumeM3(detail);
+          if (pageDelayMs) await sleep(pageDelayMs);
+        } catch (e) { errors++; console.warn(`[storage-sync] detail ${invId}: ${e.message}`); }
+        const hasDims = unitM3 != null && unitM3 > 0;
+        if (!hasDims) noDims++;
+
+        const locs = Array.isArray(it.locations) ? it.locations : [];
+        // Clear this item's previous lines, then write one per stocked location.
+        await query(`DELETE FROM storage_lines WHERE helm_inventory_id = $1`, [invId]);
+        const stocked = locs.filter(l => (parseInt(l.stock_level) || 0) > 0);
+        const rows = stocked.length ? stocked : [{ location_id: null, location_name: null, warehouse_id: null, stock_level: it.stock_level }];
+        for (const l of rows) {
+          const qty = parseInt(l.stock_level) || 0;
+          const vol = hasDims ? +(qty * unitM3).toFixed(4) : 0;
+          await query(`
+            INSERT INTO storage_lines
+              (helm_inventory_id, sku, name, customer_id, helm_client_id, location_id, location_name,
+               warehouse_id, qty, unit_m3, volume_m3, has_dimensions, computed_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
+            ON CONFLICT (helm_inventory_id, location_id) DO UPDATE SET
+              sku=EXCLUDED.sku, name=EXCLUDED.name, customer_id=EXCLUDED.customer_id,
+              location_name=EXCLUDED.location_name, warehouse_id=EXCLUDED.warehouse_id,
+              qty=EXCLUDED.qty, unit_m3=EXCLUDED.unit_m3, volume_m3=EXCLUDED.volume_m3,
+              has_dimensions=EXCLUDED.has_dimensions, computed_at=NOW()
+          `, [
+            invId, it.sku || null, it.name || null, c.id, String(c.helm_customer_id),
+            l.location_id != null ? String(l.location_id) : null, l.location_name || null,
+            l.warehouse_id != null ? parseInt(l.warehouse_id) : null,
+            qty, hasDims ? +unitM3.toFixed(6) : 0, vol, hasDims,
+          ]);
+          lines++;
+        }
+      }
+    }
+    const detail = `${lines} lines, ${skus} SKUs, ${noDims} without dimensions, ${errors} errors`;
+    if (logId) await query(`UPDATE helm_sync_log SET status='ok', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [lines, detail, logId]);
+    else await query(`INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('storage','ok',$1,$2)`, [lines, detail]);
+    console.log('✅ storage sync complete:', detail);
+    return { lines, skus, noDims, errors };
+  } catch (err) {
+    const msg = `${err.message} (${lines} lines before failing)`;
+    if (logId) await query(`UPDATE helm_sync_log SET status='error', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [lines, msg, logId]).catch(() => {});
+    return { lines, error: err.message };
+  }
+}

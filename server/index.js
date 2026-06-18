@@ -25,6 +25,8 @@ import { syncRecentOrders, syncOrderStatuses } from './services/slaService.js';
 import { syncBankHolidays } from './services/bankHolidayService.js';
 import authRouter, { requireAuth } from './routes/auth.js';
 import warehouseRouter      from './routes/warehouse.js';
+import storageRouter        from './routes/storage.js';
+import { syncStorage }       from './services/storageService.js';
 import queriesRouter        from './routes/queries.js';
 import emailRouter          from './routes/email.js';
 import gmailRouter          from './routes/gmail.js';
@@ -63,6 +65,7 @@ app.use('/api/purchase-orders', requireAuth, purchaseOrdersRouter);
 app.use('/api/returns',         requireAuth, returnsRouter);
 app.use('/api/voila',           requireAuth, voilaRouter);
 app.use('/api/picking',         requireAuth, pickingRouter);
+app.use('/api/storage',         requireAuth, storageRouter);
 app.use('/api/sla',             requireAuth, slaRouter);
 
 // Queries & Claims module (ported from Moov OS). slaRules mounts at /api/sla-rules
@@ -139,6 +142,21 @@ async function start() {
       }
     }, 60 * 1000);
     console.log('🌙 Pending-collection clear scheduled for 20:00 UK');
+  }
+
+  // Storage footprint (m³ per client) — recompute nightly at 03:00 UK (slow,
+  // detail-per-SKU). Inventory changes slowly, so once a night is plenty.
+  if (helmConfigured()) {
+    let lastStorage = null;
+    setInterval(() => {
+      const uk = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/London' }));
+      const key = `${uk.getFullYear()}-${uk.getMonth()}-${uk.getDate()}`;
+      if (uk.getHours() === 3 && uk.getMinutes() === 0 && lastStorage !== key) {
+        lastStorage = key;
+        syncStorage().catch(e => console.warn('[storage-sync]', e.message));
+      }
+    }, 60 * 1000);
+    console.log('📦 Storage footprint sync scheduled for 03:00 UK');
   }
 
   // UK bank holidays — refresh on boot and weekly (independent of Helm).

@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, Truck, PackagePlus, RotateCcw, Bell, MessageSquare, Settings, ScanBarcode, Clock, UserCog,
+  LayoutDashboard, Users, Truck, PackagePlus, RotateCcw, Bell, MessageSquare, Settings, ScanBarcode, Clock, UserCog, Warehouse,
 } from 'lucide-react';
 
 const NAV = [
@@ -9,6 +9,7 @@ const NAV = [
   { to: '/tracking',        label: 'Tracking',         Icon: Truck },
   { to: '/purchase-orders', label: 'Purchase Orders',  Icon: PackagePlus },
   { to: '/picking',         label: 'Picking',          Icon: ScanBarcode },
+  { to: '/storage',         label: 'Storage',          Icon: Warehouse },
   { to: '/on-time',         label: 'On-Time Dispatch', Icon: Clock },
   { to: '/returns',         label: 'Returns',          Icon: RotateCcw },
   { to: '/notifications',   label: 'Notifications',    Icon: Bell },

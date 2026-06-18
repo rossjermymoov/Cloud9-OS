@@ -296,3 +296,33 @@ export async function fetchPicks({ from, to, statuses = [], perPage = 100, maxPa
 export async function fetchPickDetail(pickId) {
   return authedGet(`/picks/${pickId}`);
 }
+
+// ─── Inventory & storage (m³ per client) ─────────────────────────────────────
+/**
+ * List all inventory for one fulfilment client. Each item carries stock_level
+ * and a locations[] array (which bins hold it + how much), but NOT package
+ * dimensions — those need the detail call.
+ */
+export async function fetchInventoryForClient({ helmClientId, perPage = 100, maxPages = 200 }) {
+  const all = [];
+  let page = 1;
+  for (let i = 0; i < maxPages; i++) {
+    const qs = new URLSearchParams();
+    qs.set('page', String(page));
+    qs.set('per_page', String(perPage));
+    if (helmClientId != null) qs.append('filters[fulfilment_clients][]', String(helmClientId));
+    const res = await authedGet(`/inventory?${qs.toString()}`);
+    const rows = res.data || [];
+    all.push(...rows);
+    const lastPage = parseInt(res.last_page) || 1;
+    const curPage = parseInt(res.current_page) || page;
+    if (rows.length === 0 || curPage >= lastPage) break;
+    page++;
+  }
+  return all;
+}
+
+/** Full inventory item incl. package_configurations (dimensions). */
+export async function fetchInventoryDetail(id) {
+  return authedGet(`/inventory/${id}`);
+}

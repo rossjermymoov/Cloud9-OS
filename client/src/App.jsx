@@ -7,6 +7,7 @@ import CustomerRecord from './pages/customers/CustomerRecord';
 import TrackingPage from './pages/tracking/TrackingPage';
 import PurchaseOrdersPage from './pages/purchaseOrders/PurchaseOrdersPage';
 import PickingPage from './pages/picking/PickingPage';
+import StoragePage from './pages/storage/StoragePage';
 import OnTimePage from './pages/sla/OnTimePage';
 import ReturnsPage from './pages/returns/ReturnsPage';
 import NotificationCenter from './pages/notifications/NotificationCenter';
@@ -42,6 +43,7 @@ function GatedApp() {
         <Route path="tracking"        element={<TrackingPage />} />
         <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
         <Route path="picking"         element={<PickingPage />} />
+        <Route path="storage"         element={<StoragePage />} />
         <Route path="on-time"         element={<OnTimePage />} />
         <Route path="returns"         element={<ReturnsPage />} />
         <Route path="notifications"   element={<NotificationCenter />} />
