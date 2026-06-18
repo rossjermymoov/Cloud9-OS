@@ -97,6 +97,10 @@ export async function syncStorage({ pageDelayMs = 80 } = {}) {
   }
 
   try {
+    // Full rebuild: wipe the table first so SKUs that are now excluded (Components/
+    // Groups) or no longer in Helm don't leave stale rows inflating the totals.
+    await query(`DELETE FROM storage_lines`);
+
     const cm = await query(`SELECT id, helm_customer_id FROM customers WHERE helm_customer_id IS NOT NULL AND account_status = 'active'`);
     for (const c of cm.rows) {
       let items;
