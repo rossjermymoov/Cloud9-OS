@@ -11,7 +11,7 @@
 
 import express from 'express';
 import { query } from '../db/index.js';
-import { helmConfigured } from '../services/helmClient.js';
+import { helmConfigured, fetchInventoryForClient, fetchInventoryDetail } from '../services/helmClient.js';
 import { syncStorage } from '../services/storageService.js';
 
 const router = express.Router();
@@ -73,6 +73,33 @@ router.get('/customer/:id', async (req, res, next) => {
       ORDER BY volume_m3 DESC LIMIT 1000`, [req.params.id]);
     res.json(rows);
   } catch (err) { next(err); }
+});
+
+// Inspect a live sample so we can see the real inventory + dimensions shape.
+router.get('/inspect', async (req, res, next) => {
+  try {
+    if (!helmConfigured()) return res.status(503).json({ error: 'Helm not configured' });
+    const cm = await query(`SELECT id, business_name, helm_customer_id FROM customers
+                            WHERE helm_customer_id IS NOT NULL AND account_status = 'active'
+                            ORDER BY business_name LIMIT 1`);
+    const c = cm.rows[0];
+    if (!c) return res.json({ error: 'No active customers with a Helm id' });
+    let items = [];
+    try { items = await fetchInventoryForClient({ helmClientId: c.helm_customer_id, perPage: 5, maxPages: 1 }); }
+    catch (e) { return res.json({ customer: c.business_name, helm_client_id: c.helm_customer_id, list_error: e.message }); }
+    const sample = items[0] || null;
+    let detail = null, detailErr = null;
+    if (sample) { try { detail = await fetchInventoryDetail(String(sample.id)); } catch (e) { detailErr = e.message; } }
+    res.json({
+      customer: c.business_name, helm_client_id: c.helm_customer_id,
+      inventory_first_page_count: items.length,
+      list_item_keys: sample ? Object.keys(sample) : null,
+      list_sample: sample ? { id: sample.id, sku: sample.sku, stock_level: sample.stock_level, locations: sample.locations } : null,
+      detail_keys: detail ? Object.keys(detail) : null,
+      detail_error: detailErr,
+      package_configurations: detail ? (detail.package_configurations ?? detail.package_configuration ?? '(field not present)') : null,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 router.get('/freshness', async (_req, res, next) => {
