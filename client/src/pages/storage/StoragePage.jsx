@@ -25,48 +25,115 @@ function Kpi({ Icon, label, value, sub }) {
   );
 }
 
-// Simple recursive slice-and-dice treemap — area ∝ value, alternating split direction.
-function treemap(items, x, y, w, h, horizontal = true) {
-  const total = items.reduce((a, i) => a + i.value, 0);
-  if (!total || items.length === 0) return [];
-  if (items.length === 1) return [{ ...items[0], x, y, w, h }];
-  let acc = 0, idx = 0;
-  for (; idx < items.length - 1; idx++) { acc += items[idx].value; if (acc >= total / 2) { idx++; break; } }
-  const a = items.slice(0, idx), b = items.slice(idx);
-  const frac = a.reduce((s, i) => s + i.value, 0) / total;
-  if (horizontal) {
-    const wa = w * frac;
-    return [...treemap(a, x, y, wa, h, !horizontal), ...treemap(b, x + wa, y, w - wa, h, !horizontal)];
+// ── Squarified treemap (Bruls, Huizing & van Wijk) ──────────────────────────
+// Greedily packs rows along the shorter side, keeping every rectangle as close
+// to square as possible. Output rectangles tile the box exactly — no overlaps,
+// no ragged seams — so adjacent blocks always share a clean edge.
+function squarify(items, X, Y, W, H) {
+  const out = [];
+  const total = items.reduce((s, it) => s + it.value, 0);
+  if (total <= 0 || !items.length) return out;
+  const nodes = items.map(it => ({ it, area: (it.value / total) * W * H }));
+
+  const worst = (row, side) => {
+    const sum = row.reduce((a, r) => a + r.area, 0);
+    const max = Math.max(...row.map(r => r.area));
+    const min = Math.min(...row.map(r => r.area));
+    const s2 = sum * sum, side2 = side * side;
+    return Math.max((side2 * max) / s2, s2 / (side2 * min));
+  };
+
+  let rect = { x: X, y: Y, w: W, h: H };
+  const place = (row) => {
+    const sum = row.reduce((a, r) => a + r.area, 0);
+    if (rect.w >= rect.h) {                    // lay a vertical column on the left
+      const colW = sum / rect.h;
+      let yy = rect.y;
+      for (const r of row) { const hh = r.area / colW; out.push({ ...r.it, x: rect.x, y: yy, w: colW, h: hh }); yy += hh; }
+      rect.x += colW; rect.w -= colW;
+    } else {                                   // lay a horizontal row on the top
+      const rowH = sum / rect.w;
+      let xx = rect.x;
+      for (const r of row) { const ww = r.area / rowH; out.push({ ...r.it, x: xx, y: rect.y, w: ww, h: rowH }); xx += ww; }
+      rect.y += rowH; rect.h -= rowH;
+    }
+  };
+
+  let row = [];
+  for (let i = 0; i < nodes.length;) {
+    const side = Math.min(rect.w, rect.h);
+    const next = [...row, nodes[i]];
+    if (!row.length || worst(next, side) <= worst(row, side)) { row = next; i++; }
+    else { place(row); row = []; }
   }
-  const ha = h * frac;
-  return [...treemap(a, x, y, w, ha, !horizontal), ...treemap(b, x, y + ha, w, h - ha, !horizontal)];
+  if (row.length) place(row);
+  return out;
 }
 
-function StorageMap({ rows, navigate }) {
+function StorageMap({ rows, total, navigate }) {
+  const [hover, setHover] = useState(null);   // { node, x, y }
   const W = 1000, H = 460;
   const data = (rows || []).filter(r => r.m3 > 0).map((r, i) => ({ ...r, value: r.m3, color: PALETTE[i % PALETTE.length] }));
   if (!data.length) return <div style={{ color: '#94A3B8', fontSize: 13, padding: '60px 0', textAlign: 'center' }}>No storage volume computed yet.</div>;
-  const boxes = treemap(data, 0, 0, W, H);
-  const total = data.reduce((a, d) => a + d.value, 0);
+  const grand = total || data.reduce((a, d) => a + d.value, 0);
+  const boxes = squarify(data, 0, 0, W, H);
+  const pctOf = (v) => grand ? (v / grand) * 100 : 0;
+  const pc = (v) => `${(v ?? 0).toLocaleString(undefined, { maximumFractionDigits: v < 10 ? 1 : 0 })}%`;
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block', borderRadius: 10 }}>
+    <div style={{ position: 'relative', width: '100%', aspectRatio: `${W} / ${H}`, borderRadius: 10, overflow: 'hidden' }}>
       {boxes.map((b, i) => {
-        const pad = 2, bw = Math.max(0, b.w - pad), bh = Math.max(0, b.h - pad);
-        const big = bw > 90 && bh > 44;
-        const med = bw > 54 && bh > 26;
-        const pct = total ? Math.round((b.value / total) * 100) : 0;
+        const left = (b.x / W) * 100, top = (b.y / H) * 100, w = (b.w / W) * 100, h = (b.h / H) * 100;
+        const showFull = b.w > 96 && b.h > 46;     // name + stats
+        const showName = b.w > 52 && b.h > 26;     // name only
+        const pct = pctOf(b.value);
         return (
-          <g key={i} style={{ cursor: 'pointer' }} onClick={() => b.id && navigate(`/customers/${b.id}`)}>
-            <rect x={b.x + pad / 2} y={b.y + pad / 2} width={bw} height={bh} rx={6} fill={b.color} opacity={0.92} />
-            {big && <>
-              <text x={b.x + 10} y={b.y + 24} fontSize={15} fontWeight={800} fill="#fff">{b.name}</text>
-              <text x={b.x + 10} y={b.y + 44} fontSize={13} fontWeight={600} fill="rgba(255,255,255,0.85)">{m3(b.m3)} · {pct}%</text>
-            </>}
-            {med && !big && <text x={b.x + 7} y={b.y + 18} fontSize={11} fontWeight={700} fill="#fff">{b.name?.slice(0, 14)}</text>}
-          </g>
+          <div key={i}
+            onClick={() => b.id && navigate(`/customers/${b.id}`)}
+            onMouseEnter={(e) => setHover({ node: b, x: e.clientX, y: e.clientY })}
+            onMouseMove={(e) => setHover({ node: b, x: e.clientX, y: e.clientY })}
+            onMouseLeave={() => setHover(null)}
+            style={{
+              position: 'absolute', left: `${left}%`, top: `${top}%`, width: `${w}%`, height: `${h}%`,
+              background: b.color, border: '1.5px solid #fff', boxSizing: 'border-box',
+              padding: showName ? '8px 10px' : 0, cursor: b.id ? 'pointer' : 'default',
+              display: 'flex', flexDirection: 'column', justifyContent: 'flex-start', overflow: 'hidden',
+            }}>
+            {showName && (
+              <div style={{ fontSize: showFull ? 14 : 11.5, fontWeight: 800, color: '#fff', lineHeight: 1.2,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                {b.name}
+              </div>
+            )}
+            {showFull && (
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: 'rgba(255,255,255,0.88)', marginTop: 3,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>
+                {m3(b.m3)} · {pc(pct)}
+              </div>
+            )}
+          </div>
         );
       })}
-    </svg>
+
+      {hover && (
+        <div style={{
+          position: 'fixed', left: Math.min(hover.x + 14, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 240),
+          top: hover.y + 16, zIndex: 1000, pointerEvents: 'none',
+          background: '#0B1220', color: '#fff', borderRadius: 10, padding: '10px 13px', minWidth: 170, maxWidth: 240,
+          boxShadow: '0 8px 24px rgba(2,6,23,0.35)', border: '1px solid rgba(255,255,255,0.08)',
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 6, whiteSpace: 'normal', lineHeight: 1.25 }}>{hover.node.name}</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 12, marginBottom: 3 }}>
+            <span style={{ color: 'rgba(255,255,255,0.6)' }}>Volume</span>
+            <strong>{(hover.node.m3 ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })} m³</strong>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, fontSize: 12 }}>
+            <span style={{ color: 'rgba(255,255,255,0.6)' }}>Share of total</span>
+            <strong>{pc(pctOf(hover.node.m3))}</strong>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -208,7 +275,7 @@ export default function StoragePage() {
           <Card style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 4 }}>Storage map — who's using the most</div>
             <div style={{ fontSize: 12, color: '#94A3B8', marginBottom: 12 }}>Each block is a customer, sized by cubic metres. Click to open their record.</div>
-            <StorageMap rows={s?.top_customers} navigate={navigate} />
+            <StorageMap rows={s?.top_customers} total={s?.total_m3} navigate={navigate} />
           </Card>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
