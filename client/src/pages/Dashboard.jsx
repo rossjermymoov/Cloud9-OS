@@ -340,10 +340,10 @@ export default function Dashboard() {
 
   const { data: stats }  = useQuery({ queryKey: ['tracking-stats'], queryFn: () => api.get('/tracking/stats').then(r => r.data) });
   const { data: notifs } = useQuery({ queryKey: ['dashboard-notifs'], queryFn: () => listNotifications({ limit: 7 }) });
-  const { data: customers } = useQuery({ queryKey: ['customers-list'], queryFn: () => listCustomers() });
+  const { data: customers } = useQuery({ queryKey: ['customers-list'], queryFn: () => listCustomers({ limit: 500, sort: 'business_name', order: 'asc' }) });
   const { data: trend }  = useQuery({ queryKey: ['volume-trend', period, dateParam, excluded], queryFn: () => volumeTrend(period, dateParam, excluded) });
   const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort, dateParam, excluded], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort, date: dateParam, exclude: excluded }) });
-  const custList = Array.isArray(customers) ? customers : (customers?.rows || customers?.customers || []);
+  const custList = Array.isArray(customers) ? customers : (customers?.data || customers?.rows || customers?.customers || []);
 
   const byStatus = stats?.by_status || {};
   const statusRows = Object.entries(byStatus).sort((a, b) => b[1] - a[1]);
