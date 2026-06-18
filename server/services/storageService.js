@@ -10,15 +10,30 @@
 import { query } from '../db/index.js';
 import { helmConfigured, fetchInventoryForClient } from './helmClient.js';
 
-// cm³ → m³ = ÷1e6; mm³ → m³ = ÷1e9; m stays ÷1.
-const UNIT_DIVISOR = { cm: 1e6, mm: 1e9, m: 1 }[(process.env.STORAGE_DIM_UNIT || 'cm').toLowerCase()] || 1e6;
+// Helm product dimensions are CENTIMETRES. cm³ → m³ = ÷1e6.
+// Only an explicit 'mm' override changes this; anything else (including a stray
+// 'm', or unset) resolves to cm. Previously 'm' divided by 1 and treated cm
+// numbers as metres, inflating every volume by 1,000,000× (e.g. a 100×100×116cm
+// SKU showed as 1,160,000 "m³" instead of 1.16 m³).
+const DIM_UNIT = (process.env.STORAGE_DIM_UNIT || 'cm').toLowerCase();
+const UNIT_DIVISOR = DIM_UNIT === 'mm' ? 1e9 : 1e6;
+// A single physical unit over ~30 m³ (a >3.1 m cube) is a data error, not real
+// stock — drop it so one bad dimension can't dominate a location/customer.
+const MAX_UNIT_M3 = 30;
+
+export function dimUnitInfo() {
+  return { configured: process.env.STORAGE_DIM_UNIT || '(unset → cm)', effective_unit: DIM_UNIT === 'mm' ? 'mm' : 'cm', divisor: UNIT_DIVISOR };
+}
 
 const num = (v) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 
 /** Per-single-unit volume in m³ from the item's own product dimensions. */
 function unitVolumeM3(item) {
   const L = num(item.product_length), W = num(item.product_width), H = num(item.product_height);
-  if (L > 0 && W > 0 && H > 0) return (L * W * H) / UNIT_DIVISOR;
+  if (L > 0 && W > 0 && H > 0) {
+    const v = (L * W * H) / UNIT_DIVISOR;
+    return v > MAX_UNIT_M3 ? null : v;   // implausible single-unit volume → treat as no dims
+  }
   return null;
 }
 

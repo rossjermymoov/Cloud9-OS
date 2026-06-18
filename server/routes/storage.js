@@ -12,9 +12,29 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured, fetchInventoryForClient, fetchInventoryDetail } from '../services/helmClient.js';
-import { syncStorage } from '../services/storageService.js';
+import { syncStorage, dimUnitInfo } from '../services/storageService.js';
 
 const router = express.Router();
+
+// Debug: what unit are we converting from, and what are the biggest stored lines?
+// A single-unit volume (unit_m3) far above ~1 m³ for ordinary stock is the tell
+// that dimensions are being read in the wrong unit.
+router.get('/debug', async (_req, res, next) => {
+  try {
+    const top = await query(`
+      SELECT s.sku, s.name, s.location_name, s.qty,
+             s.unit_m3::float AS unit_m3, s.volume_m3::float AS volume_m3,
+             c.business_name AS customer
+      FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE s.has_dimensions
+      ORDER BY s.volume_m3 DESC LIMIT 20`);
+    res.json({
+      dimensions: dimUnitInfo(),
+      note: 'unit_m3 is the volume of ONE unit. Ordinary stock should be well under 1 m³; values in the hundreds/thousands mean dimensions are being read as the wrong unit.',
+      biggest_lines: top.rows,
+    });
+  } catch (err) { next(err); }
+});
 
 router.get('/summary', async (_req, res, next) => {
   try {
