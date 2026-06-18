@@ -3,11 +3,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   Truck, Boxes, Send, Hand, PackageOpen, RefreshCw, Database,
-  TrendingUp, TrendingDown, Minus, Trophy, Info, Maximize2, X,
+  TrendingUp, TrendingDown, Minus, Trophy, Info, Maximize2, X, Filter,
 } from 'lucide-react';
 import api from '../api/client';
 import { listNotifications } from '../api/notifications';
 import { volumeTrend, volumeLeaderboard } from '../api/volume';
+import { listCustomers } from '../api/customers';
 
 // ── palette + status config ──────────────────────────────────
 const STATUS_RAG = {
@@ -327,11 +328,22 @@ export default function Dashboard() {
   const minStr = isoOf(new Date(Date.now() - 90 * 86400000));
   const [customDate, setCustomDate] = useState(todayStr);
   const dateParam = period === 'custom' ? customDate : null;
+  const [excluded, setExcluded] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('c9_dash_excluded') || '[]'); } catch { return []; }
+  });
+  const [showExclude, setShowExclude] = useState(false);
+  const toggleExcluded = (id) => setExcluded(prev => {
+    const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
+    localStorage.setItem('c9_dash_excluded', JSON.stringify(next));
+    return next;
+  });
 
   const { data: stats }  = useQuery({ queryKey: ['tracking-stats'], queryFn: () => api.get('/tracking/stats').then(r => r.data) });
   const { data: notifs } = useQuery({ queryKey: ['dashboard-notifs'], queryFn: () => listNotifications({ limit: 7 }) });
-  const { data: trend }  = useQuery({ queryKey: ['volume-trend', period, dateParam], queryFn: () => volumeTrend(period, dateParam) });
-  const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort, dateParam], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort, date: dateParam }) });
+  const { data: customers } = useQuery({ queryKey: ['customers-list'], queryFn: () => listCustomers() });
+  const { data: trend }  = useQuery({ queryKey: ['volume-trend', period, dateParam, excluded], queryFn: () => volumeTrend(period, dateParam, excluded) });
+  const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort, dateParam, excluded], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort, date: dateParam, exclude: excluded }) });
+  const custList = Array.isArray(customers) ? customers : (customers?.rows || customers?.customers || []);
 
   const byStatus = stats?.by_status || {};
   const statusRows = Object.entries(byStatus).sort((a, b) => b[1] - a[1]);
@@ -381,6 +393,32 @@ export default function Dashboard() {
               onChange={e => setCustomDate(e.target.value || todayStr)}
               style={{ border: '1px solid #E2E8F0', borderRadius: 9, padding: '7px 10px', fontSize: 12.5, fontWeight: 600, color: TITLE, fontFamily: 'inherit' }} />
           )}
+          <div style={{ position: 'relative' }}>
+            <button onClick={() => setShowExclude(s => !s)} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid #E2E8F0',
+              background: excluded.length ? '#EEF4FF' : '#fff', cursor: 'pointer', borderRadius: 9,
+              padding: '7px 11px', fontSize: 12.5, fontWeight: 600, color: excluded.length ? ACCENT : TITLE }}>
+              <Filter size={13} /> {excluded.length ? `Excluding ${excluded.length}` : 'Exclude customers'}
+            </button>
+            {showExclude && (
+              <>
+                <div onClick={() => setShowExclude(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+                <div style={{ position: 'absolute', top: '112%', right: 0, width: 290, maxHeight: 380, overflowY: 'auto', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 10, boxShadow: CARD_SHADOW, zIndex: 50, padding: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px 8px' }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: TITLE }}>Exclude from stats</span>
+                    {excluded.length > 0 && <span onClick={() => { setExcluded([]); localStorage.setItem('c9_dash_excluded', '[]'); }} style={{ fontSize: 11.5, color: ACCENT, cursor: 'pointer', fontWeight: 600 }}>Clear all</span>}
+                  </div>
+                  {custList.map(c => (
+                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }}>
+                      <input type="checkbox" checked={excluded.includes(c.id)} onChange={() => toggleExcluded(c.id)} />
+                      <span style={{ color: TITLE }}>{c.business_name}</span>
+                    </label>
+                  ))}
+                  {custList.length === 0 && <div style={{ padding: 8, fontSize: 12, color: MUTED }}>No customers loaded.</div>}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 

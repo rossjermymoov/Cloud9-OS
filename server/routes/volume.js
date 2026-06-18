@@ -92,6 +92,8 @@ function parseCustomDate(s) {
 router.get('/trend', async (req, res, next) => {
   try {
     const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(req.query.period) ? req.query.period : 'week';
+    // Customers to leave OUT of the parcel/item totals (e.g. a whale that skews the view).
+    const excl = req.query.exclude ? String(req.query.exclude).split(',').map(s => s.trim()).filter(Boolean) : [];
 
     // Custom single day — parcels/items from snapshots, picks from the picks table.
     const customDate = parseCustomDate(req.query.date);
@@ -100,7 +102,7 @@ router.get('/trend', async (req, res, next) => {
       const dayStr = ymd(customDate), startStr = ymd(addD(customDate, -13));
       const [snap, pk] = await Promise.all([
         query(`SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
-               FROM customer_volume_snapshots WHERE snapshot_date BETWEEN $1 AND $2 GROUP BY snapshot_date`, [startStr, dayStr]),
+               FROM customer_volume_snapshots WHERE snapshot_date BETWEEN $1 AND $2 AND customer_id <> ALL($3::uuid[]) GROUP BY snapshot_date`, [startStr, dayStr, excl]),
         query(`SELECT pick_date::text AS d, COUNT(*)::int AS k
                FROM picks WHERE status = 1 AND pick_date BETWEEN $1 AND $2 GROUP BY pick_date`, [startStr, dayStr]),
       ]);
@@ -115,7 +117,7 @@ router.get('/trend', async (req, res, next) => {
     }
     const [snap, picks] = await Promise.all([
       query(`SELECT snapshot_date::text AS d, SUM(parcel_count)::int AS p, SUM(item_count)::int AS i
-             FROM customer_volume_snapshots WHERE snapshot_date >= CURRENT_DATE - 220 GROUP BY snapshot_date`),
+             FROM customer_volume_snapshots WHERE snapshot_date >= CURRENT_DATE - 220 AND customer_id <> ALL($1::uuid[]) GROUP BY snapshot_date`, [excl]),
       query(`SELECT pick_date::text AS d, COUNT(*)::int AS k FROM picks
              WHERE status = 1 AND pick_date >= CURRENT_DATE - 220 GROUP BY pick_date`),
     ]);
@@ -242,6 +244,7 @@ router.get('/leaderboard', async (req, res, next) => {
       curStart = add(now, -89); curEnd = now; prevStart = add(now, -179); prevEnd = add(now, -90);
     }
 
+    const excl = req.query.exclude ? String(req.query.exclude).split(',').map(s => s.trim()).filter(Boolean) : [];
     const { rows } = await query(`
       SELECT c.id, c.business_name,
              COALESCE(cur.v, 0)::int  AS current,
@@ -251,8 +254,8 @@ router.get('/leaderboard', async (req, res, next) => {
                  WHERE snapshot_date BETWEEN $1 AND $2 GROUP BY customer_id) cur  ON cur.customer_id = c.id
       LEFT JOIN (SELECT customer_id, SUM(${metricCol}) v FROM customer_volume_snapshots
                  WHERE snapshot_date BETWEEN $3 AND $4 GROUP BY customer_id) prev ON prev.customer_id = c.id
-      WHERE COALESCE(cur.v,0) + COALESCE(prev.v,0) > 0
-    `, [ymd(curStart), ymd(curEnd), ymd(prevStart), ymd(prevEnd)]);
+      WHERE COALESCE(cur.v,0) + COALESCE(prev.v,0) > 0 AND c.id <> ALL($5::uuid[])
+    `, [ymd(curStart), ymd(curEnd), ymd(prevStart), ymd(prevEnd), excl]);
 
     const ranked = rows.map(r => {
       const growth = r.previous > 0 ? Math.round(((r.current - r.previous) / r.previous) * 1000) / 10 : (r.current > 0 ? null : 0);

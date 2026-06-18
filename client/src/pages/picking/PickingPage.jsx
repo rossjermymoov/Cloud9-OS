@@ -58,7 +58,7 @@ function Kpi({ Icon, label, value, sub, headline }) {
 
 function DailyChart({ days }) {
   const [hover, setHover] = useState(null);
-  if (!days?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '40px 0', textAlign: 'center' }}>No picks in this period.</div>;
+  if (!days?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '40px 0', textAlign: 'center' }}>No waves in this period.</div>;
   const max = Math.max(...days.map(d => d.picks), 1);
   const many = days.length > 14;                                   // month/quarter → fixed-width + scroll
   const labelEvery = days.length > 24 ? 5 : days.length > 14 ? 2 : 1;
@@ -84,7 +84,7 @@ function DailyChart({ days }) {
 }
 
 function Leaderboard({ rows }) {
-  if (!rows?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '30px 0', textAlign: 'center' }}>No completed picks attributed to a picker yet.</div>;
+  if (!rows?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '30px 0', textAlign: 'center' }}>No completed waves attributed to a picker yet.</div>;
   const RANK = ['#F59E0B', '#94A3B8', '#B45309'];
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -94,8 +94,8 @@ function Leaderboard({ rows }) {
           <th style={{ padding: '8px 6px' }}>Picker</th>
           <th style={{ padding: '8px 6px', textAlign: 'right', color: GREEN }}>Items / hr</th>
           <th style={{ padding: '8px 6px', textAlign: 'right' }}>Items</th>
-          <th style={{ padding: '8px 6px', textAlign: 'right' }}>Picks</th>
-          <th style={{ padding: '8px 6px', textAlign: 'right' }}>Avg / pick</th>
+          <th style={{ padding: '8px 6px', textAlign: 'right' }}>Waves</th>
+          <th style={{ padding: '8px 6px', textAlign: 'right' }}>Avg / wave</th>
         </tr>
       </thead>
       <tbody>
@@ -122,14 +122,14 @@ function Leaderboard({ rows }) {
 }
 
 function PicksTable({ rows }) {
-  if (!rows?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '24px 0', textAlign: 'center' }}>No completed picks in this period.</div>;
+  if (!rows?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '24px 0', textAlign: 'center' }}>No completed waves in this period.</div>;
   return (
     <div style={{ maxHeight: 420, overflowY: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
           <tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5, position: 'sticky', top: 0, background: '#fff' }}>
             <th style={{ padding: '8px 6px' }}>Completed</th>
-            <th style={{ padding: '8px 6px' }}>Pick</th>
+            <th style={{ padding: '8px 6px' }}>Wave</th>
             <th style={{ padding: '8px 6px' }}>Picker</th>
             <th style={{ padding: '8px 6px', textAlign: 'right' }}>Items</th>
             <th style={{ padding: '8px 6px', textAlign: 'right' }}>Time taken</th>
@@ -145,7 +145,7 @@ function PicksTable({ rows }) {
               <td style={{ padding: '9px 6px', color: TITLE }}>
                 {r.picker_name || 'Unassigned'}
                 {r.contributor_count > 1 && (
-                  <span title={`${r.contributor_count} pickers worked this pick`}
+                  <span title={`${r.contributor_count} pickers worked this wave`}
                     style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#7C3AED', background: '#F3E8FF', borderRadius: 5, padding: '1px 5px' }}>
                     +{r.contributor_count - 1}
                   </span>
@@ -226,7 +226,7 @@ export default function PickingPage() {
           </div>
           <div style={{ fontSize: 16, fontWeight: 700, color: TITLE, marginBottom: 6 }}>No picking data yet</div>
           <div style={{ fontSize: 13.5, color: MUTED, maxWidth: 440, margin: '0 auto 18px' }}>
-            Pull completed picks from Helm to see how many picks were done, items per pick, time per pick and your best pickers.
+            Pull completed waves from Helm to see how many waves were done, items per wave, time per wave and your best pickers.
           </div>
           <button onClick={runSync} disabled={syncing}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 8, border: 'none', background: GREEN, color: '#fff', cursor: syncing ? 'default' : 'pointer', borderRadius: 10, padding: '11px 20px', fontSize: 13.5, fontWeight: 700, opacity: syncing ? 0.6 : 1 }}>
@@ -238,13 +238,13 @@ export default function PickingPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 14, marginBottom: 16 }}>
             <Kpi headline Icon={Gauge} label="Items per hour" value={s?.items_per_hour ?? '—'}
               sub={s?.items_per_hour != null ? 'Throughput across all pickers' : (s?.picks ? 'Timing data incomplete' : 'Throughput across all pickers')} />
-            <Kpi Icon={ListChecks} label="Picks completed" value={s?.picks ?? '—'} sub={s?.orders ? `${s.orders} orders` : null} />
-            <Kpi Icon={Boxes} label="Items picked" value={(s?.items ?? 0).toLocaleString()} sub={s?.avg_items_per_pick != null ? `${s.avg_items_per_pick} per pick` : null} />
-            <Kpi Icon={Timer} label="Avg time per pick" value={fmtDuration(s?.avg_secs_per_pick)} sub="Active handling time" />
+            <Kpi Icon={ListChecks} label="Waves completed" value={s?.picks ?? '—'} sub={s?.orders ? `${s.orders} orders` : null} />
+            <Kpi Icon={Boxes} label="Items picked" value={(s?.items ?? 0).toLocaleString()} sub={s?.avg_items_per_pick != null ? `${s.avg_items_per_pick} per wave` : null} />
+            <Kpi Icon={Timer} label="Avg time per wave" value={fmtDuration(s?.avg_secs_per_pick)} sub="Active handling time" />
           </div>
 
           <Card>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 6 }}>Picks per day</div>
+            <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 6 }}>Waves per day</div>
             <DailyChart days={daily.data?.days} />
           </Card>
 
@@ -259,8 +259,8 @@ export default function PickingPage() {
 
           <Card style={{ marginTop: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Picks — who did them &amp; how long</span>
-              <span style={{ fontSize: 11.5, color: '#94A3B8' }}>{picks.data?.rows?.length || 0} picks</span>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Waves — who did them &amp; how long</span>
+              <span style={{ fontSize: 11.5, color: '#94A3B8' }}>{picks.data?.rows?.length || 0} waves</span>
             </div>
             <PicksTable rows={picks.data?.rows} />
           </Card>
