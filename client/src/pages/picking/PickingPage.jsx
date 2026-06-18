@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal, Hand } from 'lucide-react';
+import { ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal, Hand, Clock, Check } from 'lucide-react';
 import {
   pickingSummary, pickingDaily, pickingLeaderboard, pickingPicks, pickingFreshness, triggerPickSync,
+  pickingSettings, savePickingDayWindow,
 } from '../../api/picking';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
@@ -64,8 +65,8 @@ function DailyChart({ buckets, granularity }) {
   const max = Math.max(...data.map(d => d.picks), 1);
   const many = data.length > 14;                                   // long range / full day → fixed-width + scroll
   const labelEvery = data.length > 24 ? 3 : data.length > 14 ? 2 : 1;
-  // Day labels arrive as ISO dates → format; hour labels ("09:00") are used as-is.
-  const fmtLabel = (d) => hourly ? d.label : new Date(d.label).toLocaleDateString('en-GB', many ? { day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric' });
+  // Hour labels ("8 till 9") arrive ready-made; day labels are ISO dates → format.
+  const fmtLabel = (d) => hourly ? (d.label || '') : new Date(d.label).toLocaleDateString('en-GB', many ? { day: 'numeric', month: 'short' } : { weekday: 'short', day: 'numeric' });
   return (
     <div style={{ overflowX: many ? 'auto' : 'visible', paddingBottom: 2 }}>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 180, paddingTop: 10, minWidth: many ? data.length * 26 : '100%' }}>
@@ -166,6 +167,70 @@ function PicksTable({ rows }) {
   );
 }
 
+// 24h hour → "8am" / "12pm" / "6pm" for the editor controls.
+const hour12 = (h) => { const ap = h < 12 || h === 24 ? 'am' : 'pm'; const d = h % 12 === 0 ? 12 : h % 12; return `${d}${ap}`; };
+
+function HourWindowEditor() {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['picking', 'settings'], queryFn: pickingSettings });
+  const win = data?.day_window;
+  const [open, setOpen] = useState(false);
+  const [start, setStart] = useState(8);
+  const [end, setEnd] = useState(18);
+  const [saving, setSaving] = useState(false);
+  // Sync local edits to the loaded setting whenever the popover is opened.
+  const openEditor = () => { if (win) { setStart(win.start_hour); setEnd(win.end_hour); } setOpen(true); };
+
+  async function save() {
+    if (end <= start) return;
+    setSaving(true);
+    try {
+      await savePickingDayWindow(start, end);
+      await qc.invalidateQueries({ queryKey: ['picking', 'settings'] });
+      await qc.invalidateQueries({ queryKey: ['picking', 'daily'] });
+      setOpen(false);
+    } finally { setSaving(false); }
+  }
+
+  const Sel = ({ value, onChange, from, to }) => (
+    <select value={value} onChange={e => onChange(parseInt(e.target.value))}
+      style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: '6px 8px', fontSize: 12.5, fontWeight: 600, color: TITLE, fontFamily: 'inherit', background: '#fff' }}>
+      {Array.from({ length: to - from + 1 }, (_, i) => from + i).map(h => <option key={h} value={h}>{hour12(h)}</option>)}
+    </select>
+  );
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={openEditor} title="Edit the working hours this chart spans" style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid #E2E8F0', background: '#fff',
+        cursor: 'pointer', borderRadius: 9, padding: '6px 10px', fontSize: 12, fontWeight: 600, color: MUTED }}>
+        <Clock size={13} /> {win ? `${hour12(win.start_hour)}–${hour12(win.end_hour)}` : 'Day hours'}
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: '120%', right: 0, width: 250, background: '#fff', border: '1px solid #E2E8F0', borderRadius: 11, boxShadow: SHADOW, zIndex: 50, padding: 14 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: TITLE, marginBottom: 4 }}>Working day window</div>
+            <div style={{ fontSize: 11.5, color: '#94A3B8', marginBottom: 11 }}>Hours the per-hour chart spans. Picks outside still show.</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <Sel value={start} onChange={setStart} from={0} to={23} />
+              <span style={{ fontSize: 12, color: MUTED }}>to</span>
+              <Sel value={end} onChange={setEnd} from={1} to={24} />
+            </div>
+            {end <= start && <div style={{ fontSize: 11.5, color: '#EF4444', marginBottom: 10 }}>End must be after start.</div>}
+            <button onClick={save} disabled={saving || end <= start} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, border: 'none', background: GREEN, color: '#fff',
+              cursor: saving || end <= start ? 'default' : 'pointer', borderRadius: 8, padding: '8px 14px',
+              fontSize: 12.5, fontWeight: 700, opacity: saving || end <= start ? 0.6 : 1 }}>
+              <Check size={14} /> {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function PickingPage() {
   const [period, setPeriod] = useState('week');
   const [syncing, setSyncing] = useState(false);
@@ -251,8 +316,11 @@ export default function PickingPage() {
           </div>
 
           <Card>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 6 }}>
-              {daily.data?.granularity === 'hour' ? 'Waves per hour' : 'Waves per day'}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>
+                {daily.data?.granularity === 'hour' ? 'Waves per hour' : 'Waves per day'}
+              </div>
+              {daily.data?.granularity === 'hour' && <HourWindowEditor />}
             </div>
             <DailyChart buckets={daily.data?.buckets} granularity={daily.data?.granularity} />
           </Card>

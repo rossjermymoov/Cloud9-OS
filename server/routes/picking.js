@@ -23,6 +23,24 @@ const router = express.Router();
 const p2 = (n) => String(n).padStart(2, '0');
 const isoDay = (d) => `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
 
+// ── Picking day window (editable) ──────────────────────────────────────────
+// Hours are 0–23. Default 08:00 first bucket → 17:00 last bucket (end is the
+// exclusive close, so end=18 means the final bar is "5 till 6").
+const DEFAULT_WINDOW = { start_hour: 8, end_hour: 18 };
+async function getDayWindow() {
+  try {
+    const { rows } = await query(`SELECT value FROM app_settings WHERE key = 'picking_day_window'`);
+    const v = rows[0]?.value || {};
+    const s = Math.min(23, Math.max(0, parseInt(v.start_hour)));
+    const e = Math.min(24, Math.max(1, parseInt(v.end_hour)));
+    if (Number.isFinite(s) && Number.isFinite(e) && e > s) return { start_hour: s, end_hour: e };
+  } catch { /* table may not exist yet on first boot */ }
+  return { ...DEFAULT_WINDOW };
+}
+// 24h hour → "8 till 9" style label (12h, no am/pm, no leading zeros).
+const disp12 = (h) => ((h % 12) === 0 ? 12 : (h % 12));
+const hourRangeLabel = (h) => `${disp12(h)} till ${disp12((h + 1) % 24)}`;
+
 // A single custom day, clamped to the last 90 days.
 function parseCustomDate(s) {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(String(s))) return null;
@@ -70,6 +88,25 @@ function safeItemsPerHour({ timedPicks, timedItems, totalMs }) {
 
 router.get('/status', (_req, res) => res.json({ configured: helmConfigured() }));
 
+// Read / update the picking day window (hours that the Waves-per-hour chart spans).
+router.get('/settings', async (_req, res, next) => {
+  try { res.json({ day_window: await getDayWindow() }); } catch (err) { next(err); }
+});
+router.put('/settings/day-window', async (req, res, next) => {
+  try {
+    const s = parseInt(req.body?.start_hour), e = parseInt(req.body?.end_hour);
+    if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || s > 23 || e < 1 || e > 24 || e <= s) {
+      return res.status(400).json({ error: 'start_hour 0–23 and end_hour 1–24 required, with end after start' });
+    }
+    await query(`
+      INSERT INTO app_settings (key, value, updated_at)
+      VALUES ('picking_day_window', $1::jsonb, NOW())
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+    `, [JSON.stringify({ start_hour: s, end_hour: e })]);
+    res.json({ day_window: { start_hour: s, end_hour: e } });
+  } catch (err) { next(err); }
+});
+
 router.get('/summary', async (req, res, next) => {
   try {
     const { period, from, to } = rangeFor(req.query.period, req.query.date);
@@ -112,6 +149,7 @@ router.get('/daily', async (req, res, next) => {
     // Single day (today / yesterday / a custom date) → break the day into HOURS so
     // you can see throughput across the working day. A range → one bar per day.
     if (from === to) {
+      const win = await getDayWindow();
       const { rows } = await query(`
         SELECT EXTRACT(HOUR FROM completed_at AT TIME ZONE 'UTC')::int AS hour,
                COUNT(*)::int AS picks,
@@ -121,17 +159,17 @@ router.get('/daily', async (req, res, next) => {
         GROUP BY hour ORDER BY hour ASC
       `, [from]);
       const byHour = new Map(rows.map(r => [r.hour, r]));
-      // Build a continuous run of hours from first to last activity (min 06–18) so
-      // quiet hours show as gaps rather than collapsing the axis.
+      // Show the configured working window, but auto-extend to cover any activity
+      // that falls outside it so no picks are ever hidden.
       const active = rows.map(r => r.hour);
-      const startH = Math.min(6, ...(active.length ? active : [6]));
-      const endH   = Math.max(18, ...(active.length ? active : [18]));
+      const startH = Math.min(win.start_hour, ...(active.length ? active : [win.start_hour]));
+      const endH   = Math.max(win.end_hour, ...(active.length ? active.map(h => h + 1) : [win.end_hour]));
       const buckets = [];
-      for (let h = startH; h <= endH; h++) {
+      for (let h = startH; h < endH; h++) {
         const r = byHour.get(h);
-        buckets.push({ label: `${String(h).padStart(2, '0')}:00`, picks: r?.picks || 0, items: r?.items || 0 });
+        buckets.push({ hour: h, label: hourRangeLabel(h), picks: r?.picks || 0, items: r?.items || 0 });
       }
-      return res.json({ period, from, to, granularity: 'hour', buckets, days: buckets });
+      return res.json({ period, from, to, granularity: 'hour', window: win, buckets, days: buckets });
     }
 
     const { rows } = await query(`
