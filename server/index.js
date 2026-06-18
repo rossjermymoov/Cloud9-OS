@@ -24,6 +24,7 @@ import slaRouter            from './routes/sla.js';
 import { syncRecentOrders, syncOrderStatuses } from './services/slaService.js';
 import { syncBankHolidays } from './services/bankHolidayService.js';
 import authRouter, { requireAuth } from './routes/auth.js';
+import settingsRouter       from './routes/settings.js';
 import warehouseRouter      from './routes/warehouse.js';
 import storageRouter        from './routes/storage.js';
 import { syncStorage }       from './services/storageService.js';
@@ -72,7 +73,8 @@ app.use('/api/sla',             requireAuth, slaRouter);
 // to avoid clashing with Cloud9's dispatch SLA above.
 app.use('/api/queries',         requireAuth, queriesRouter);
 app.use('/api/email',           requireAuth, emailRouter);
-app.use('/api/gmail',           requireAuth, gmailRouter);
+app.use('/api/gmail',           gmailRouter);   // OAuth start/callback public; data endpoints guarded per-route
+app.use('/api/settings',        requireAuth, settingsRouter);
 app.use('/api/sla-rules',       requireAuth, slaRulesRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'cloud9-os' }));

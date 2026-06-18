@@ -1,11 +1,16 @@
 import express from 'express';
 import { getAuthUrl, exchangeCodeForTokens, saveTokens, getConfig, disconnect, createOAuthClient } from '../services/gmailService.js';
 import { syncGmail } from '../services/gmailSync.js';
+import { requireAuth } from './auth.js';
 import { google } from 'googleapis';
 
 const router = express.Router();
 
-router.get('/status', async (req, res, next) => {
+// NOTE: this router is mounted WITHOUT global auth so the OAuth /auth + /callback
+// (which Google hits as a browser redirect, carrying no JWT) can work. Every data
+// endpoint below is individually guarded with requireAuth.
+
+router.get('/status', requireAuth, async (req, res, next) => {
   try {
     const config = await getConfig();
     const connected = !!(config?.refresh_token);
@@ -23,20 +28,20 @@ router.get('/auth', (req, res) => {
 router.get('/callback', async (req, res, next) => {
   try {
     const { code, error } = req.query;
-    if (error) return res.redirect('/settings/gmail?error=' + encodeURIComponent(error));
-    if (!code)  return res.redirect('/settings/gmail?error=no_code');
+    if (error) return res.redirect('/settings?tab=gmail&error=' + encodeURIComponent(error));
+    if (!code)  return res.redirect('/settings?tab=gmail&error=no_code');
     const tokens = await exchangeCodeForTokens(code);
     const oauth2Client = createOAuthClient();
     oauth2Client.setCredentials(tokens);
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     const profile = await gmail.users.getProfile({ userId: 'me' });
     await saveTokens(tokens, profile.data.emailAddress);
-    res.redirect('/settings/gmail?connected=1');
+    res.redirect('/settings?tab=gmail&connected=1');
   } catch (err) { next(err); }
 });
 
 // Manual sync — always resets historyId so it rescans the last 7 days in full
-router.post('/sync', async (req, res, next) => {
+router.post('/sync', requireAuth, async (req, res, next) => {
   try {
     const { query: dbQuery } = await import('../db/index.js');
     await dbQuery('UPDATE gmail_oauth_config SET last_history_id = NULL WHERE id = 1');
@@ -49,7 +54,7 @@ router.post('/sync', async (req, res, next) => {
 });
 
 // Debug endpoint — lists raw Gmail messages without importing
-router.get('/debug', async (req, res, next) => {
+router.get('/debug', requireAuth, async (req, res, next) => {
   try {
     const config = await getConfig();
     if (!config?.refresh_token) return res.json({ connected: false });
@@ -76,7 +81,7 @@ router.get('/debug', async (req, res, next) => {
 });
 
 // Test endpoint — inserts one dummy ticket directly to verify the view works
-router.post('/test-insert', async (req, res, next) => {
+router.post('/test-insert', requireAuth, async (req, res, next) => {
   try {
     const { query: dbQuery } = await import('../db/index.js');
     const qRes = await dbQuery(`
@@ -96,7 +101,7 @@ router.post('/test-insert', async (req, res, next) => {
 });
 
 // Force regenerate ALL summaries regardless of existing description
-router.post('/regenerate-summaries', async (req, res, next) => {
+router.post('/regenerate-summaries', requireAuth, async (req, res, next) => {
   try {
     const { query: dbQuery } = await import('../db/index.js');
     const { generateSummary } = await import('../services/gmailSync.js');
@@ -122,7 +127,7 @@ router.post('/regenerate-summaries', async (req, res, next) => {
   }
 });
 
-router.delete('/disconnect', async (req, res, next) => {
+router.delete('/disconnect', requireAuth, async (req, res, next) => {
   try { await disconnect(); res.json({ ok: true }); }
   catch (err) { next(err); }
 });

@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 // Public, no-auth TV board. Rotating full-screen slides — nothing scrolls on a TV.
 const REFRESH_MS = 20000;     // data refresh
 // Per-slide dwell time, aligned to SLIDES below. The two important views linger.
-const SLIDE_MS = { kpis: 30000, cutoff: 30000, held: 15000, couriers: 10000, customers: 10000, pickers: 10000 };
+const SLIDE_MS = { welcome: 12000, kpis: 30000, cutoff: 30000, held: 15000, couriers: 10000, customers: 10000, pickers: 10000 };
 
 const C = {
   bg: '#0A0E1A', panel: '#121829', panel2: '#0F1422', line: 'rgba(255,255,255,0.08)',
@@ -191,7 +191,19 @@ function LeaderboardSlide({ title, accent, rows, render }) {
   );
 }
 
-const SLIDES = ['kpis', 'cutoff', 'held', 'couriers', 'customers', 'pickers'];
+// Morning welcome slide — set in Settings → Warehouse board. Design is intentionally
+// simple for now; the creative team can restyle later.
+function WelcomeSlide({ who }) {
+  return (
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: '3vh' }}>
+      <div style={{ fontSize: 'clamp(22px,3vw,46px)', fontWeight: 800, color: C.cyan, letterSpacing: 2, textTransform: 'uppercase' }}>Cloud9 Fulfilment welcomes</div>
+      <div style={{ fontSize: 'clamp(48px,9vw,150px)', fontWeight: 900, color: C.text, lineHeight: 1.05, letterSpacing: -2, background: 'linear-gradient(135deg,#00BCD4,#A855F7)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{who}</div>
+      <div style={{ fontSize: 'clamp(16px,1.8vw,28px)', color: C.mute }}>👋 Have a great visit</div>
+    </div>
+  );
+}
+
+const BASE_SLIDES = ['kpis', 'cutoff', 'held', 'couriers', 'customers', 'pickers'];
 
 export default function WarehouseBoard() {
   const { data, err, forbidden, updated } = useBoard();
@@ -199,11 +211,19 @@ export default function WarehouseBoard() {
   const [slide, setSlide] = useState(0);
   const d = data || {};
 
+  // A morning welcome (set in Settings) inserts an extra slide at the front.
+  const welcome = d.messages?.welcome?.who ? d.messages.welcome.who : null;
+  const urgent  = d.messages?.urgent?.message
+    && (!d.messages.urgent.expires_at || new Date(d.messages.urgent.expires_at).getTime() > Date.now())
+    ? d.messages.urgent.message : null;
+  const SLIDES = welcome ? ['welcome', ...BASE_SLIDES] : BASE_SLIDES;
+
   // Advance after the current slide's own dwell time (re-scheduled on each change).
   useEffect(() => {
-    const t = setTimeout(() => setSlide(s => (s + 1) % SLIDES.length), SLIDE_MS[SLIDES[slide]] || 14000);
+    const idx = slide % SLIDES.length;
+    const t = setTimeout(() => setSlide(s => (s + 1) % SLIDES.length), SLIDE_MS[SLIDES[idx]] || 14000);
     return () => clearTimeout(t);
-  }, [slide]);
+  }, [slide, SLIDES.length]);
 
   const phone = w < 640;
   const cols = w < 640 ? 2 : 4;
@@ -215,9 +235,10 @@ export default function WarehouseBoard() {
     </div>
   );
 
-  const which = SLIDES[slide];
+  const which = SLIDES[slide % SLIDES.length];
   let body;
-  if (which === 'kpis') body = <KpiSlide d={d} cols={cols} vFont={typeof vFont === 'string' ? (phone ? 44 : 76) : vFont} />;
+  if (which === 'welcome') body = <WelcomeSlide who={welcome} />;
+  else if (which === 'kpis') body = <KpiSlide d={d} cols={cols} vFont={typeof vFont === 'string' ? (phone ? 44 : 76) : vFont} />;
   else if (which === 'cutoff') body = <CutoffSlide d={d} />;
   else if (which === 'held') body = <HeldSlide d={d} />;
   else if (which === 'couriers') body = <CouriersSlide d={d} />;
@@ -228,6 +249,17 @@ export default function WarehouseBoard() {
 
   return (
     <div style={{ position: 'fixed', inset: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', background: C.bg, color: C.text, padding: phone ? '14px 14px' : '2.5vh 2.5vw', fontFamily: 'system-ui, -apple-system, sans-serif', boxSizing: 'border-box' }}>
+      <style>{`@keyframes c9pulse { 0%,100% { background:#DC2626; } 50% { background:#7F1D1D; } }`}</style>
+      {urgent && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, textAlign: 'center',
+          padding: phone ? '10px 14px' : '1.6vh 2vw', marginBottom: '1.6vh', borderRadius: 14,
+          animation: 'c9pulse 1.4s ease-in-out infinite', color: '#fff', boxShadow: '0 0 0 2px rgba(255,255,255,0.15)',
+        }}>
+          <span style={{ fontSize: phone ? 18 : 'clamp(22px,2.4vw,40px)' }}>⚠</span>
+          <span style={{ fontSize: phone ? 16 : 'clamp(20px,2.4vw,40px)', fontWeight: 900, letterSpacing: 0.3 }}>{urgent}</span>
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: '2vh' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ width: phone ? 34 : 44, height: phone ? 34 : 44, borderRadius: 12, background: 'linear-gradient(135deg,#00BCD4,#7B2FBE)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: phone ? 14 : 18 }}>C9</div>
@@ -235,7 +267,7 @@ export default function WarehouseBoard() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <div style={{ display: 'flex', gap: 7 }}>
-            {SLIDES.map((_, i) => <span key={i} style={{ width: i === slide ? 22 : 8, height: 8, borderRadius: 4, background: i === slide ? C.cyan : 'rgba(255,255,255,0.18)', transition: 'all .3s' }} />)}
+            {SLIDES.map((_, i) => <span key={i} style={{ width: i === (slide % SLIDES.length) ? 22 : 8, height: 8, borderRadius: 4, background: i === (slide % SLIDES.length) ? C.cyan : 'rgba(255,255,255,0.18)', transition: 'all .3s' }} />)}
           </div>
           <div style={{ fontSize: phone ? 11 : 14, color: err ? C.red : C.mute, fontWeight: 600 }}>
             {err ? '⚠ Reconnecting…' : updated ? updated.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '…'}

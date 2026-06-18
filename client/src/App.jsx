@@ -14,6 +14,7 @@ import NotificationCenter from './pages/notifications/NotificationCenter';
 import UsersPage from './pages/users/UsersPage';
 import QueriesPage from './pages/queries/QueriesPage';
 import WarehouseBoard from './pages/warehouse/WarehouseBoard';
+import SettingsPage from './pages/settings/SettingsPage';
 import { LoginScreen, SetupScreen, AuthLoading } from './pages/auth/AuthScreens';
 import Placeholder from './pages/Placeholder';
 
@@ -49,7 +50,7 @@ function GatedApp() {
         <Route path="notifications"   element={<NotificationCenter />} />
         <Route path="users"           element={<UsersPage />} />
         <Route path="queries"       element={<QueriesPage />} />
-        <Route path="settings"      element={<Placeholder name="Settings" note="Xero, Gmail inbox and webhook config live here." />} />
+        <Route path="settings"      element={<SettingsPage />} />
         <Route path="*"             element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

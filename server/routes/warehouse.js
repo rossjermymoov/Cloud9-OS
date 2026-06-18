@@ -15,6 +15,7 @@ import { query } from '../db/index.js';
 import { dueDateFor, todayLondonYmd } from '../services/slaService.js';
 import { holidaySet } from '../services/bankHolidayService.js';
 import { helmConfigured } from '../services/helmClient.js';
+import { getSetting } from '../services/appSettings.js';
 
 const router = express.Router();
 
@@ -149,8 +150,15 @@ router.get('/board', async (req, res, next) => {
     // Packing should clear by end of day — amber if anything still packing after 3pm.
     const packingStuck = packing.rows[0].n > 0 && nowM >= 15 * 60;
 
+    // Operator messages set in Settings: a morning welcome slide + a timed urgent banner.
+    const [welcomeRaw, urgentRaw] = await Promise.all([getSetting('board_welcome'), getSetting('board_urgent')]);
+    const welcome = (welcomeRaw?.enabled && String(welcomeRaw.who || '').trim()) ? { who: String(welcomeRaw.who).trim() } : null;
+    const urgent = (urgentRaw?.message && (!urgentRaw.expires_at || new Date(urgentRaw.expires_at).getTime() > Date.now()))
+      ? { message: urgentRaw.message, expires_at: urgentRaw.expires_at || null } : null;
+
     res.json({
       generated_at: new Date().toISOString(),
+      messages: { welcome, urgent },
       due_today: dispatched + outstanding,   // total that should ship today
       dispatched,                            // of those, already out
       outstanding,                           // still to go
