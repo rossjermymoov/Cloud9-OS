@@ -319,7 +319,7 @@ function ClaimsTab({ data, consignment }) {
   }
 
   return (
-    <div style={{ padding: '20px 24px' }}>
+    <div style={{ width: '100%', maxWidth: 'none' }}>
 
       {/* Status banner */}
       <div style={{

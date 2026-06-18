@@ -19,7 +19,7 @@ export default function CustomerList() {
   const rows = data?.data || [];
 
   return (
-    <div style={{ maxWidth: 1100 }}>
+    <div style={{ width: '100%', maxWidth: 'none' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0F172A', margin: 0 }}>Customers</h1>
         <div style={{ fontSize: 13, color: '#64748B' }}>{data?.total ?? 0} total</div>

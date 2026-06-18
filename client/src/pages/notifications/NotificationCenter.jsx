@@ -44,7 +44,7 @@ export default function NotificationCenter() {
   }
 
   return (
-    <div style={{ maxWidth: 820 }}>
+    <div style={{ width: '100%', maxWidth: 'none' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0F172A', margin: 0 }}>Notification Center</h1>
         <button onClick={readAll} style={{

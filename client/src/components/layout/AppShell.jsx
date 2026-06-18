@@ -17,7 +17,10 @@ export default function AppShell() {
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <TopBar />
         <main style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <div ref={scrollRef} style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: 24 }}>
+          {/* Master content wrapper — the single owner of the page gutter. Holds a
+              consistent fluid side padding (px-8) and NO max-width, so every page
+              fills 100% of the available canvas next to the sidebar. */}
+          <div ref={scrollRef} style={{ position: 'absolute', inset: 0, overflowY: 'auto', width: '100%', maxWidth: 'none', padding: '24px 32px' }}>
             <Outlet />
           </div>
         </main>

@@ -171,7 +171,7 @@ export default function PurchaseOrdersPage() {
   }
 
   return (
-    <div style={{ width: '100%', maxWidth: 1280 }}>
+    <div style={{ width: '100%', maxWidth: 'none' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <PackagePlus size={20} color={ACCENT} />

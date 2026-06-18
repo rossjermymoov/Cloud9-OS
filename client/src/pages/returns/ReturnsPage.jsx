@@ -10,7 +10,7 @@ export default function ReturnsPage() {
   const rows = data?.returns || [];
 
   return (
-    <div style={{ maxWidth: 980 }}>
+    <div style={{ width: '100%', maxWidth: 'none' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
         <RotateCcw size={20} color="#E91E8C" />
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0F172A', margin: 0 }}>Returns</h1>

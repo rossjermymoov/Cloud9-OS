@@ -63,7 +63,7 @@ export default function UsersPage() {
   }
 
   return (
-    <div style={{ padding: '24px 30px', maxWidth: 920, margin: '0 auto' }}>
+    <div style={{ width: '100%', maxWidth: 'none' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: '0 0 4px', letterSpacing: -0.6, display: 'flex', alignItems: 'center', gap: 9 }}>
