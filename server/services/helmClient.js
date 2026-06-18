@@ -328,3 +328,13 @@ export async function fetchInventoryForClient({ helmClientId, perPage = 100, max
 export async function fetchInventoryDetail(id) {
   return authedGet(`/inventory/${id}`);
 }
+
+/** One page of warehouse locations (bins/shelves). */
+export async function fetchLocations({ page = 1, perPage = 100 } = {}) {
+  return authedGet(`/locations?page=${page}&per_page=${perPage}`);
+}
+
+/** Full location detail — carries the putaway-plugin capacity fields. */
+export async function fetchLocationDetail(id) {
+  return authedGet(`/location/${id}`);
+}

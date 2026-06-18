@@ -11,7 +11,7 @@
 
 import express from 'express';
 import { query } from '../db/index.js';
-import { helmConfigured, fetchInventoryForClient, fetchInventoryDetail } from '../services/helmClient.js';
+import { helmConfigured, fetchInventoryForClient, fetchInventoryDetail, fetchLocations, fetchLocationDetail } from '../services/helmClient.js';
 import { syncStorage, dimUnitInfo } from '../services/storageService.js';
 
 const router = express.Router();
@@ -194,6 +194,63 @@ router.get('/customer-debug', async (req, res, next) => {
       by_type,
       note: 'total_m3 counts only Inventory (1) and Packaging (4/5). Components (2) and Groups (3) are shown but excluded — they would double-count the real stocked items. L/W/H are raw cm; unit_m3 = L·W·H ÷ 1,000,000; volume_m3 = units × unit_m3.',
       top_skus: rows.slice(0, 40),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Capacity probe — do Helm locations carry usable putaway-plugin capacity?
+// Reads a sample of locations and reports whether capacity_value / current_capacity
+// are actually configured, so we can decide if slot-based free-space is viable.
+router.get('/capacity-probe', async (_req, res, next) => {
+  try {
+    if (!helmConfigured()) return res.status(503).json({ error: 'Helm not configured' });
+    const num = (v) => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+
+    const first = await fetchLocations({ page: 1, perPage: 100 });
+    const firstRows = first.data || [];
+    const listHasCap = firstRows.length > 0 && ('pm_plugin_capacity_value' in firstRows[0]);
+
+    // Prefer the list if it already carries capacity (cheap, big sample); else
+    // fall back to per-location detail calls for a smaller sample.
+    let sample = [], source = 'list';
+    if (listHasCap) {
+      sample = [...firstRows];
+      const lastPage = Math.min(parseInt(first.last_page) || 1, 4);
+      for (let p = 2; p <= lastPage; p++) { try { const r = await fetchLocations({ page: p, perPage: 100 }); sample.push(...(r.data || [])); } catch { /* ignore */ } }
+    } else {
+      source = 'detail';
+      const ids = firstRows.slice(0, 25).map(r => r.id).filter(x => x != null);
+      for (const id of ids) { try { sample.push(await fetchLocationDetail(id)); } catch { /* ignore */ } }
+    }
+
+    let withCapGt0 = 0, withCapGt1 = 0, sumCap = 0, sumCur = 0, notInUse = 0, haveCur = 0;
+    const capTypes = {}, capValDist = {};
+    for (const l of sample) {
+      const cv = num(l.pm_plugin_capacity_value), cc = num(l.pm_plugin_current_capacity);
+      if (l.pm_plugin_capacity_type != null) { const k = `type_${l.pm_plugin_capacity_type}`; capTypes[k] = (capTypes[k] || 0) + 1; }
+      if (cv != null) { if (cv > 0) withCapGt0++; if (cv > 1) withCapGt1++; sumCap += cv; const k = String(cv); capValDist[k] = (capValDist[k] || 0) + 1; }
+      if (cc != null) { haveCur++; sumCur += cc; }
+      if (parseInt(l.pm_plugin_not_in_use) === 1) notInUse++;
+    }
+
+    const configured = withCapGt1 > 0;
+    res.json({
+      total_locations: first.total ?? (parseInt(first.last_page) ? `~${parseInt(first.last_page) * 100} (across ${first.last_page} pages)` : firstRows.length),
+      sampled: sample.length, source,
+      list_includes_capacity_fields: listHasCap,
+      capacity_type_distribution: capTypes,
+      capacity_value_distribution: capValDist,
+      with_capacity_value_gt0: withCapGt0,
+      with_capacity_value_gt1: withCapGt1,
+      sum_capacity_value: sumCap, sum_current_capacity: sumCur, not_in_use: notInUse,
+      verdict: configured
+        ? '✅ Capacity looks configured — Route 1 viable: slot-based utilisation (used vs capacity) can be computed.'
+        : '⚠️ Capacity values are all 0/1 (defaults) — not configured. Route 1 not viable; measure location-type sizes for Route 2.',
+      raw_sample: sample.slice(0, 8).map(l => ({
+        id: l.id, name: l.location_name, type_id: l.type_id,
+        capacity_type: l.pm_plugin_capacity_type, capacity_value: l.pm_plugin_capacity_value,
+        current_capacity: l.pm_plugin_current_capacity, not_in_use: l.pm_plugin_not_in_use,
+      })),
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

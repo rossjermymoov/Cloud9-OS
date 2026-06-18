@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Warehouse, RefreshCw, Boxes, MapPin, Package, Search } from 'lucide-react';
-import { storageSummary, storageByCustomer, storageByLocation, storageFreshness, triggerStorageSync, storageCustomerDebug } from '../../api/storage';
+import { storageSummary, storageByCustomer, storageByLocation, storageFreshness, triggerStorageSync, storageCustomerDebug, storageCapacityProbe } from '../../api/storage';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
 const SHADOW = '0 1px 2px rgba(16,24,40,0.06), 0 1px 3px rgba(16,24,40,0.10)';
@@ -218,6 +218,70 @@ function CustomerInspector() {
   );
 }
 
+// One-off feasibility probe: do Helm locations carry usable capacity data?
+function CapacityProbe() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(false);
+  async function run() {
+    setLoading(true); setErr(null); setData(null);
+    try { const d = await storageCapacityProbe(); if (d.error) setErr(d.error); else setData(d); }
+    catch (e) { setErr(e?.response?.data?.error || e.message); }
+    finally { setLoading(false); }
+  }
+  const ok = data && data.with_capacity_value_gt1 > 0;
+  return (
+    <Card style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE }}>Empty-space feasibility (location capacity)</div>
+          <div style={{ fontSize: 12, color: '#94A3B8', marginTop: 2 }}>Checks whether Helm locations hold real capacity values we could use for free-space.</div>
+        </div>
+        <button onClick={run} disabled={loading} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: loading ? 'default' : 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE, opacity: loading ? 0.6 : 1 }}>
+          <Search size={14} /> {loading ? 'Probing…' : 'Run probe'}
+        </button>
+      </div>
+      {err && <div style={{ fontSize: 12.5, color: '#EF4444', marginTop: 10 }}>{err}</div>}
+      {data && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: ok ? '#10B981' : '#F59E0B', padding: '10px 12px', background: ok ? '#ECFDF5' : '#FFFBEB', borderRadius: 9 }}>{data.verdict}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12.5, color: MUTED, marginTop: 10 }}>
+            <span>Sampled: <strong style={{ color: TITLE }}>{data.sampled}</strong> ({data.source})</span>
+            <span>Capacity &gt; 1: <strong style={{ color: TITLE }}>{data.with_capacity_value_gt1}</strong></span>
+            <span>Capacity &gt; 0: <strong style={{ color: TITLE }}>{data.with_capacity_value_gt0}</strong></span>
+            <span>Σ capacity: <strong style={{ color: TITLE }}>{data.sum_capacity_value}</strong></span>
+            <span>Σ current: <strong style={{ color: TITLE }}>{data.sum_current_capacity}</strong></span>
+            <span>Not in use: <strong style={{ color: TITLE }}>{data.not_in_use}</strong></span>
+          </div>
+          <div style={{ fontSize: 11.5, color: '#94A3B8', marginTop: 8 }}>
+            Capacity values seen: {Object.entries(data.capacity_value_distribution || {}).map(([k, v]) => `${k}×${v}`).join(' · ') || '—'}
+          </div>
+          {data.raw_sample?.length > 0 && (
+            <div style={{ maxHeight: 240, overflowY: 'auto', marginTop: 10 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11 }}>
+                  <th style={{ padding: '6px' }}>Location</th><th style={{ padding: '6px', textAlign: 'right' }}>Capacity</th>
+                  <th style={{ padding: '6px', textAlign: 'right' }}>Current</th><th style={{ padding: '6px', textAlign: 'right' }}>Type</th>
+                </tr></thead>
+                <tbody>
+                  {data.raw_sample.map((l, i) => (
+                    <tr key={i} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+                      <td style={{ padding: '6px', fontWeight: 600, color: TITLE }}>{l.name || l.id}</td>
+                      <td style={{ padding: '6px', textAlign: 'right', color: '#334155' }}>{l.capacity_value ?? '—'}</td>
+                      <td style={{ padding: '6px', textAlign: 'right', color: '#334155' }}>{l.current_capacity ?? '—'}</td>
+                      <td style={{ padding: '6px', textAlign: 'right', color: MUTED }}>{l.capacity_type ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function StoragePage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -320,6 +384,7 @@ export default function StoragePage() {
           </div>
 
           <CustomerInspector />
+          <CapacityProbe />
         </>
       )}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
