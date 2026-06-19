@@ -278,8 +278,8 @@ export default function StoragePage() {
             <StorageMap rows={s?.top_customers} total={s?.total_m3} navigate={navigate} />
           </Card>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <Card>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'stretch' }}>
+            <Card style={{ display: 'flex', flexDirection: 'column' }}>
               <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 10 }}>By customer</div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5 }}>
@@ -298,9 +298,13 @@ export default function StoragePage() {
                 </tbody>
               </table>
             </Card>
-            <Card>
+            <Card style={{ display: 'flex', flexDirection: 'column' }}>
               <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 10 }}>Busiest locations</div>
-              <div style={{ maxHeight: 380, overflowY: 'auto' }}>
+              {/* Fills the card to its bottom edge (matches the sibling card's height).
+                  The absolute scroll layer keeps the long list from ballooning the card;
+                  it only scrolls if the rows exceed the matched height. */}
+              <div style={{ position: 'relative', flex: 1, minHeight: 220 }}>
+                <div style={{ position: 'absolute', inset: 0, overflowY: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                   <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5, position: 'sticky', top: 0, background: '#fff' }}>
                     <th style={{ padding: '7px 6px' }}>Location</th><th style={{ padding: '7px 6px' }}>Top customer</th><th style={{ padding: '7px 6px', textAlign: 'right' }}>m³</th>
@@ -315,6 +319,7 @@ export default function StoragePage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             </Card>
           </div>
