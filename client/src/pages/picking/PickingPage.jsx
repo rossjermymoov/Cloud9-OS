@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal, Hand, Clock, Check } from 'lucide-react';
+import { ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal, Hand, Clock, Check, Bug } from 'lucide-react';
 import {
   pickingSummary, pickingDaily, pickingLeaderboard, pickingPicks, pickingFreshness, triggerPickSync,
-  pickingSettings, savePickingDayWindow,
+  pickingSettings, savePickingDayWindow, pickingDebug,
 } from '../../api/picking';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
@@ -231,6 +231,81 @@ function HourWindowEditor() {
   );
 }
 
+// Debug — the raw aggregates, formulas and per-wave rows behind every KPI.
+function DebugPanel({ period, date }) {
+  const { data, isLoading } = useQuery({ queryKey: ['picking', 'debug', period, date], queryFn: () => pickingDebug(period, date) });
+  if (isLoading) return <Card style={{ marginTop: 16 }}><div style={{ fontSize: 13, color: MUTED }}>Loading raw data…</div></Card>;
+  if (!data) return null;
+  const c = data.components || {};
+  const KPI = [
+    ['Items per hour', data.kpis?.items_per_hour],
+    ['Waves completed', data.kpis?.waves_completed],
+    ['Items picked', data.kpis?.items_picked],
+    ['Avg time per wave', data.kpis?.avg_time_per_wave],
+    ['Avg time per pick', data.kpis?.avg_time_per_pick],
+  ];
+  const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 11.5 };
+  const th = { padding: '6px 6px', textAlign: 'left', position: 'sticky', top: 0, background: '#fff' };
+  const td = { padding: '6px 6px', borderTop: '1px solid rgba(0,0,0,0.05)' };
+  const numTd = { ...td, textAlign: 'right', ...mono, color: '#334155' };
+  return (
+    <Card style={{ marginTop: 16, background: '#0B1220' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <Bug size={16} color="#34D399" /><span style={{ fontSize: 14.5, fontWeight: 800, color: '#fff' }}>Debug — raw data behind each stat</span>
+      </div>
+      <div style={{ fontSize: 11.5, color: '#94A3B8', marginBottom: 14 }}>
+        Window {data.from}{data.to !== data.from ? ` → ${data.to}` : ''} · {c.picks} waves · {c.scan_waves} scan-timed · {c.gap_waves} gap-timed · {c.untimed_waves} untimed
+      </div>
+
+      {/* Each KPI with its formula + inputs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 10, marginBottom: 16 }}>
+        {KPI.map(([label, k]) => k && (
+          <div key={label} style={{ background: '#121A2E', borderRadius: 10, padding: '11px 13px', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#CBD5E1' }}>{label}</div>
+            <div style={{ fontSize: 20, fontWeight: 900, color: '#fff', margin: '3px 0' }}>{k.value ?? (k.value_secs != null ? `${k.value_secs}s` : '—')}</div>
+            <div style={{ ...mono, color: '#7DD3FC', marginBottom: 5 }}>{k.formula}</div>
+            <div style={{ ...mono, color: '#94A3B8' }}>{Object.entries(k.inputs || {}).map(([kk, vv]) => `${kk}=${typeof vv === 'number' ? vv.toLocaleString() : vv}`).join('  ·  ') || '—'}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Raw component totals */}
+      <div style={{ ...mono, color: '#CBD5E1', background: '#121A2E', borderRadius: 10, padding: '10px 13px', marginBottom: 16, lineHeight: 1.8 }}>
+        {Object.entries(c).map(([k, v]) => <span key={k} style={{ marginRight: 18, whiteSpace: 'nowrap', display: 'inline-block' }}>{k}=<b style={{ color: '#fff' }}>{typeof v === 'number' ? v.toLocaleString() : String(v)}</b></span>)}
+      </div>
+
+      {/* Per-wave raw rows */}
+      <div style={{ maxHeight: 420, overflowY: 'auto', background: '#fff', borderRadius: 10 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+          <thead><tr style={{ color: '#64748B', fontSize: 10.5 }}>
+            <th style={th}>Wave</th><th style={th}>Picker</th><th style={th}>Completed</th>
+            <th style={{ ...th, textAlign: 'right' }}>items</th><th style={{ ...th, textAlign: 'right' }}>orders</th>
+            <th style={th}>timing</th><th style={{ ...th, textAlign: 'right' }}>handling_ms</th>
+            <th style={{ ...th, textAlign: 'right' }}>basis_ms</th>
+            <th style={{ ...th, textAlign: 'right' }}>scan_count</th><th style={{ ...th, textAlign: 'right' }}>scan_ms</th>
+          </tr></thead>
+          <tbody>
+            {(data.rows || []).map((r, i) => (
+              <tr key={i}>
+                <td style={{ ...td, fontWeight: 600, color: TITLE }}>{r.pick_number || '—'}</td>
+                <td style={td}>{r.picker_name || '—'}{r.contributor_count > 1 ? ` +${r.contributor_count - 1}` : ''}</td>
+                <td style={{ ...td, ...mono, color: MUTED, whiteSpace: 'nowrap' }}>{r.completed_at ? new Date(r.completed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                <td style={numTd}>{r.item_count}</td>
+                <td style={numTd}>{r.order_count}</td>
+                <td style={{ ...td, color: r.timing_source === 'gap' ? '#B45309' : r.timing_source === 'scan' ? '#047857' : '#94A3B8', fontWeight: 600 }}>{r.timing_source || 'none'}</td>
+                <td style={numTd}>{r.handling_ms?.toLocaleString()}</td>
+                <td style={numTd}>{r.time_basis_ms?.toLocaleString()}</td>
+                <td style={numTd}>{r.item_scan_count}</td>
+                <td style={numTd}>{r.item_scan_ms?.toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 export default function PickingPage() {
   const [period, setPeriod] = useState('week');
   const [syncing, setSyncing] = useState(false);
@@ -238,6 +313,7 @@ export default function PickingPage() {
   const todayStr = isoOf(new Date());
   const minStr = isoOf(new Date(Date.now() - 90 * 86400000));
   const [customDate, setCustomDate] = useState(todayStr);
+  const [showDebug, setShowDebug] = useState(false);
   const dateParam = period === 'custom' ? customDate : null;
 
   const summary = useQuery({ queryKey: ['picking', 'summary', period, dateParam], queryFn: () => pickingSummary(period, dateParam) });
@@ -282,12 +358,18 @@ export default function PickingPage() {
               onChange={e => setCustomDate(e.target.value || todayStr)}
               style={{ border: '1px solid #E2E8F0', borderRadius: 9, padding: '7px 10px', fontSize: 12.5, fontWeight: 600, color: TITLE, fontFamily: 'inherit' }} />
           )}
+          <button onClick={() => setShowDebug(v => !v)} title="Show the raw data behind each stat"
+            style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: showDebug ? '#0B1220' : '#fff', cursor: 'pointer', borderRadius: 9, padding: '8px 12px', fontSize: 12.5, fontWeight: 600, color: showDebug ? '#fff' : TITLE }}>
+            <Bug size={14} /> Debug
+          </button>
           <button onClick={runSync} disabled={syncing}
             style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: syncing ? 'default' : 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE, opacity: syncing ? 0.6 : 1 }}>
             <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} /> {syncing ? 'Syncing…' : 'Sync now'}
           </button>
         </div>
       </div>
+
+      {showDebug && <DebugPanel period={period} date={dateParam} />}
 
       {!hasData && !summary.isLoading ? (
         <Card style={{ textAlign: 'center', padding: '54px 24px' }}>

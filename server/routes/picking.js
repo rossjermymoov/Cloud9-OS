@@ -142,6 +142,57 @@ router.get('/summary', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Debug — the raw aggregates and per-wave rows behind every KPI, with the exact
+// formula used. Lets us reconcile any headline number against its inputs.
+router.get('/debug', async (req, res, next) => {
+  try {
+    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const [agg, rows] = await Promise.all([
+      query(`
+        SELECT COUNT(*)::int                                              AS picks,
+               COALESCE(SUM(item_count),0)::int                           AS items,
+               COALESCE(SUM(order_count),0)::int                          AS orders,
+               COALESCE(SUM(${TIME_BASIS}),0)::bigint                     AS total_ms,
+               COUNT(*) FILTER (WHERE ${TIME_BASIS} > 0)::int             AS timed_picks,
+               COALESCE(SUM(item_count) FILTER (WHERE ${TIME_BASIS} > 0),0)::int AS timed_items,
+               COALESCE(SUM(item_scan_ms),0)::bigint                      AS item_scan_ms,
+               COALESCE(SUM(item_scan_count),0)::int                      AS item_scan_count,
+               COUNT(*) FILTER (WHERE timing_source = 'scan')::int        AS scan_waves,
+               COUNT(*) FILTER (WHERE timing_source = 'gap')::int         AS gap_waves,
+               COUNT(*) FILTER (WHERE COALESCE(${TIME_BASIS},0) = 0)::int AS untimed_waves
+        FROM picks WHERE ${COMPLETED} AND pick_date >= $1 AND pick_date <= $2`, [from, to]),
+      query(`
+        SELECT pick_number, picker_name, completed_at, pick_date::text AS pick_date,
+               item_count, order_count, contributor_count, timing_source,
+               handling_ms, elapsed_ms, item_scan_ms, item_scan_count,
+               (${TIME_BASIS})::bigint AS time_basis_ms
+        FROM picks WHERE ${COMPLETED} AND pick_date >= $1 AND pick_date <= $2
+        ORDER BY completed_at DESC NULLS LAST LIMIT 500`, [from, to]),
+    ]);
+    const r = agg.rows[0];
+    const totalHours = Number(r.total_ms) / 3600000;
+    res.json({
+      period, from, to,
+      components: { ...r, total_ms: Number(r.total_ms), item_scan_ms: Number(r.item_scan_ms) },
+      kpis: {
+        items_per_hour:    { value: safeItemsPerHour({ timedPicks: r.timed_picks, timedItems: r.timed_items, totalMs: r.total_ms }),
+                             formula: 'timed_items ÷ (total_handling_ms ÷ 3,600,000)',
+                             inputs: { timed_items: r.timed_items, total_ms: Number(r.total_ms), total_hours: +totalHours.toFixed(3) } },
+        waves_completed:   { value: r.picks, formula: 'count of completed waves', inputs: {} },
+        items_picked:      { value: r.items, formula: 'Σ item_count across waves',
+                             inputs: { avg_per_wave: r.picks ? +(r.items / r.picks).toFixed(1) : 0 } },
+        avg_time_per_wave: { value_secs: r.timed_picks ? Math.round(Number(r.total_ms) / r.timed_picks / 1000) : null,
+                             formula: 'Σ handling_ms ÷ timed_waves ÷ 1000',
+                             inputs: { total_ms: Number(r.total_ms), timed_picks: r.timed_picks } },
+        avg_time_per_pick: { value_secs: r.item_scan_count ? +((Number(r.item_scan_ms) / r.item_scan_count) / 1000).toFixed(1) : null,
+                             formula: 'Σ item_scan_ms ÷ Σ item_scan_count ÷ 1000 (scan-based only)',
+                             inputs: { item_scan_ms: Number(r.item_scan_ms), item_scan_count: r.item_scan_count } },
+      },
+      rows: rows.rows.map(x => ({ ...x, handling_ms: Number(x.handling_ms), item_scan_ms: Number(x.item_scan_ms), time_basis_ms: Number(x.time_basis_ms) })),
+    });
+  } catch (err) { next(err); }
+});
+
 router.get('/daily', async (req, res, next) => {
   try {
     const { period, from, to } = rangeFor(req.query.period, req.query.date);
