@@ -142,7 +142,7 @@ export default function OnTimePage() {
               <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5, position: 'sticky', top: 0, background: '#fff' }}>
                 <th style={{ padding: '8px 6px' }}>Customer</th><th style={{ padding: '8px 6px' }}>Order</th>
                 <th style={{ padding: '8px 6px' }}>Received</th><th style={{ padding: '8px 6px' }}>Due by</th>
-                <th style={{ padding: '8px 6px' }}>Status</th><th style={{ padding: '8px 6px', textAlign: 'right' }}>Parcels</th>
+                <th style={{ padding: '8px 6px' }}>Status</th><th style={{ padding: '8px 6px', textAlign: 'right' }}>Packed parcels</th>
               </tr></thead>
               <tbody>
                 {(data.data?.rows || []).map(r => {
@@ -155,7 +155,11 @@ export default function OnTimePage() {
                       <td style={{ padding: '9px 6px', color: '#334155', whiteSpace: 'nowrap' }}>{fmtD(r.due)}</td>
                       <td style={{ padding: '9px 6px' }}><span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600, color: st.c }}>
                         <span style={{ width: 7, height: 7, borderRadius: '50%', background: st.c }} />{st.l}{r.sla_status === 'breach_late' && r.dispatched_at ? ` (${fmtD(r.dispatched_at.slice(0,10))})` : ''}</span></td>
-                      <td style={{ padding: '9px 6px', textAlign: 'right', color: '#334155' }}>{r.parcels}</td>
+                      <td style={{ padding: '9px 6px', textAlign: 'right' }}>
+                        {(!r.parcels && r.sla_status === 'breach_overdue')
+                          ? <span title="No parcels yet — hasn't been through a packing station" style={{ fontSize: 11, fontWeight: 700, color: '#64748B', background: '#F1F5F9', border: '1px solid #E2E8F0', borderRadius: 6, padding: '2px 8px', whiteSpace: 'nowrap' }}>Pending pack</span>
+                          : <span style={{ color: '#334155' }}>{r.parcels}</span>}
+                      </td>
                     </tr>
                   );
                 })}
