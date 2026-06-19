@@ -427,7 +427,7 @@ export default function Dashboard() {
         <div className="c9-r1">
           <StatCard Icon={Send}  label={`Parcels ${periodNoun}`} value={cur.parcels.toLocaleString()} color={ACCENT}
             pill={pctPill(cur.parcels, prv.parcels, vsNoun)} />
-          <StatCard Icon={Boxes} label={`Items ${periodNoun}`} value={cur.items.toLocaleString()} color="#7B2FBE"
+          <StatCard Icon={Boxes} label={`Items sent ${periodNoun}`} value={cur.items.toLocaleString()} color="#7B2FBE"
             pill={pctPill(cur.items, prv.items, vsNoun)} />
           <StatCard Icon={Hand}  label={`Waves ${periodNoun}`} value={cur.picks.toLocaleString()} color="#00BCD4"
             pill={pctPill(cur.picks, prv.picks, vsNoun)} />
