@@ -429,7 +429,7 @@ export default function Dashboard() {
             pill={pctPill(cur.parcels, prv.parcels, vsNoun)} />
           <StatCard Icon={Boxes} label={`Items ${periodNoun}`} value={cur.items.toLocaleString()} color="#7B2FBE"
             pill={pctPill(cur.items, prv.items, vsNoun)} />
-          <StatCard Icon={Hand}  label={`Picks ${periodNoun}`} value={cur.picks.toLocaleString()} color="#00BCD4"
+          <StatCard Icon={Hand}  label={`Waves ${periodNoun}`} value={cur.picks.toLocaleString()} color="#00BCD4"
             pill={pctPill(cur.picks, prv.picks, vsNoun)} />
           <PendingCard total={pending} byCourier={stats?.pending_by_courier} />
         </div>
