@@ -7,3 +7,4 @@ export const storageCustomer   = (id) => api.get(`/storage/customer/${id}`).then
 export const storageFreshness  = ()   => api.get('/storage/freshness').then(r => r.data);
 export const triggerStorageSync = ()  => api.post('/storage/sync').then(r => r.data);
 export const storageCustomerDebug = (q) => api.get('/storage/customer-debug', { params: { q } }).then(r => r.data);
+export const storageMissingDimensions = () => api.get('/storage/missing-dimensions').then(r => r.data);

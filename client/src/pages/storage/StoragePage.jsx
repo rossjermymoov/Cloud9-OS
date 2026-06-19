@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Warehouse, RefreshCw, Boxes, MapPin, Package, Search } from 'lucide-react';
-import { storageSummary, storageByCustomer, storageByLocation, storageFreshness, triggerStorageSync, storageCustomerDebug } from '../../api/storage';
+import { Warehouse, RefreshCw, Boxes, MapPin, Package, Search, AlertTriangle, Download } from 'lucide-react';
+import { storageSummary, storageByCustomer, storageByLocation, storageFreshness, triggerStorageSync, storageCustomerDebug, storageMissingDimensions } from '../../api/storage';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
 const SHADOW = '0 1px 2px rgba(16,24,40,0.06), 0 1px 3px rgba(16,24,40,0.10)';
@@ -218,6 +218,80 @@ function CustomerInspector() {
   );
 }
 
+// Data-quality report: SKUs with no dimensions, grouped by customer, with CSV export.
+function MissingDimensions() {
+  const { data, isLoading } = useQuery({ queryKey: ['storage', 'missing-dims'], queryFn: storageMissingDimensions });
+
+  function downloadCsv() {
+    const rows = data?.skus || [];
+    const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const header = ['Customer', 'SKU', 'Name', 'Stock units', 'Locations', 'Helm inventory id'];
+    const lines = [header.join(','), ...rows.map(r => [r.customer, r.sku, r.name, r.qty, r.locations, r.helm_inventory_id].map(esc).join(','))];
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `skus-missing-dimensions-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+
+  return (
+    <Card style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <AlertTriangle size={17} color="#F59E0B" />
+          <span style={{ fontSize: 15, fontWeight: 800, color: HEADER }}>SKUs missing dimensions</span>
+        </div>
+        {data?.total_missing_skus > 0 && (
+          <button onClick={downloadCsv} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE }}>
+            <Download size={14} /> Download CSV
+          </button>
+        )}
+      </div>
+      <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14 }}>These aren’t counted in any m³ figure until their L×W×H is set in Helm. Work through them by customer, biggest stock first.</div>
+
+      {isLoading ? <div style={{ fontSize: 13, color: MUTED }}>Loading…</div> : !data?.total_missing_skus ? (
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#10B981', padding: '10px 0' }}>✓ Every stocked SKU has dimensions — nothing to fix.</div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 16, fontSize: 12.5, color: MUTED, marginBottom: 14 }}>
+            <span><strong style={{ color: '#F59E0B' }}>{data.total_missing_skus.toLocaleString()}</strong> SKUs missing</span>
+            <span>across <strong style={{ color: TITLE }}>{data.customers_affected}</strong> customers</span>
+          </div>
+
+          {/* Per-customer rollup — tackle the worst first */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+            {data.by_customer.map(c => (
+              <span key={c.customer} style={{ fontSize: 12, color: TITLE, background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 8, padding: '5px 10px' }}>
+                {c.customer}: <strong>{c.missing_skus}</strong> SKU{c.missing_skus !== 1 ? 's' : ''}{c.units ? ` · ${c.units.toLocaleString()} units` : ''}
+              </span>
+            ))}
+          </div>
+
+          <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11, position: 'sticky', top: 0, background: '#fff' }}>
+                <th style={{ padding: '6px' }}>Customer</th><th style={{ padding: '6px' }}>SKU</th><th style={{ padding: '6px' }}>Name</th>
+                <th style={{ padding: '6px', textAlign: 'right' }}>Stock</th><th style={{ padding: '6px', textAlign: 'right' }}>Locations</th>
+              </tr></thead>
+              <tbody>
+                {data.skus.map((r, i) => (
+                  <tr key={i} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+                    <td style={{ padding: '7px 6px', color: MUTED }}>{r.customer}</td>
+                    <td style={{ padding: '7px 6px', fontWeight: 600, color: TITLE }}>{r.sku || '—'}</td>
+                    <td style={{ padding: '7px 6px', color: MUTED, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}</td>
+                    <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{(r.qty ?? 0).toLocaleString()}</td>
+                    <td style={{ padding: '7px 6px', textAlign: 'right', color: MUTED }}>{r.locations}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 export default function StoragePage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -324,6 +398,7 @@ export default function StoragePage() {
             </Card>
           </div>
 
+          <MissingDimensions />
           <CustomerInspector />
         </>
       )}

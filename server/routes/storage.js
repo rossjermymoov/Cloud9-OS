@@ -96,6 +96,30 @@ router.get('/by-location', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Data-quality report: every SKU with no usable dimensions, grouped by customer,
+// so the team can work through them methodically (highest stock first).
+router.get('/missing-dimensions', async (_req, res, next) => {
+  try {
+    const { rows } = await query(`
+      SELECT COALESCE(c.business_name,'Cloud9') AS customer,
+             s.helm_inventory_id, MAX(s.sku) AS sku, MAX(s.name) AS name,
+             COALESCE(SUM(s.qty),0)::int AS qty,
+             COUNT(DISTINCT s.location_id) FILTER (WHERE s.location_id IS NOT NULL)::int AS locations
+      FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE NOT s.has_dimensions
+      GROUP BY COALESCE(c.business_name,'Cloud9'), s.helm_inventory_id
+      ORDER BY customer, qty DESC, sku`);
+    // Per-customer rollup (most affected first) + a grand total.
+    const byCustomerMap = {};
+    for (const r of rows) {
+      const b = (byCustomerMap[r.customer] ||= { customer: r.customer, missing_skus: 0, units: 0 });
+      b.missing_skus++; b.units += r.qty;
+    }
+    const by_customer = Object.values(byCustomerMap).sort((a, b) => b.missing_skus - a.missing_skus);
+    res.json({ total_missing_skus: rows.length, customers_affected: by_customer.length, by_customer, skus: rows });
+  } catch (err) { next(err); }
+});
+
 router.get('/customer/:id', async (req, res, next) => {
   try {
     const { rows } = await query(`
