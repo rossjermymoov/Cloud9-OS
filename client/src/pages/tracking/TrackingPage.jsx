@@ -104,6 +104,18 @@ function timeAgo(ts) {
   return `${d}d ago`;
 }
 
+// Precise elapsed duration, e.g. "3d 4h", "5h 12m", "8m".
+function durationSince(ts) {
+  if (!ts) return '—';
+  const diff = Math.max(0, Date.now() - new Date(ts).getTime());
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return 'less than a minute';
+  const d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60), mm = m % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${mm}m`;
+  return `${mm}m`;
+}
+
 function fmtDate(d) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
@@ -231,14 +243,14 @@ function EventTimeline({ events }) {
 
 // ─── Claims window logic ──────────────────────────────────────
 const CLAIM_RULES = {
-  dpd:             { windowDays: 14, windowFrom: 'network entry',   action: 'email',  actionLabel: 'Email DPD Platinum',  actionTo: 'platinum@dpd.co.uk',              note: 'Email DPD Platinum support to kick off the investigation. DPD will invite you to raise a formal claim once the investigation closes.' },
-  dpd_local:       { windowDays: 14, windowFrom: 'network entry',   action: 'email',  actionLabel: 'Email DPD Platinum',  actionTo: 'platinum@dpd.co.uk',              note: 'Email DPD Platinum support to kick off the investigation. DPD will invite you to raise a formal claim once the investigation closes.' },
-  dpdlocal:        { windowDays: 14, windowFrom: 'network entry',   action: 'email',  actionLabel: 'Email DPD Platinum',  actionTo: 'platinum@dpd.co.uk',              note: 'Email DPD Platinum support to kick off the investigation. DPD will invite you to raise a formal claim once the investigation closes.' },
+  dpd:             { windowDays: 14, windowFrom: 'first scan',   action: 'email',  actionLabel: 'Email DPD Platinum',  actionTo: 'platinum@dpd.co.uk',              note: 'Email DPD Platinum support to kick off the investigation. DPD will invite you to raise a formal claim once the investigation closes.' },
+  dpd_local:       { windowDays: 14, windowFrom: 'first scan',   action: 'email',  actionLabel: 'Email DPD Platinum',  actionTo: 'platinum@dpd.co.uk',              note: 'Email DPD Platinum support to kick off the investigation. DPD will invite you to raise a formal claim once the investigation closes.' },
+  dpdlocal:        { windowDays: 14, windowFrom: 'first scan',   action: 'email',  actionLabel: 'Email DPD Platinum',  actionTo: 'platinum@dpd.co.uk',              note: 'Email DPD Platinum support to kick off the investigation. DPD will invite you to raise a formal claim once the investigation closes.' },
   dhlparcelukcloud:{ windowDays: 14, windowFrom: 'expected delivery',action: 'email', actionLabel: 'Email DHL Support',   actionTo: 'parcel.uk@dhl.com',               note: 'Email DHL support to open an investigation. DHL should invite you to raise a formal claim within 21 days of the delivery date.' },
   dhl:             { windowDays: 14, windowFrom: 'expected delivery',action: 'email', actionLabel: 'Email DHL Support',   actionTo: 'parcel.uk@dhl.com',               note: 'Email DHL support to open an investigation. DHL should invite you to raise a formal claim within 21 days of the delivery date.' },
   yodel:           { windowDays: 7,  windowFrom: 'label generation', action: 'portal', actionLabel: 'Raise on AGL Portal', actionUrl: 'https://agl.yodel.co.uk',        note: 'Yodel claims must be raised via the AGL portal within 7 days of label generation (portal may accept up to 10 days). Act immediately.' },
   agl:             { windowDays: 7,  windowFrom: 'label generation', action: 'portal', actionLabel: 'Raise on AGL Portal', actionUrl: 'https://agl.yodel.co.uk',        note: 'Yodel claims must be raised via the AGL portal within 7 days of label generation (portal may accept up to 10 days). Act immediately.' },
-  ups:             { windowDays: 14, windowFrom: 'network entry',   action: 'email',  actionLabel: 'Email UPS Claims',    actionTo: 'ukparcelclaims@ups.com',           note: 'Submit a UPS claim by email within 14 days of the parcel entering the network. Include shipment details and supporting evidence.' },
+  ups:             { windowDays: 14, windowFrom: 'first scan',   action: 'email',  actionLabel: 'Email UPS Claims',    actionTo: 'ukparcelclaims@ups.com',           note: 'Submit a UPS claim by email within 14 days of the parcel entering the network. Include shipment details and supporting evidence.' },
 };
 
 function getClaimInfo(parcel, consignmentNumber) {
@@ -249,10 +261,16 @@ function getClaimInfo(parcel, consignmentNumber) {
   const rule = isYodel ? CLAIM_RULES.yodel : CLAIM_RULES[code];
   if (!rule) return null;
 
-  // Reference date: for DHL use estimated/actual delivery; for others use network entry (created_at)
+  // Reference date the window counts from:
+  //   DHL                 → estimated/actual delivery (carrier rule)
+  //   'first scan' rules  → the parcel's first physical network scan (NOT our
+  //                         ingest time, which was the previous bug)
+  //   otherwise           → label generation (created_at)
   const refDate = (code.startsWith('dhl') && (parcel.delivered_at || parcel.estimated_delivery))
     ? (parcel.delivered_at || parcel.estimated_delivery)
-    : parcel.created_at;
+    : rule.windowFrom === 'first scan'
+      ? (parcel.first_scan_at || parcel.created_at)
+      : parcel.created_at;
   if (!refDate) return null;
 
   const deadline     = new Date(new Date(refDate).getTime() + rule.windowDays * 86400000);
@@ -537,6 +555,14 @@ function ParcelDrawer({ consignment, onClose }) {
 
             {activeTab === 'events' && (
               <div style={{ padding: '20px 24px' }}>
+                {/* Current status + how long it's been sitting in it */}
+                <div style={{ marginBottom: 20, padding: '12px 14px', background: '#F8FAFC', borderRadius: 10, border: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                  <StatusBadge status={data.status} label={data.status_description} />
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>In this status</div>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: data.status === 'delivered' ? '#00C853' : '#0F172A' }}>{durationSince(data.last_event_at)}</div>
+                  </div>
+                </div>
                 {/* Delivery address */}
                 {(data.recipient_name || data.recipient_address || data.recipient_postcode) && (
                   <div style={{ marginBottom: 20, padding: 14, background: 'rgba(0,188,212,0.05)', borderRadius: 10, border: '1px solid rgba(0,188,212,0.2)' }}>

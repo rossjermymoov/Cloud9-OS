@@ -147,12 +147,19 @@ router.get('/:consignment', async (req, res, next) => {
   try {
     const parcelRes = await query('SELECT * FROM parcels WHERE consignment_number = $1', [req.params.consignment]);
     if (!parcelRes.rows.length) return res.status(404).json({ error: 'Parcel not found' });
-    const eventsRes = await query(
-      `SELECT id, event_code, status, description, location, event_at
-       FROM tracking_events WHERE consignment_number = $1 ORDER BY event_at DESC`,
-      [req.params.consignment]
-    );
-    res.json({ ...parcelRes.rows[0], events: eventsRes.rows });
+    const [eventsRes, firstScanRes] = await Promise.all([
+      query(
+        `SELECT id, event_code, status, description, location, event_at
+         FROM tracking_events WHERE consignment_number = $1 ORDER BY event_at DESC`,
+        [req.params.consignment]),
+      // First physical scan = earliest event once the parcel is actually in the
+      // carrier network. Excludes pre-advice/label states ('booked') and noise.
+      query(
+        `SELECT MIN(event_at) AS first_scan_at FROM tracking_events
+         WHERE consignment_number = $1 AND status NOT IN ('booked','cancelled','unknown')`,
+        [req.params.consignment]),
+    ]);
+    res.json({ ...parcelRes.rows[0], first_scan_at: firstScanRes.rows[0]?.first_scan_at || null, events: eventsRes.rows });
   } catch (err) { next(err); }
 });
 
