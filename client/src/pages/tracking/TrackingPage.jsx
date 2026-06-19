@@ -555,13 +555,10 @@ function ParcelDrawer({ consignment, onClose }) {
 
             {activeTab === 'events' && (
               <div style={{ padding: '20px 24px' }}>
-                {/* Current status + how long it's been sitting in it */}
-                <div style={{ marginBottom: 20, padding: '12px 14px', background: '#F8FAFC', borderRadius: 10, border: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                  <StatusBadge status={data.status} label={data.status_description} />
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>In this status</div>
-                    <div style={{ fontSize: 14, fontWeight: 800, color: data.status === 'delivered' ? '#00C853' : '#0F172A' }}>{durationSince(data.last_event_at)}</div>
-                  </div>
+                {/* How long it's been sitting in its current status */}
+                <div style={{ marginBottom: 20, padding: '12px 14px', background: '#F8FAFC', borderRadius: 10, border: '1px solid rgba(0,0,0,0.06)' }}>
+                  <div style={{ fontSize: 11, color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>In this status</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: data.status === 'delivered' ? '#00C853' : '#0F172A', marginTop: 2 }}>{durationSince(data.last_event_at)}</div>
                 </div>
                 {/* Delivery address */}
                 {(data.recipient_name || data.recipient_address || data.recipient_postcode) && (
