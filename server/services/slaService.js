@@ -200,11 +200,13 @@ export async function evaluateOrders({ fromYmd, toYmd, customerId = null }) {
   const hs = await holidaySet();
   const today = todayLondonYmd();
   const vals = [`${fromYmd} 00:00:00`, `${toYmd} 23:59:59`];
-  // Exclude cancelled orders, and Draft orders (status_id 1) — a draft isn't a
-  // committed order yet, so it must never count as a breach even if it's overdue.
+  // Exclude cancelled orders, plus parked statuses that aren't a live commitment:
+  //   1    Draft           — not a committed order yet
+  //   3019 Beddoes Review  — held for review, not an active dispatch obligation
+  // Neither should ever count as a breach even if it sits past its due date.
   let where = `o.received_at IS NOT NULL AND o.received_at >= $1 AND o.received_at <= $2
                AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')
-               AND (o.status_id IS NULL OR o.status_id <> 1)`;
+               AND (o.status_id IS NULL OR o.status_id NOT IN (1, 3019))`;
   if (customerId) { vals.push(customerId); where += ` AND o.customer_id = $${vals.length}`; }
 
   const { rows } = await query(`
