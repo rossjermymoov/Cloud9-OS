@@ -17,6 +17,7 @@ import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured } from '../services/helmClient.js';
 import { syncPicks } from '../services/pickingService.js';
+import { holidaySet, lastWorkingBefore } from '../services/bankHolidayService.js';
 
 const router = express.Router();
 
@@ -54,18 +55,29 @@ function parseCustomDate(s) {
   return d;
 }
 
-function rangeFor(periodRaw, dateRaw) {
+function rangeFor(periodRaw, dateRaw, hs = null) {
   const custom = parseCustomDate(dateRaw);
   if (custom) return { period: 'custom', from: isoDay(custom), to: isoDay(custom) };
   const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(periodRaw) ? periodRaw : 'week';
   const today = new Date();
+  // 'yesterday' = the last WORKING day (skips weekends + UK bank holidays), so on
+  // a Monday it lands on Friday. Falls back to calendar yesterday without holidays.
+  if (period === 'yesterday') {
+    const lw = hs ? lastWorkingBefore(isoDay(today), hs) : isoDay(new Date(today.getTime() - 86400000));
+    return { period, from: lw, to: lw };
+  }
   let from = new Date(today), to = new Date(today);
-  if (period === 'day')           { /* today only */ }
-  else if (period === 'yesterday') { from.setDate(today.getDate() - 1); to.setDate(today.getDate() - 1); }
-  else if (period === 'week')      { from.setDate(today.getDate() - 6); }
-  else if (period === 'month')     { from.setDate(today.getDate() - 29); }
-  else if (period === 'quarter')   { from.setDate(today.getDate() - 89); }
+  if (period === 'day')          { /* today only */ }
+  else if (period === 'week')    { from.setDate(today.getDate() - 6); }
+  else if (period === 'month')   { from.setDate(today.getDate() - 29); }
+  else if (period === 'quarter') { from.setDate(today.getDate() - 89); }
   return { period, from: isoDay(from), to: isoDay(to) };
+}
+// Resolve a request's period to dates, loading the bank-holiday set so 'yesterday'
+// can mean the last working day.
+async function resolveRange(req) {
+  const hs = await holidaySet().catch(() => new Set());
+  return rangeFor(req.query.period, req.query.date, hs);
 }
 
 // Per-pick time basis (ms) = active handling time (Σ Helm action durations).
@@ -109,7 +121,7 @@ router.put('/settings/day-window', async (req, res, next) => {
 
 router.get('/summary', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const { period, from, to } = await resolveRange(req);
     const { rows } = await query(`
       SELECT
         COUNT(*)::int                                              AS picks,
@@ -146,7 +158,7 @@ router.get('/summary', async (req, res, next) => {
 // formula used. Lets us reconcile any headline number against its inputs.
 router.get('/debug', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const { period, from, to } = await resolveRange(req);
     const [agg, rows] = await Promise.all([
       query(`
         SELECT COUNT(*)::int                                              AS picks,
@@ -195,7 +207,7 @@ router.get('/debug', async (req, res, next) => {
 
 router.get('/daily', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const { period, from, to } = await resolveRange(req);
 
     // Single day (today / yesterday / a custom date) → break the day into HOURS so
     // you can see throughput across the working day. A range → one bar per day.
@@ -238,7 +250,7 @@ router.get('/daily', async (req, res, next) => {
 
 router.get('/leaderboard', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const { period, from, to } = await resolveRange(req);
     // Per-PERSON, from pick_contributions — time + items split by the real user
     // who performed each scan, not just the pick's assigned name.
     const { rows } = await query(`
@@ -280,7 +292,7 @@ router.get('/leaderboard', async (req, res, next) => {
 // Per-pick list — the factual view: which picks, who did them, how long they took.
 router.get('/picks', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const { period, from, to } = await resolveRange(req);
     const { rows } = await query(`
       SELECT helm_pick_id, pick_number, picker_name, item_count, order_count,
              status_name, pick_type_name, pick_option_name, completed_at,

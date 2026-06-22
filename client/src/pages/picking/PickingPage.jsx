@@ -11,7 +11,7 @@ const GREEN = '#10B981', GREEN_HOVER = '#34D399';
 const SHADOW = '0 1px 2px rgba(16,24,40,0.06), 0 1px 3px rgba(16,24,40,0.10)';
 
 const PERIODS = [
-  { v: 'day', l: 'Today' }, { v: 'yesterday', l: 'Yesterday' }, { v: 'week', l: 'Week' },
+  { v: 'day', l: 'Today' }, { v: 'yesterday', l: 'Last working day' }, { v: 'week', l: 'Week' },
   { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }, { v: 'custom', l: 'Custom' },
 ];
 const isoOf = (d) => { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };

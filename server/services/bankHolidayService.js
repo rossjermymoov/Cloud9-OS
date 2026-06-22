@@ -67,3 +67,12 @@ export function firstWorkingOnOrAfter(ymd, hs) {
 export function firstWorkingAfter(ymd, hs) {
   return firstWorkingOnOrAfter(addDaysStr(ymd, 1), hs);
 }
+export function firstWorkingOnOrBefore(ymd, hs) {
+  let d = ymd;
+  for (let i = 0; i < 30 && !isWorkingDay(d, hs); i++) d = addDaysStr(d, -1);
+  return d;
+}
+// Most recent working day strictly before `ymd` (skips weekends + bank holidays).
+export function lastWorkingBefore(ymd, hs) {
+  return firstWorkingOnOrBefore(addDaysStr(ymd, -1), hs);
+}

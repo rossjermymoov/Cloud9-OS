@@ -107,10 +107,10 @@ function prettyCourier(name) {
 }
 
 // Flexible trend chart — dual line (current vs previous) or monthly bars.
-const PREV_LABEL = { day: 'Yesterday', yesterday: 'Prev day', week: 'Last week', month: 'Last month', quarter: 'Prev quarter', custom: 'Prev day' };
-const CUR_LABEL  = { day: 'Today', yesterday: 'Yesterday', week: 'This week', month: 'This month', quarter: 'This quarter', custom: 'Selected day' };
-const PERIOD_NOUN = { day: 'today', yesterday: 'yesterday', week: 'this week', month: 'this month', quarter: 'this quarter' };
-const VS_NOUN     = { day: 'yesterday', yesterday: 'prev day', week: 'last week', month: 'last month', quarter: 'last quarter' };
+const PREV_LABEL = { day: 'Yesterday', yesterday: 'Prev working day', week: 'Last week', month: 'Last month', quarter: 'Prev quarter', custom: 'Prev day' };
+const CUR_LABEL  = { day: 'Today', yesterday: 'Last working day', week: 'This week', month: 'This month', quarter: 'This quarter', custom: 'Selected day' };
+const PERIOD_NOUN = { day: 'today', yesterday: 'last working day', week: 'this week', month: 'this month', quarter: 'this quarter' };
+const VS_NOUN     = { day: 'yesterday', yesterday: 'prior working day', week: 'last week', month: 'last month', quarter: 'last quarter' };
 function TrendChart({ trend, metric }) {
   const [hoverIdx, setHoverIdx] = useState(null);
   if (!trend) return null;
@@ -387,7 +387,7 @@ export default function Dashboard() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Seg value={metric} onChange={setMetric} options={[{ v: 'parcels', l: 'Parcels' }, { v: 'items', l: 'Items' }]} />
-          <Seg value={period} onChange={setPeriod} options={[{ v: 'day', l: 'Day' }, { v: 'yesterday', l: 'Yesterday' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }, { v: 'custom', l: 'Custom' }]} />
+          <Seg value={period} onChange={setPeriod} options={[{ v: 'day', l: 'Day' }, { v: 'yesterday', l: 'Last working day' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }, { v: 'custom', l: 'Custom' }]} />
           {period === 'custom' && (
             <input type="date" value={customDate} min={minStr} max={todayStr}
               onChange={e => setCustomDate(e.target.value || todayStr)}

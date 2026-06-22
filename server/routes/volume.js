@@ -9,6 +9,7 @@
 
 import express from 'express';
 import { query } from '../db/index.js';
+import { holidaySet, lastWorkingBefore } from '../services/bankHolidayService.js';
 
 const router = express.Router();
 
@@ -156,19 +157,17 @@ router.get('/trend', async (req, res, next) => {
     }
 
     if (period === 'yesterday') {
-      // Yesterday vs the day before — the daily management-review metric.
-      const ph = await query(`
-        SELECT COUNT(*) FILTER (WHERE completed_at >= CURRENT_DATE - INTERVAL '1 day' AND completed_at < CURRENT_DATE)::int AS yest,
-               COUNT(*) FILTER (WHERE completed_at >= CURRENT_DATE - INTERVAL '2 day' AND completed_at < CURRENT_DATE - INTERVAL '1 day')::int AS dby
-        FROM picks WHERE status = 1`);
-      const yest = get(addDays(now, -1)), dby = get(addDays(now, -2));
+      // "Last working day" — the last actual shipping day (skips weekends + UK bank
+      // holidays), compared to the working day before it. So on a Monday this shows
+      // Friday vs Thursday, not Sunday vs Saturday.
+      const hs = await holidaySet().catch(() => new Set());
+      const lwStr = lastWorkingBefore(ymd(now), hs);
+      const pwStr = lastWorkingBefore(lwStr, hs);
+      const getStr = (s) => map[s] || { parcels: 0, items: 0, picks: 0 };
       const labels = [], series = [];
       for (let k = 13; k >= 0; k--) { const d = addDays(now, -k); const g = get(d); labels.push(`${d.getDate()}/${d.getMonth() + 1}`); series.push({ parcels: g.parcels, items: g.items, picks: g.picks, dow: d.getDay() }); }
-      return res.json({ period: 'yesterday', mode: 'bars', labels, series,
-        totals: {
-          current:  { parcels: yest.parcels, items: yest.items, picks: ph.rows[0].yest },
-          previous: { parcels: dby.parcels,  items: dby.items,  picks: ph.rows[0].dby },
-        } });
+      return res.json({ period: 'yesterday', mode: 'bars', labels, series, last_working_day: lwStr,
+        totals: { current: getStr(lwStr), previous: getStr(pwStr) } });
     }
 
     if (period === 'week') {
