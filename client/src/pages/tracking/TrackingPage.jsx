@@ -666,6 +666,7 @@ export default function TrackingPage() {
   const [selected,        setSelected]      = useState(null);
   const [staleRunning,    setStaleRunning]  = useState(false);
   const [staleResult,     setStaleResult]   = useState(null);
+  const [stuckOpen,       setStuckOpen]     = useState(false);
   const searchRef = useRef(null);
   const LIMIT = 50;
 
@@ -717,6 +718,13 @@ export default function TrackingPage() {
       offset: page * LIMIT,
     }}).then(r => r.data),
     refetchInterval: 60000,
+  });
+
+  // Booked but never moved — still 'booked' from before today (excl. Royal Mail).
+  const { data: stuck } = useQuery({
+    queryKey: ['tracking-stuck'],
+    queryFn:  () => api.get('/tracking/stuck').then(r => r.data),
+    refetchInterval: 120000,
   });
 
   function refresh() { refetchStats(); refetchList(); }
@@ -811,6 +819,43 @@ export default function TrackingPage() {
           </span>
         )}
       </div>
+
+      {/* ── Booked but never moved (excl. Royal Mail) ──────────── */}
+      {stuck?.total > 0 && (
+        <div style={{ marginBottom: 24, border: '1px solid rgba(244,67,54,0.3)', borderRadius: 10, background: 'rgba(244,67,54,0.05)', overflow: 'hidden' }}>
+          <button onClick={() => setStuckOpen(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+            <AlertTriangle size={20} color="#F44336" />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14.5, fontWeight: 800, color: '#0F172A' }}>{stuck.total} parcel{stuck.total !== 1 ? 's' : ''} booked but never moved</div>
+              <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>Still awaiting a first carrier scan from before today{stuck.excludes_royal_mail ? ' · Royal Mail excluded (no collection scan)' : ''}</div>
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#F44336' }}>{stuckOpen ? 'Hide ▲' : 'View ▼'}</span>
+          </button>
+          {stuckOpen && (
+            <div style={{ maxHeight: 360, overflowY: 'auto', borderTop: '1px solid rgba(244,67,54,0.2)' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11, position: 'sticky', top: 0, background: '#FDECEA' }}>
+                  <th style={{ padding: '7px 12px' }}>Consignment</th><th style={{ padding: '7px 6px' }}>Customer</th>
+                  <th style={{ padding: '7px 6px' }}>Carrier</th><th style={{ padding: '7px 6px' }}>Postcode</th>
+                  <th style={{ padding: '7px 12px', textAlign: 'right' }}>Days stuck</th>
+                </tr></thead>
+                <tbody>
+                  {stuck.rows.map((s, i) => (
+                    <tr key={i} onClick={() => setSelected(s.consignment_number)} style={{ cursor: 'pointer', borderTop: '1px solid rgba(0,0,0,0.05)' }}
+                      onMouseEnter={e => e.currentTarget.style.background = 'rgba(244,67,54,0.06)'} onMouseLeave={e => e.currentTarget.style.background = 'none'}>
+                      <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontWeight: 700, color: '#00BCD4' }}>{s.consignment_number}</td>
+                      <td style={{ padding: '8px 6px', color: '#0F172A' }}>{s.customer_name || '—'}</td>
+                      <td style={{ padding: '8px 6px', color: '#334155' }}>{s.courier_name || '—'}</td>
+                      <td style={{ padding: '8px 6px', color: '#64748B' }}>{s.recipient_postcode || '—'}</td>
+                      <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: s.days_stuck >= 3 ? '#F44336' : '#D97706' }}>{s.days_stuck}d</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── KPI cards ──────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 24 }}>

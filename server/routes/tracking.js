@@ -92,6 +92,31 @@ router.get('/stats', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ─── GET /api/tracking/stuck ─────────────────────────────────────────────────
+// Parcels booked but never moved: still in 'booked' (no carrier scan) and booked
+// BEFORE today (so the collection day has passed). Royal Mail is excluded by
+// default because it doesn't scan on collection — pass ?include_royal_mail=1 to
+// drop that exclusion once RM tracking is live.
+router.get('/stuck', async (req, res, next) => {
+  try {
+    const includeRM = req.query.include_royal_mail === '1' || req.query.include_royal_mail === 'true';
+    const LONDON_MIDNIGHT = `(date_trunc('day', now() AT TIME ZONE 'Europe/London') AT TIME ZONE 'Europe/London')`;
+    const rmClause = includeRM ? '' :
+      `AND NOT (lower(COALESCE(courier_code,'')) IN ('royal_mail','royalmail') OR COALESCE(courier_name,'') ILIKE '%royal mail%')`;
+    const { rows } = await query(`
+      SELECT consignment_number, customer_name, courier_name, courier_code, recipient_postcode,
+             last_event_at, created_at,
+             ((now() AT TIME ZONE 'Europe/London')::date - (COALESCE(last_event_at, created_at) AT TIME ZONE 'Europe/London')::date) AS days_stuck
+      FROM parcels
+      WHERE status = 'booked'
+        AND COALESCE(last_event_at, created_at) < ${LONDON_MIDNIGHT}
+        ${rmClause}
+      ORDER BY COALESCE(last_event_at, created_at) ASC
+      LIMIT 500`, []);
+    res.json({ total: rows.length, excludes_royal_mail: !includeRM, rows });
+  } catch (err) { next(err); }
+});
+
 // ─── GET /api/tracking ───────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
