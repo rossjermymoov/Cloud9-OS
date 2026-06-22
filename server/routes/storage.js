@@ -165,6 +165,34 @@ router.get('/customer-debug', async (req, res, next) => {
   try {
     if (!helmConfigured()) return res.status(503).json({ error: 'Helm not configured' });
     const q = (req.query.q || 'ccell').toString();
+
+    // Cloud9 bucket = stock with no fulfilment client (customer_id NULL). Read it
+    // straight from what was stored, so you can see exactly what landed there.
+    if (['cloud9', 'cloud 9', 'unassigned'].includes(q.trim().toLowerCase())) {
+      const [skuRows, tot] = await Promise.all([
+        query(`SELECT s.helm_inventory_id, MAX(s.sku) AS sku, MAX(s.name) AS name,
+                      COALESCE(SUM(s.qty),0)::int AS units,
+                      COUNT(DISTINCT s.location_id) FILTER (WHERE s.location_id IS NOT NULL)::int AS locations,
+                      COALESCE(MAX(s.unit_m3),0)::float AS unit_m3,
+                      COALESCE(SUM(s.volume_m3),0)::float AS volume_m3,
+                      bool_or(s.has_dimensions) AS has_dims
+               FROM storage_lines s WHERE s.customer_id IS NULL
+               GROUP BY s.helm_inventory_id ORDER BY volume_m3 DESC NULLS LAST LIMIT 50`),
+        query(`SELECT COALESCE(SUM(volume_m3),0)::float AS total_m3,
+                      COUNT(DISTINCT helm_inventory_id)::int AS skus,
+                      COUNT(DISTINCT helm_inventory_id) FILTER (WHERE NOT has_dimensions)::int AS no_dims
+               FROM storage_lines WHERE customer_id IS NULL`),
+      ]);
+      const t = tot.rows[0];
+      return res.json({
+        customer: 'Cloud9 (stock with no fulfilment client)', from_store: true,
+        dimensions: dimUnitInfo(),
+        totals: { total_m3: +t.total_m3.toFixed(2), sku_count: t.skus, counted: t.skus - t.no_dims, zero_dims: t.no_dims, oversize_dropped: 0, components_groups_excluded: 0 },
+        note: 'These SKUs have no fulfilment client in Helm, so they were attributed to Cloud9. If you recognise any as belonging to a customer, that customer needs linking in Helm.',
+        top_skus: skuRows.rows.map(r => ({ sku: r.sku, name: r.name, type: '—', L: null, W: null, H: null, units: r.units, locations: r.locations, unit_m3: r.unit_m3 || null, volume_m3: r.volume_m3, flag: r.has_dims ? null : 'no dimensions' })),
+      });
+    }
+
     const cm = await query(
       `SELECT id, business_name, helm_customer_id FROM customers
        WHERE helm_customer_id IS NOT NULL AND business_name ILIKE $1

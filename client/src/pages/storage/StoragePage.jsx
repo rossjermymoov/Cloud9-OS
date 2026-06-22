@@ -203,7 +203,7 @@ function CustomerInspector() {
                     <td style={{ padding: '7px 6px', fontWeight: 600, color: TITLE }}>{r.sku || '—'}</td>
                     <td style={{ padding: '7px 6px', color: MUTED, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name || '—'}{r.flag && <span style={{ color: '#EF4444', fontWeight: 700 }}> · {r.flag}</span>}</td>
                     <td style={{ padding: '7px 6px', color: (r.type === 'Group' || r.type === 'Component') ? '#F59E0B' : MUTED }}>{r.type}</td>
-                    <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{r.L}×{r.W}×{r.H}</td>
+                    <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{r.L != null ? `${r.L}×${r.W}×${r.H}` : '—'}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', color: '#334155' }}>{(r.units ?? 0).toLocaleString()}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', color: r.unit_m3 == null ? '#CBD5E1' : MUTED }}>{r.unit_m3 == null ? '—' : r.unit_m3}</td>
                     <td style={{ padding: '7px 6px', textAlign: 'right', fontWeight: 700, color: ACCENT }}>{(r.volume_m3 ?? 0).toFixed(3)}</td>

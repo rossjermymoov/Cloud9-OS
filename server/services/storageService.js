@@ -101,7 +101,10 @@ export async function syncStorage({ pageDelayMs = 80 } = {}) {
     // Groups) or no longer in Helm don't leave stale rows inflating the totals.
     await query(`DELETE FROM storage_lines`);
 
-    const cm = await query(`SELECT id, helm_customer_id FROM customers WHERE helm_customer_id IS NOT NULL AND account_status = 'active'`);
+    // Attribute to EVERY customer that has a Helm id — active or not. (Previously
+    // only 'active' customers were looped, so an inactive customer's stock fell
+    // through to the Cloud9 catch-all below and made Cloud9 look enormous.)
+    const cm = await query(`SELECT id, helm_customer_id FROM customers WHERE helm_customer_id IS NOT NULL`);
     for (const c of cm.rows) {
       let items;
       try { items = await fetchInventoryForClient({ helmClientId: c.helm_customer_id }); }
