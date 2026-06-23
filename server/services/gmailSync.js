@@ -110,6 +110,20 @@ import { identifyCourierByTracking, getAllTrackingExamples, draftCustomerUpdateF
 // Sender domains that are couriers / our wholesaler (AGL) — never the customer.
 const COURIER_DOMAINS = /@(?:[a-z0-9-]+\.)*(dpd|dhl|evri|hermes|myhermes|yodel|ups|parcelforce|royalmail|fedex|agl)\.[a-z.]{2,}/i;
 
+// Match a courier reply back to its ticket by the [Ref: Moov-XXXX] tag we stamp
+// on outbound courier mail (subject or body). The authoritative thread key.
+async function findTicketByRef(text) {
+  const m = String(text || '').match(/\[Ref:\s*(Moov-\d+)\]/i);
+  if (!m) return null;
+  const r = await query(
+    `SELECT id FROM queries WHERE courier_reference_id = $1
+       AND status NOT IN ('resolved','resolved_claim_approved','resolved_claim_rejected')
+     ORDER BY created_at DESC LIMIT 1`,
+    [m[1]],
+  );
+  return r.rows[0]?.id || null;
+}
+
 // Find the original ticket a courier reply belongs to, by the tracking number(s)
 // in its body — covering DPD's 1550-prefixed vs bare 10-digit forms.
 async function findTicketByTrackingInBody(body) {
@@ -314,7 +328,9 @@ async function upsertTicket(msg, gmail = null) {
   // A courier replied outside our thread — route it back to the ORIGINAL ticket
   // by the tracking number, never spin up a new "DPD-as-customer" ticket.
   if (!queryId && isCourierSender) {
-    queryId = await findTicketByTrackingInBody(`${subject}\n${body}`);
+    // Authoritative: our [Ref: Moov-XXXX] tag; fallback: tracking number in body.
+    queryId = await findTicketByRef(`${subject}\n${body}`)
+           || await findTicketByTrackingInBody(`${subject}\n${body}`);
     if (!queryId) {
       console.warn(`[Gmail sync] Courier reply from ${senderEmail} unmatched to any ticket (no tracking match) — skipped`);
       return { status: 'skipped', reason: 'courier reply with no matching ticket' };
@@ -392,7 +408,14 @@ async function upsertTicket(msg, gmail = null) {
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false, $11)
   `, [queryId, direction, senderEmail, subject, body.slice(0, 50000), bodyHtml ? bodyHtml.slice(0, 2000000) : null, receivedAt, gmailMsgId, gmailThreadId || null, inReplyTo || null, isOurs ? receivedAt : null]);
 
-  await query(`UPDATE queries SET updated_at = NOW() WHERE id = $1`, [queryId]);
+  // Track the latest inbound timestamps + courier-track state for SLA/dual-track.
+  if (isCourierSender) {
+    await query(`UPDATE queries SET last_courier_response_at = NOW(), track_b_status = 'Replied', updated_at = NOW() WHERE id = $1`, [queryId]);
+  } else if (!isOurs) {
+    await query(`UPDATE queries SET last_customer_response_at = NOW(), updated_at = NOW() WHERE id = $1`, [queryId]);
+  } else {
+    await query(`UPDATE queries SET updated_at = NOW() WHERE id = $1`, [queryId]);
+  }
   if (isOurs) console.log(`[Gmail sync] Stored OUTBOUND reply on ticket ${queryId} (thread ${gmailThreadId}, from ${senderEmail})`);
 
   // Courier reply stored on the original ticket → translate it into a draft back

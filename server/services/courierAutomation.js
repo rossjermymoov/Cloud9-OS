@@ -11,6 +11,7 @@
 import { query } from '../db/index.js';
 import { extractTriage, geminiGenerate, isLikelyTracking } from './geminiService.js';
 import { matchTemplate, fillTemplate } from './courierTemplates.js';
+import { isAutopilotEnabled, isLockedCategory } from './workflowTrust.js';
 
 const DEFAULT_SLA_HOURS = 24;
 const SUPPORT_FROM = 'service@moovparcel.co.uk';
@@ -213,7 +214,7 @@ async function resolveCourierEmail(courierCode, issueType) {
 // Triage a customer email → draft customer confirmation + courier inquiry → set SLA.
 export async function processCustomerEmail(queryId, { subject = '', body = '' } = {}) {
   const tRes = await query(
-    `SELECT id, customer_name, courier_code, courier_name, consignment_number, subject
+    `SELECT id, ticket_number, customer_name, courier_code, courier_name, consignment_number, subject, group_name
        FROM queries WHERE id = $1`,
     [queryId],
   );
@@ -345,27 +346,60 @@ export async function processCustomerEmail(queryId, { subject = '', body = '' } 
     `we'll come straight back to you as soon as we hear.`;
   const customerBody = stitch(tpl.customer_header_template, customerMiddle, tpl.customer_footer_template, vars);
 
+  // [Ref: Moov-XXXX] threads inbound courier replies back to this exact ticket.
+  const ref = `Moov-${ticket.ticket_number}`;
+
   // Sandbox: create drafts only — nothing leaves the building.
   await insertDraft(queryId, 'outbound_customer',
     `Re: ${ticket.subject || 'your enquiry'}`,
     customerBody);
   await insertDraft(queryId, 'outbound_courier',
-    `${template.courierName} — ${triage.issue_type} — ${vars.tracking_code}`,
+    `[Ref: ${ref}] ${template.courierName} — ${triage.issue_type} — ${vars.tracking_code}`,
     courierBody,
     courierEmail);
 
   const expiresAt = new Date(Date.now() + (template.slaHours || DEFAULT_SLA_HOURS) * 3600 * 1000);
   await query(
     `UPDATE queries
-        SET internal_automation_state = 'awaiting_courier_response',
+        SET courier_reference_id = $4,
+            track_a_status = 'Draft',
+            track_b_status = 'Draft',
+            internal_automation_state = 'awaiting_courier_response',
             courier_sla_expires_at = $2,
             courier_code = COALESCE(courier_code, $3),
             missing_variables = NULL,
             triage_intent = 'courier_chase',
             updated_at = NOW()
       WHERE id = $1`,
-    [queryId, expiresAt, courierCode],
+    [queryId, expiresAt, courierCode, ref],
   );
+
+  // ── Full Autopilot ──────────────────────────────────────────────────────────
+  // If this category (courier + intent) is calibrated and toggled live — and not
+  // a locked category (claims/complaints) — dispatch both faces autonomously: mark
+  // sent, flip tracks, and log a true autopilot_dispatch (no QA stop).
+  const intent = 'courier_chase';
+  if (!isLockedCategory(intent, ticket.group_name) && await isAutopilotEnabled(courierCode, intent)) {
+    await query(
+      `UPDATE query_emails SET is_ai_draft = false, ai_draft_edited = false,
+              ai_draft_approved_at = NOW(), sent_at = NOW()
+        WHERE query_id = $1 AND is_ai_draft = true AND sent_at IS NULL`,
+      [queryId],
+    );
+    await query(
+      `UPDATE queries SET status = 'awaiting_courier'::query_status,
+              track_a_status = 'Sent', track_b_status = 'Sent', updated_at = NOW()
+        WHERE id = $1`,
+      [queryId],
+    );
+    await query(
+      `INSERT INTO audit_logs (action_type, query_id, actor, metadata)
+       VALUES ('autopilot_dispatch', $1, 'system', '{"mode":"full_autopilot"}'::jsonb)`,
+      [queryId],
+    );
+    console.log(`[Autopilot] auto-dispatched dual-track for ticket ${queryId} (${courierCode}/${intent})`);
+    return { status: 'autopilot_dispatched', courier: template.courierName, issue_type: triage.issue_type };
+  }
 
   return {
     status: 'drafted',

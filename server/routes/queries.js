@@ -18,6 +18,7 @@ import { geminiGenerate } from '../services/geminiService.js';
 import { applySlaTriggers } from '../services/slaEngine.js';
 import { triagePriority } from '../services/triageEngine.js';
 import { aiAutonomouslyLearnPreference } from '../services/learningEngine.js';
+import { recordApproval } from '../services/workflowTrust.js';
 
 const router = express.Router();
 
@@ -897,6 +898,40 @@ router.get('/learning-nudges', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/queries/:id/auto-remind — fired from the Google Chat alert button.
+// Drafts a courier chase-up reminder on the ticket (sandbox: no real send) and
+// returns a tiny confirmation page. Registered before '/:id'.
+router.get('/:id/auto-remind', async (req, res, next) => {
+  try {
+    const t = await query(
+      `SELECT ticket_number, courier_name, consignment_number, courier_reference_id FROM queries WHERE id = $1`,
+      [req.params.id],
+    );
+    if (!t.rows.length) return res.status(404).send('Ticket not found');
+    const tk = t.rows[0];
+    const ref = tk.courier_reference_id || `Moov-${tk.ticket_number}`;
+    const body =
+      `Following up on our earlier query (Ref ${ref}) regarding consignment ${tk.consignment_number || '(n/a)'}. ` +
+      `We have not yet received a response and the SLA window has now passed — please provide an urgent update.`;
+    await query(
+      `INSERT INTO query_emails (query_id, direction, subject, body_text, from_address, is_ai_draft, created_at)
+       VALUES ($1, 'outbound_courier'::email_direction, $2, $3, 'service@moovparcel.co.uk', true, NOW())`,
+      [req.params.id, `[Ref: ${ref}] Reminder — ${tk.courier_name || 'courier'}`, body],
+    );
+    await query(
+      `INSERT INTO audit_logs (action_type, query_id, actor, metadata)
+       VALUES ('auto_remind_fired', $1, 'human', '{"source":"google_chat"}'::jsonb)`,
+      [req.params.id],
+    ).catch(() => {});
+    res.set('Content-Type', 'text/html').send(
+      `<body style="font-family:system-ui;padding:40px;text-align:center">
+         <h2>🔄 Reminder queued for Moov-${tk.ticket_number}</h2>
+         <p>A courier chase-up reminder has been drafted. Review it in the QA Bay.</p>
+       </body>`,
+    );
+  } catch (err) { next(err); }
+});
+
 // POST /api/queries/:id/direct-resolve — one-click AI-suggested closure.
 // No email/SendGrid. Marks the ticket resolved and logs a correct-AI-assessment
 // entry to the audit ledger. Registered before '/:id'.
@@ -1484,6 +1519,12 @@ router.patch('/:id/emails/:emailId/approve', async (req, res, next) => {
       [queryId, wasEdited],
     );
 
+    // Per-category Probation→Autopilot calibration (courier + intent).
+    try {
+      const c = await query(`SELECT courier_code, triage_intent FROM queries WHERE id = $1`, [queryId]);
+      if (c.rows[0]) await recordApproval(c.rows[0].courier_code, c.rows[0].triage_intent, wasEdited);
+    } catch (e) { console.warn('[WorkflowTrust] single-approve calibration failed:', e.message); }
+
     // Sandbox loop-back: 5s after approval, fabricate an inbound courier reply and
     // run it through the translation engine so a fresh draft pops back into the QA
     // Bay — letting you watch the ping-pong cycle continuously, no real mail sent.
@@ -1562,17 +1603,25 @@ router.post('/:id/approve-strategy', async (req, res, next) => {
       dispatched.push({ email_id: d.id, direction: d.direction, edited: wasEdited });
     }
 
-    // Flip ticket to "awaiting external response" + update the trust streak.
+    // Flip ticket to "awaiting external response", set track states + trust streak.
     const nextStatus = anyCourier ? 'awaiting_courier' : 'awaiting_customer';
     await query(
       `UPDATE queries
           SET status = $2::query_status,
               internal_automation_state = 'awaiting_courier_response',
+              track_a_status = 'Sent',
+              track_b_status = $4,
               consecutive_approvals = CASE WHEN $3 THEN 0 ELSE consecutive_approvals + 1 END,
               updated_at = NOW()
         WHERE id = $1`,
-      [queryId, nextStatus, anyEdited],
+      [queryId, nextStatus, anyEdited, anyCourier ? 'Sent' : 'Standby'],
     );
+
+    // Per-category Probation→Autopilot calibration.
+    try {
+      const c = await query(`SELECT courier_code, triage_intent FROM queries WHERE id = $1`, [queryId]);
+      if (c.rows[0]) await recordApproval(c.rows[0].courier_code, c.rows[0].triage_intent, anyEdited);
+    } catch (e) { console.warn('[WorkflowTrust] strategy calibration failed:', e.message); }
 
     res.json({ ok: true, dispatched, status: nextStatus });
   } catch (err) { next(err); }
