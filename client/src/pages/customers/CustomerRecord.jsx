@@ -11,6 +11,7 @@ import {
   listCommunications, addCommunication,
 } from '../../api/customers';
 import { volumeCustomer } from '../../api/volume';
+import { xeroCustomerFinance } from '../../api/xero';
 
 const RAG = { green: '#00C853', amber: '#F59E0B', red: '#E11D48', grey: '#94A3B8' };
 const HEALTH = { green: 'Healthy', amber: 'Warning', red: 'At Risk' };
@@ -354,13 +355,56 @@ function FinancialTab({ c }) {
         <Field label="Payment terms" value={`${c.payment_terms_days} days`} />
         <Field label="Billing cycle" value={c.billing_cycle} />
       </Card>
-      <Card title="Xero link">
-        <Field label="Account ID" value={c.helm_accounts_id} />
-        <div style={{ fontSize: 12, color: MUTED, marginTop: 8, lineHeight: 1.6 }}>
-          This Account ID matches the Xero contact. Live invoices and balances will appear here once Xero is connected.
-        </div>
-      </Card>
+      <XeroFinanceCard customerId={c.id} />
     </div>
+  );
+}
+
+// Live Xero invoices + outstanding balance for one customer.
+function XeroFinanceCard({ customerId }) {
+  const { data, isLoading } = useQuery({ queryKey: ['xero-finance', customerId], queryFn: () => xeroCustomerFinance(customerId), retry: false });
+  const money = (n) => `£${(Number(n) || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const statusColor = { over_limit: '#EF4444', warning: '#F59E0B', ok: '#10B981', no_limit: MUTED }[data?.credit_status] || MUTED;
+
+  return (
+    <Card title="Xero — invoices & balance">
+      {isLoading ? <div style={{ fontSize: 12.5, color: MUTED }}>Loading…</div>
+      : !data?.linked ? (
+        <div style={{ fontSize: 12.5, color: MUTED, lineHeight: 1.6 }}>
+          {data?.xero_connected === false ? 'Xero isn’t connected yet. Connect it in Settings → Xero.' : 'This customer isn’t linked to a Xero contact yet. Link it in Settings → Xero.'}
+        </div>
+      ) : (
+        <>
+          <Field label="Xero contact" value={data.xero_contact_name || '—'} />
+          <Field label="Outstanding (authorised)" value={money(data.outstanding)} />
+          {data.credit_limit > 0 && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12.5, margin: '4px 0 8px' }}>
+              <span style={{ color: MUTED }}>Credit used</span>
+              <span style={{ fontWeight: 700, color: statusColor }}>{data.utilisation_pct != null ? `${data.utilisation_pct}%` : '—'} of {money(data.credit_limit)}</span>
+            </div>
+          )}
+          {data.error && <div style={{ fontSize: 11.5, color: '#EF4444' }}>Couldn’t reach Xero: {data.error}</div>}
+          {data.invoices?.length > 0 ? (
+            <div style={{ marginTop: 8, maxHeight: 220, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11 }}>
+                  <th style={{ padding: '5px 4px' }}>Invoice</th><th style={{ padding: '5px 4px' }}>Due</th><th style={{ padding: '5px 4px', textAlign: 'right' }}>Owed</th>
+                </tr></thead>
+                <tbody>
+                  {data.invoices.map(inv => (
+                    <tr key={inv.id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+                      <td style={{ padding: '6px 4px', fontWeight: 600, color: TITLE }}>{inv.number || inv.id.slice(0, 8)}</td>
+                      <td style={{ padding: '6px 4px', color: inv.is_overdue ? '#EF4444' : MUTED, fontWeight: inv.is_overdue ? 700 : 400 }}>{inv.due_date || '—'}{inv.is_overdue ? ' ⚠' : ''}</td>
+                      <td style={{ padding: '6px 4px', textAlign: 'right', fontWeight: 700, color: '#334155' }}>{money(inv.amount_due)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <div style={{ fontSize: 12.5, color: '#10B981', marginTop: 8 }}>✓ No outstanding invoices.</div>}
+        </>
+      )}
+    </Card>
   );
 }
 

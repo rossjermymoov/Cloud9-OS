@@ -25,6 +25,7 @@ import { syncRecentOrders, syncOrderStatuses } from './services/slaService.js';
 import { syncBankHolidays } from './services/bankHolidayService.js';
 import authRouter, { requireAuth } from './routes/auth.js';
 import settingsRouter       from './routes/settings.js';
+import xeroRouter           from './routes/xero.js';
 import warehouseRouter      from './routes/warehouse.js';
 import storageRouter        from './routes/storage.js';
 import { syncStorage }       from './services/storageService.js';
@@ -74,6 +75,7 @@ app.use('/api/sla',             requireAuth, slaRouter);
 app.use('/api/queries',         requireAuth, queriesRouter);
 app.use('/api/email',           requireAuth, emailRouter);
 app.use('/api/gmail',           gmailRouter);   // OAuth start/callback public; data endpoints guarded per-route
+app.use('/api/xero',            xeroRouter);    // OAuth connect/callback public; data endpoints guarded per-route
 app.use('/api/settings',        requireAuth, settingsRouter);
 app.use('/api/sla-rules',       requireAuth, slaRulesRouter);
 

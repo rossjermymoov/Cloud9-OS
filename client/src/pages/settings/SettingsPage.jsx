@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Settings, Tv, Mail, MessageSquare, Banknote, Check, RefreshCw, Megaphone, UserPlus, Plug } from 'lucide-react';
+import { Settings, Tv, Mail, MessageSquare, Banknote, Check, RefreshCw, Megaphone, UserPlus, Plug, Link2, Search, Wand2 } from 'lucide-react';
 import {
   getBoardMessages, saveBoardWelcome, saveBoardUrgent, clearBoardUrgent,
   gmailStatus, gmailSyncNow, gmailDisconnect, gmailConnectUrl,
 } from '../../api/settings';
+import {
+  xeroStatus, xeroDisconnect, xeroConnectUrl, xeroContactSearch,
+  xeroMatchStatus, xeroLinkCustomer, xeroUnlinkCustomer, xeroAutoMatch,
+} from '../../api/xero';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
 const GREEN = '#10B981', AMBER = '#F59E0B', RED = '#EF4444';
@@ -137,6 +141,124 @@ function GmailSection() {
   );
 }
 
+// ── Xero ────────────────────────────────────────────────────────────────────
+function XeroLinkRow({ c, suggestion, onChanged }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [results, setResults] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  async function doSearch() { if (q.trim().length < 2) return; setBusy(true); try { const d = await xeroContactSearch(q.trim()); setResults(d.contacts || []); } finally { setBusy(false); } }
+  async function link(xc) { setBusy(true); try { await xeroLinkCustomer(c.id, xc.id || xc.xero_id, xc.name || xc.xero_name); setOpen(false); await onChanged(); } finally { setBusy(false); } }
+  async function unlink() { setBusy(true); try { await xeroUnlinkCustomer(c.id); await onChanged(); } finally { setBusy(false); } }
+
+  return (
+    <>
+      <tr style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+        <td style={{ padding: '8px 6px', fontWeight: 600, color: TITLE }}>{c.business_name}</td>
+        <td style={{ padding: '8px 6px' }}>
+          {c.xero_contact_id ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: '#047857' }}>
+              <Check size={13} /> {c.xero_contact_name || 'Linked'}
+            </span>
+          ) : suggestion ? (
+            <span style={{ fontSize: 12.5, color: MUTED }}>Suggested: <strong style={{ color: TITLE }}>{suggestion.xero_name}</strong> <span style={{ color: '#94A3B8' }}>({suggestion.score}%)</span></span>
+          ) : <span style={{ fontSize: 12.5, color: '#CBD5E1' }}>—</span>}
+        </td>
+        <td style={{ padding: '8px 6px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+          {c.xero_contact_id ? (
+            <button onClick={unlink} disabled={busy} style={ghostBtn}>Unlink</button>
+          ) : (
+            <span style={{ display: 'inline-flex', gap: 6 }}>
+              {suggestion && <button onClick={() => link(suggestion)} disabled={busy} style={btn(ACCENT, busy)}><Link2 size={13} /> Link</button>}
+              <button onClick={() => setOpen(o => !o)} disabled={busy} style={ghostBtn}><Search size={13} /> Find</button>
+            </span>
+          )}
+        </td>
+      </tr>
+      {open && (
+        <tr><td colSpan={3} style={{ padding: '4px 6px 12px', background: '#F8FAFC' }}>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && doSearch()} placeholder="Search Xero contacts…" style={{ ...inputStyle, flex: '0 0 280px' }} />
+            <button onClick={doSearch} disabled={busy} style={btn(ACCENT, busy)}><Search size={13} /> {busy ? '…' : 'Search'}</button>
+          </div>
+          {results.map(r => (
+            <div key={r.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', fontSize: 12.5 }}>
+              <span style={{ color: TITLE }}>{r.name}{r.email ? <span style={{ color: '#94A3B8' }}> · {r.email}</span> : ''}</span>
+              <button onClick={() => link(r)} disabled={busy} style={btn(ACCENT, busy)}><Link2 size={13} /> Link</button>
+            </div>
+          ))}
+          {!results.length && <div style={{ fontSize: 12, color: '#94A3B8', padding: '4px 10px' }}>Type a name and search.</div>}
+        </td></tr>
+      )}
+    </>
+  );
+}
+
+function XeroSection() {
+  const qc = useQueryClient();
+  const { data: status } = useQuery({ queryKey: ['xero-status'], queryFn: xeroStatus });
+  const { data: match } = useQuery({ queryKey: ['xero-match'], queryFn: xeroMatchStatus, enabled: !!status?.connected });
+  const [busy, setBusy] = useState(null);
+  const [autoResult, setAutoResult] = useState(null);
+  const connected = !!status?.connected;
+  const configured = status?.configured !== false;
+
+  const refresh = () => { qc.invalidateQueries({ queryKey: ['xero-status'] }); qc.invalidateQueries({ queryKey: ['xero-match'] }); };
+  async function disconnect() { setBusy('disc'); try { await xeroDisconnect(); await refresh(); } finally { setBusy(null); } }
+  async function autoMatch() { setBusy('auto'); setAutoResult(null); try { const d = await xeroAutoMatch(); setAutoResult(d); await qc.invalidateQueries({ queryKey: ['xero-match'] }); } finally { setBusy(null); } }
+
+  const customers = match?.customers || [];
+  const linkedCount = customers.filter(c => c.xero_contact_id).length;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760 }}>
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <Banknote size={17} color={ACCENT} /><span style={{ fontSize: 15, fontWeight: 800, color: HEADER }}>Xero accounting</span>
+        </div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 16 }}>Connect your Xero organisation to show live invoices and outstanding balances on each customer record.</div>
+        {!configured && <div style={{ fontSize: 12.5, color: '#92400E', background: '#FFFBEB', borderRadius: 9, padding: '9px 12px', marginBottom: 14 }}>Set XERO_CLIENT_ID, XERO_CLIENT_SECRET and XERO_REDIRECT_URI on the server first.</div>}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', background: '#F8FAFC', borderRadius: 10, marginBottom: 16 }}>
+          <span style={{ width: 10, height: 10, borderRadius: '50%', background: connected ? GREEN : '#CBD5E1' }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: TITLE }}>{connected ? `Connected · ${status.tenant_name || 'Xero org'}` : 'Not connected'}</div>
+            {connected && linkedCount > 0 && <div style={{ fontSize: 12, color: MUTED }}>{linkedCount} of {customers.length} customers linked</div>}
+          </div>
+        </div>
+
+        {connected ? (
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button style={btn(ACCENT, busy === 'auto')} disabled={busy === 'auto'} onClick={autoMatch}><Wand2 size={15} /> {busy === 'auto' ? 'Matching…' : 'Auto-match customers'}</button>
+            <button style={ghostBtn} disabled={busy === 'disc'} onClick={disconnect}>Disconnect</button>
+          </div>
+        ) : (
+          <button style={btn(ACCENT, !configured)} disabled={!configured} onClick={() => { window.location.href = xeroConnectUrl(); }}><Plug size={15} /> Connect Xero</button>
+        )}
+        {autoResult && <div style={{ fontSize: 12.5, color: '#065F46', background: '#ECFDF5', borderRadius: 9, padding: '9px 12px', marginTop: 12 }}>Auto-matched {autoResult.matched?.length || 0} · {autoResult.suggestions?.length || 0} more suggested (review below).</div>}
+      </Card>
+
+      {connected && (
+        <Card>
+          <div style={{ fontSize: 14.5, fontWeight: 700, color: TITLE, marginBottom: 4 }}>Customer ↔ Xero contact links</div>
+          <div style={{ fontSize: 12, color: '#94A3B8', marginBottom: 12 }}>Link each customer to its Xero contact so their invoices show on the customer record.</div>
+          <div style={{ maxHeight: 460, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5, position: 'sticky', top: 0, background: '#fff' }}>
+                <th style={{ padding: '7px 6px' }}>Customer</th><th style={{ padding: '7px 6px' }}>Xero contact</th><th style={{ padding: '7px 6px', textAlign: 'right' }}></th>
+              </tr></thead>
+              <tbody>
+                {customers.map(c => <XeroLinkRow key={c.id} c={c} suggestion={match?.suggestions?.[c.id]} onChanged={() => qc.invalidateQueries({ queryKey: ['xero-match'] })} />)}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function ComingSoon({ Icon, title, note }) {
   return (
     <Card style={{ maxWidth: 640, borderStyle: 'dashed', border: '1.5px dashed #E2E8F0', boxShadow: 'none' }}>
@@ -193,7 +315,7 @@ export default function SettingsPage() {
       {tab === 'board' && <BoardSection />}
       {tab === 'gmail' && <GmailSection />}
       {tab === 'comms' && <ComingSoon Icon={MessageSquare} title="Communications & alerts" note="Email provider config plus alert types and recipients (e.g. webhook-gap, backfill, billing-run) — porting from Moov OS next." />}
-      {tab === 'xero' && <ComingSoon Icon={Banknote} title="Xero accounting" note="Connect a Xero account, match customers to Xero contacts, and show invoices and balances on each customer record — scaffolding next (dormant until API credentials are set)." />}
+      {tab === 'xero' && <XeroSection />}
     </div>
   );
 }
