@@ -231,7 +231,12 @@ router.get('/leaderboard', async (req, res, next) => {
     } else if (period === 'day') {
       curStart = now; curEnd = now; prevStart = add(now, -1); prevEnd = add(now, -1);
     } else if (period === 'yesterday') {
-      curStart = add(now, -1); curEnd = add(now, -1); prevStart = add(now, -2); prevEnd = add(now, -2);
+      // Last working day vs the working day before (skips weekends + bank holidays),
+      // matching the dashboard's /trend so the top-customers widget lines up.
+      const hs = await holidaySet().catch(() => new Set());
+      const lw = lastWorkingBefore(ymd(now), hs);
+      const pw = lastWorkingBefore(lw, hs);
+      curStart = lw; curEnd = lw; prevStart = pw; prevEnd = pw;
     } else if (period === 'week') {
       const dow = (now.getDay() + 6) % 7; const monday = add(now, -dow);
       curStart = monday; curEnd = now; prevStart = add(monday, -7); prevEnd = add(monday, -7 + dow);
