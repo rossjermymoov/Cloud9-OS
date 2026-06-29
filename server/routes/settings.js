@@ -13,11 +13,15 @@ const router = express.Router();
 const WELCOME_KEY = 'board_welcome';
 const URGENT_KEY  = 'board_urgent';
 
-// Is the urgent banner still live (has a message and hasn't timed out)?
+// Shape the stored settings into the live state the UI/board care about.
 function activeUrgent(u) {
   if (!u || !u.message) return null;
-  if (u.expires_at && new Date(u.expires_at).getTime() <= Date.now()) return null;
+  if (u.expires_at && new Date(u.expires_at).getTime() <= Date.now()) return null;  // timer elapsed
   return { message: u.message, expires_at: u.expires_at || null };
+}
+function activeWelcome(w) {
+  if (!w || !w.enabled || !String(w.who || '').trim()) return null;
+  return { who: String(w.who).trim() };
 }
 
 router.get('/board-messages', async (_req, res, next) => {

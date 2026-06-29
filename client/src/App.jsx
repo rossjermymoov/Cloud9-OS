@@ -16,6 +16,7 @@ import QueriesPage from './pages/queries/QueriesPage';
 import WarehouseBoard from './pages/warehouse/WarehouseBoard';
 import SettingsPage from './pages/settings/SettingsPage';
 import { LoginScreen, SetupScreen, AuthLoading } from './pages/auth/AuthScreens';
+import Placeholder from './pages/Placeholder';
 
 // Public, login-free TV board lives outside the auth gate and the app shell.
 function AppRoutes() {
@@ -48,9 +49,9 @@ function GatedApp() {
         <Route path="returns"         element={<ReturnsPage />} />
         <Route path="notifications"   element={<NotificationCenter />} />
         <Route path="users"           element={<UsersPage />} />
-        <Route path="queries"         element={<QueriesPage />} />
-        <Route path="settings"        element={<SettingsPage />} />
-        <Route path="*"               element={<Navigate to="/" replace />} />
+        <Route path="queries"       element={<QueriesPage />} />
+        <Route path="settings"      element={<SettingsPage />} />
+        <Route path="*"             element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );
