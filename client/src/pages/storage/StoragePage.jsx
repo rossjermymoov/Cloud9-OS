@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Warehouse, RefreshCw, Boxes, MapPin, Package, Search, AlertTriangle, Download } from 'lucide-react';
 import { storageSummary, storageByCustomer, storageByLocation, storageFreshness, triggerStorageSync, storageCustomerDebug, storageMissingDimensions } from '../../api/storage';
+import CustomerExcludeFilter, { useExcludedCustomers } from '../../components/CustomerExcludeFilter';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
 const SHADOW = '0 1px 2px rgba(16,24,40,0.06), 0 1px 3px rgba(16,24,40,0.10)';
@@ -296,9 +297,10 @@ export default function StoragePage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [syncing, setSyncing] = useState(false);
-  const summary = useQuery({ queryKey: ['storage', 'summary'], queryFn: storageSummary });
-  const byCust  = useQuery({ queryKey: ['storage', 'by-customer'], queryFn: storageByCustomer });
-  const byLoc   = useQuery({ queryKey: ['storage', 'by-location'], queryFn: storageByLocation });
+  const { excluded, toggle, clear } = useExcludedCustomers();
+  const summary = useQuery({ queryKey: ['storage', 'summary', excluded], queryFn: () => storageSummary(excluded) });
+  const byCust  = useQuery({ queryKey: ['storage', 'by-customer', excluded], queryFn: () => storageByCustomer(excluded) });
+  const byLoc   = useQuery({ queryKey: ['storage', 'by-location', excluded], queryFn: () => storageByLocation(excluded) });
   const fresh   = useQuery({ queryKey: ['storage', 'freshness'], queryFn: storageFreshness });
   const s = summary.data;
 
@@ -322,10 +324,13 @@ export default function StoragePage() {
             {lastSync && <span style={{ color: '#94A3B8' }}> · Recomputed nightly · Last {lastSync}</span>}
           </p>
         </div>
-        <button onClick={runSync} disabled={syncing}
-          style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: syncing ? 'default' : 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE, opacity: syncing ? 0.6 : 1 }}>
-          <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} /> {syncing ? 'Computing…' : 'Recompute'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <CustomerExcludeFilter excluded={excluded} toggle={toggle} clear={clear} />
+          <button onClick={runSync} disabled={syncing}
+            style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: syncing ? 'default' : 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE, opacity: syncing ? 0.6 : 1 }}>
+            <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} /> {syncing ? 'Computing…' : 'Recompute'}
+          </button>
+        </div>
       </div>
 
       {!hasData && !summary.isLoading ? (

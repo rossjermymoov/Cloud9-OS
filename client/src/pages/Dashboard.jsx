@@ -329,12 +329,12 @@ export default function Dashboard() {
   const [customDate, setCustomDate] = useState(todayStr);
   const dateParam = period === 'custom' ? customDate : null;
   const [excluded, setExcluded] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('c9_dash_excluded') || '[]'); } catch { return []; }
+    try { return JSON.parse(localStorage.getItem('c9_excluded_customers') || '[]'); } catch { return []; }
   });
   const [showExclude, setShowExclude] = useState(false);
   const toggleExcluded = (id) => setExcluded(prev => {
     const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
-    localStorage.setItem('c9_dash_excluded', JSON.stringify(next));
+    localStorage.setItem('c9_excluded_customers', JSON.stringify(next));
     return next;
   });
 
@@ -406,7 +406,7 @@ export default function Dashboard() {
                 <div style={{ position: 'absolute', top: '112%', right: 0, width: 290, maxHeight: 380, overflowY: 'auto', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 10, boxShadow: CARD_SHADOW, zIndex: 50, padding: 8 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 8px 8px' }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: TITLE }}>Exclude from stats</span>
-                    {excluded.length > 0 && <span onClick={() => { setExcluded([]); localStorage.setItem('c9_dash_excluded', '[]'); }} style={{ fontSize: 11.5, color: ACCENT, cursor: 'pointer', fontWeight: 600 }}>Clear all</span>}
+                    {excluded.length > 0 && <span onClick={() => { setExcluded([]); localStorage.setItem('c9_excluded_customers', '[]'); }} style={{ fontSize: 11.5, color: ACCENT, cursor: 'pointer', fontWeight: 600 }}>Clear all</span>}
                   </div>
                   {custList.map(c => (
                     <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }}>

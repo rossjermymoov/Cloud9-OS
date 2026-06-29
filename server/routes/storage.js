@@ -47,26 +47,33 @@ router.get('/debug', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.get('/summary', async (_req, res, next) => {
+// Customers to leave out of the aggregates (e.g. a whale that dwarfs everyone).
+// Cloud9 (NULL customer_id) is never matched by an id, so it's unaffected.
+const exclIds = (req) => (req.query.exclude ? String(req.query.exclude).split(',').map(s => s.trim()).filter(Boolean) : []);
+
+router.get('/summary', async (req, res, next) => {
   try {
+    const excl = exclIds(req);
     const [totals, top] = await Promise.all([
       query(`SELECT COALESCE(SUM(volume_m3),0)::float AS total_m3,
                     COUNT(DISTINCT location_id) FILTER (WHERE location_id IS NOT NULL)::int AS locations,
                     COUNT(DISTINCT helm_inventory_id)::int AS skus,
                     COUNT(*) FILTER (WHERE NOT has_dimensions)::int AS lines_without_dims
-             FROM storage_lines`),
+             FROM storage_lines WHERE (customer_id IS NULL OR customer_id <> ALL($1::uuid[]))`, [excl]),
       query(`SELECT c.id, COALESCE(c.business_name,'Cloud9') AS name, COALESCE(SUM(s.volume_m3),0)::float AS m3,
                     COUNT(DISTINCT s.location_id) FILTER (WHERE s.location_id IS NOT NULL)::int AS locations
              FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
+             WHERE (s.customer_id IS NULL OR s.customer_id <> ALL($1::uuid[]))
              GROUP BY c.id, c.business_name HAVING SUM(s.volume_m3) > 0
-             ORDER BY m3 DESC LIMIT 12`),
+             ORDER BY m3 DESC LIMIT 12`, [excl]),
     ]);
     res.json({ ...totals.rows[0], top_customers: top.rows });
   } catch (err) { next(err); }
 });
 
-router.get('/by-customer', async (_req, res, next) => {
+router.get('/by-customer', async (req, res, next) => {
   try {
+    const excl = exclIds(req);
     const { rows } = await query(`
       SELECT c.id, COALESCE(c.business_name,'Cloud9') AS name,
              COALESCE(SUM(s.volume_m3),0)::float AS m3,
@@ -74,14 +81,16 @@ router.get('/by-customer', async (_req, res, next) => {
              COUNT(DISTINCT s.location_id) FILTER (WHERE s.location_id IS NOT NULL)::int AS locations,
              COALESCE(SUM(s.qty),0)::int AS units
       FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE (s.customer_id IS NULL OR s.customer_id <> ALL($1::uuid[]))
       GROUP BY c.id, c.business_name
-      ORDER BY m3 DESC`);
+      ORDER BY m3 DESC`, [excl]);
     res.json(rows);
   } catch (err) { next(err); }
 });
 
-router.get('/by-location', async (_req, res, next) => {
+router.get('/by-location', async (req, res, next) => {
   try {
+    const excl = exclIds(req);
     const { rows } = await query(`
       SELECT s.location_id, MAX(s.location_name) AS location_name, MAX(s.warehouse_id) AS warehouse_id,
              COALESCE(SUM(s.volume_m3),0)::float AS m3,
@@ -89,9 +98,9 @@ router.get('/by-location', async (_req, res, next) => {
              COUNT(DISTINCT s.helm_inventory_id)::int AS skus,
              (ARRAY_AGG(COALESCE(c.business_name,'Cloud9') ORDER BY s.volume_m3 DESC))[1] AS top_customer
       FROM storage_lines s LEFT JOIN customers c ON c.id = s.customer_id
-      WHERE s.location_id IS NOT NULL
+      WHERE s.location_id IS NOT NULL AND (s.customer_id IS NULL OR s.customer_id <> ALL($1::uuid[]))
       GROUP BY s.location_id
-      ORDER BY m3 DESC LIMIT 300`);
+      ORDER BY m3 DESC LIMIT 300`, [excl]);
     res.json(rows);
   } catch (err) { next(err); }
 });
