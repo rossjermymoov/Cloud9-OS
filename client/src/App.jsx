@@ -14,6 +14,7 @@ import NotificationCenter from './pages/notifications/NotificationCenter';
 import UsersPage from './pages/users/UsersPage';
 import QueriesPage from './pages/queries/QueriesPage';
 import WarehouseBoard from './pages/warehouse/WarehouseBoard';
+import StatusBoardPage from './pages/statusBoard/StatusBoardPage';
 import SettingsPage from './pages/settings/SettingsPage';
 import { LoginScreen, SetupScreen, AuthLoading } from './pages/auth/AuthScreens';
 import Placeholder from './pages/Placeholder';
@@ -37,6 +38,7 @@ function GatedApp() {
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="status-board"    element={<StatusBoardPage />} />
         <Route path="customers">
           <Route index element={<CustomerList />} />
           <Route path=":id" element={<CustomerRecord />} />

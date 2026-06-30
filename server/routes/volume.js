@@ -13,6 +13,30 @@ import { holidaySet, lastWorkingBefore } from '../services/bankHolidayService.js
 
 const router = express.Router();
 
+// Status Board — a KPI card per Helm status flagged "visible on dashboard"
+// (dashboard = true), with the live count of orders currently in that status.
+// `days` scopes the count to the active working set (default 14) so terminal
+// statuses like Despatched show recent throughput rather than all-time.
+router.get('/status-board', async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 14, 1), 90);
+    const { rows } = await query(`
+      SELECT s.status_id, s.name, s.colour, s.text_colour, s.sort,
+             COALESCE(cnt.n, 0)::int AS count
+      FROM helm_order_statuses s
+      LEFT JOIN (
+        SELECT status_id, COUNT(*)::int AS n
+        FROM orders
+        WHERE received_at >= now() - ($1::int || ' days')::interval
+        GROUP BY status_id
+      ) cnt ON cnt.status_id = s.status_id
+      WHERE s.dashboard = true
+      ORDER BY s.sort NULLS LAST, s.name
+    `, [days]);
+    res.json({ days, statuses: rows, total: rows.reduce((a, r) => a + r.count, 0) });
+  } catch (err) { next(err); }
+});
+
 router.get('/summary', async (_req, res, next) => {
   try {
     const [vol, picks] = await Promise.all([

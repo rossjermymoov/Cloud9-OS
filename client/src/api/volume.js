@@ -4,6 +4,7 @@ export const volumeSummary     = ()        => api.get('/volume/summary').then(r 
 export const volumeDaily       = (days = 14) => api.get('/volume/daily', { params: { days } }).then(r => r.data);
 export const volumeByCustomer  = (days = 1)  => api.get('/volume/by-customer', { params: { days } }).then(r => r.data);
 export const volumeWeekly      = ()        => api.get('/volume/weekly').then(r => r.data);
+export const statusBoard       = (days = 14) => api.get('/volume/status-board', { params: { days } }).then(r => r.data);
 const exclParam = (exclude) => (Array.isArray(exclude) && exclude.length ? exclude.join(',') : undefined);
 export const volumeTrend       = (period = 'week', date = null, exclude = null) =>
   api.get('/volume/trend', { params: { period, date, exclude: exclParam(exclude) } }).then(r => r.data);

@@ -162,6 +162,23 @@ export async function syncOrderStatuses(days = 1) {
       const clientId = o.fulfilment_client_id != null ? String(o.fulfilment_client_id) : null;
       const customerId = clientId ? (byClient.get(clientId) || null) : null;
       const statusId = o.status_id != null ? parseInt(o.status_id) : null;
+      // Helm sends the full status object on the order. Capture its definition
+      // (incl. the "dashboard" visibility flag + colour) so the Status Board can
+      // render a card per dashboard-visible status. status may be an object or a name.
+      const so = (o.status && typeof o.status === 'object') ? o.status : null;
+      const statusName = so ? (so.status || so.name) : (typeof o.status === 'string' ? o.status : o.status_label);
+      if (so && so.id != null) {
+        await query(`
+          INSERT INTO helm_order_statuses (status_id, name, dashboard, colour, text_colour, sort, updated_at)
+          VALUES ($1,$2,$3,$4,$5,$6,NOW())
+          ON CONFLICT (status_id) DO UPDATE SET
+            name=EXCLUDED.name, dashboard=EXCLUDED.dashboard, colour=EXCLUDED.colour,
+            text_colour=EXCLUDED.text_colour, sort=EXCLUDED.sort, updated_at=NOW()
+        `, [parseInt(so.id), so.status || so.name || null,
+            so.dashboard === 1 || so.dashboard === true || so.dashboard === '1',
+            so.status_colour || null, so.status_text_colour || null,
+            so.sort != null ? parseInt(so.sort) : null]).catch(() => {});
+      }
       const received = cleanDate(o.date_received ?? o.created_at);
       const dispatched = cleanDate(o.date_dispatched);
       const parcels = pickParcelCount(o) || 0;
@@ -182,7 +199,7 @@ export async function syncOrderStatuses(days = 1) {
           dispatched_at = COALESCE(EXCLUDED.dispatched_at, orders.dispatched_at),
           updated_at    = NOW()
       `, [helmOrderId, o.channel_order_id || null, customerId, clientId, statusId,
-          o.status || o.status_label || null, items, parcels, received, dispatched]);
+          statusName || null, items, parcels, received, dispatched]);
       stored++;
     }
     return { stored };
