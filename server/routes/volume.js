@@ -13,20 +13,23 @@ import { holidaySet, lastWorkingBefore } from '../services/bankHolidayService.js
 
 const router = express.Router();
 
-// Status Board — a KPI card per Helm status flagged "visible on dashboard"
-// (dashboard = true), with the live count of orders currently in that status.
-// A pure right-now snapshot: an order's status_id is its current state, so no
-// time window is applied.
+// Status Board — a KPI card for every status that currently has orders, with a
+// live count. Helm's order reads return the status as a plain name (no per-order
+// "dashboard" flag), so we build the board straight from the synced orders: an
+// order's status_id is its current state, so this is a pure right-now snapshot.
+// helm_order_statuses is joined only for a colour/name override when available.
 router.get('/status-board', async (_req, res, next) => {
   try {
     const { rows } = await query(`
-      SELECT s.status_id, s.name, s.colour, s.text_colour, s.sort,
-             COALESCE(cnt.n, 0)::int AS count
-      FROM helm_order_statuses s
-      LEFT JOIN (SELECT status_id, COUNT(*)::int AS n FROM orders GROUP BY status_id) cnt
-        ON cnt.status_id = s.status_id
-      WHERE s.dashboard = true
-      ORDER BY s.sort NULLS LAST, s.name
+      SELECT o.status_id,
+             COALESCE(MAX(hs.name), MAX(o.status_label), 'Status ' || o.status_id) AS name,
+             MAX(hs.colour) AS colour,
+             COUNT(*)::int AS count
+      FROM orders o
+      LEFT JOIN helm_order_statuses hs ON hs.status_id = o.status_id
+      WHERE o.status_id IS NOT NULL
+      GROUP BY o.status_id
+      ORDER BY count DESC, name
     `);
     res.json({ statuses: rows, total: rows.reduce((a, r) => a + r.count, 0) });
   } catch (err) { next(err); }

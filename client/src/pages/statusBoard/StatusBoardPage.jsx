@@ -26,7 +26,7 @@ export default function StatusBoardPage() {
             <LayoutGrid size={22} /> Status Board
           </h1>
           <p style={{ fontSize: 13, color: MUTED, margin: 0 }}>
-            Live order count for every status Helm shows on the dashboard
+            Live order count for every status
             {data ? <span style={{ color: '#94A3B8' }}> · {data.total.toLocaleString()} orders across {statuses.length} statuses · right now</span> : ''}
           </p>
         </div>
@@ -39,9 +39,9 @@ export default function StatusBoardPage() {
         <div style={{ color: MUTED, fontSize: 13, padding: '40px 0' }}>Loading…</div>
       ) : statuses.length === 0 ? (
         <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, padding: '54px 24px', textAlign: 'center' }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: TITLE, marginBottom: 6 }}>No dashboard statuses yet</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: TITLE, marginBottom: 6 }}>No orders synced yet</div>
           <div style={{ fontSize: 13.5, color: MUTED, maxWidth: 480, margin: '0 auto' }}>
-            Status definitions are captured as orders sync from Helm (every few minutes). Once an order in a dashboard-visible status comes through, its card appears here automatically.
+            Cards appear here as orders sync from Helm (every few minutes) — one per status that currently has orders.
           </div>
         </div>
       ) : (
