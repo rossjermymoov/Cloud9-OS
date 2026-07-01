@@ -10,13 +10,10 @@ const PALETTE = ['#3B82F6', '#A855F7', '#22D3EE', '#EC4899', '#F59E0B', '#10B981
 // Use Helm's status colour if it's a usable hex, else a stable palette colour.
 const cardColour = (s, i) => (s.colour && /^#?[0-9a-fA-F]{6}$/.test(s.colour.replace('#', '')) ? (s.colour.startsWith('#') ? s.colour : `#${s.colour}`) : PALETTE[i % PALETTE.length]);
 
-const PERIODS = [{ v: 1, l: 'Today' }, { v: 7, l: '7 days' }, { v: 14, l: '14 days' }, { v: 30, l: '30 days' }];
-
 export default function StatusBoardPage() {
-  const [days, setDays] = useState(14);
   const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['status-board', days],
-    queryFn: () => statusBoard(days),
+    queryKey: ['status-board'],
+    queryFn: () => statusBoard(),
     refetchInterval: 30000,
   });
   const statuses = data?.statuses || [];
@@ -30,23 +27,12 @@ export default function StatusBoardPage() {
           </h1>
           <p style={{ fontSize: 13, color: MUTED, margin: 0 }}>
             Live order count for every status Helm shows on the dashboard
-            {data ? <span style={{ color: '#94A3B8' }}> · {data.total.toLocaleString()} orders across {statuses.length} statuses · last {days === 1 ? 'day' : `${days} days`}</span> : ''}
+            {data ? <span style={{ color: '#94A3B8' }}> · {data.total.toLocaleString()} orders across {statuses.length} statuses · right now</span> : ''}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <div style={{ display: 'inline-flex', background: '#F1F5F9', borderRadius: 9, padding: 3 }}>
-            {PERIODS.map(p => (
-              <button key={p.v} onClick={() => setDays(p.v)} style={{
-                border: 'none', cursor: 'pointer', fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 7,
-                background: days === p.v ? '#fff' : 'transparent', color: days === p.v ? TITLE : MUTED,
-                boxShadow: days === p.v ? '0 1px 2px rgba(16,24,40,0.10)' : 'none',
-              }}>{p.l}</button>
-            ))}
-          </div>
-          <button onClick={() => refetch()} style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE }}>
-            <RefreshCw size={14} style={{ animation: isFetching ? 'spin 1s linear infinite' : 'none' }} /> Refresh
-          </button>
-        </div>
+        <button onClick={() => refetch()} style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE }}>
+          <RefreshCw size={14} style={{ animation: isFetching ? 'spin 1s linear infinite' : 'none' }} /> Refresh
+        </button>
       </div>
 
       {isLoading ? (
