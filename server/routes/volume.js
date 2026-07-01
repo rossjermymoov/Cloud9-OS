@@ -27,7 +27,8 @@ router.get('/status-board', async (_req, res, next) => {
              COUNT(*)::int AS count
       FROM orders o
       LEFT JOIN helm_order_statuses hs ON hs.status_id = o.status_id
-      WHERE o.status_id IS NOT NULL
+      -- Exclude terminal / non-actionable: 5 Despatched, 6 Cancelled, 26 Importing.
+      WHERE o.status_id IS NOT NULL AND o.status_id NOT IN (5, 6, 26)
       GROUP BY o.status_id
       ORDER BY count DESC, name
     `);
