@@ -38,38 +38,44 @@ router.get('/raw/fulfilment-clients', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Pull fulfilment clients from Helm and upsert as customers — inserts new ones
+// and refreshes existing fields (name, emails, phone, accounts id). Reusable by
+// the route and the daily morning scheduler.
+export async function syncCustomers() {
+  if (!helmConfigured()) throw new Error('Helm API not configured');
+  const clients = await fetchFulfilmentClients();
+  let inserted = 0, updated = 0;
+  for (const c of clients) {
+    if (!c.helm_customer_id) continue;
+    const r = await query(`
+      INSERT INTO customers
+        (business_name, helm_customer_id, helm_accounts_id, primary_email, accounts_email, phone_number, account_status)
+      VALUES ($1,$2,$3,$4,$5,$6,$7::account_status)
+      ON CONFLICT (helm_customer_id) DO UPDATE SET
+        business_name  = EXCLUDED.business_name,
+        helm_accounts_id = EXCLUDED.helm_accounts_id,
+        primary_email  = EXCLUDED.primary_email,
+        accounts_email = EXCLUDED.accounts_email,
+        phone_number   = EXCLUDED.phone_number,
+        updated_at     = NOW()
+      RETURNING (xmax = 0) AS was_insert
+    `, [c.business_name, c.helm_customer_id, c.helm_accounts_id, c.primary_email, c.accounts_email, c.phone_number, c.account_status]);
+    if (r.rows[0]?.was_insert) inserted++; else updated++;
+  }
+  await query(
+    `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('customers','ok',$1,$2)`,
+    [clients.length, `${inserted} inserted, ${updated} updated`]
+  );
+  return { total: clients.length, inserted, updated };
+}
+
 router.post('/sync/customers', async (_req, res, next) => {
   try {
     if (!helmConfigured()) {
       return res.status(503).json({ error: 'Helm API not configured — set HELM_API_BASE / HELM_EMAIL / HELM_PASSWORD in server/.env' });
     }
-
-    const clients = await fetchFulfilmentClients();
-    let inserted = 0, updated = 0;
-
-    for (const c of clients) {
-      if (!c.helm_customer_id) continue;
-      const r = await query(`
-        INSERT INTO customers
-          (business_name, helm_customer_id, helm_accounts_id, primary_email, accounts_email, phone_number, account_status)
-        VALUES ($1,$2,$3,$4,$5,$6,$7::account_status)
-        ON CONFLICT (helm_customer_id) DO UPDATE SET
-          business_name  = EXCLUDED.business_name,
-          helm_accounts_id = EXCLUDED.helm_accounts_id,
-          primary_email  = EXCLUDED.primary_email,
-          accounts_email = EXCLUDED.accounts_email,
-          phone_number   = EXCLUDED.phone_number,
-          updated_at     = NOW()
-        RETURNING (xmax = 0) AS was_insert
-      `, [c.business_name, c.helm_customer_id, c.helm_accounts_id, c.primary_email, c.accounts_email, c.phone_number, c.account_status]);
-      if (r.rows[0]?.was_insert) inserted++; else updated++;
-    }
-
-    await query(
-      `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('customers','ok',$1,$2)`,
-      [clients.length, `${inserted} inserted, ${updated} updated`]
-    );
-    res.json({ ok: true, total: clients.length, inserted, updated });
+    const result = await syncCustomers();
+    res.json({ ok: true, ...result });
   } catch (err) {
     await query(
       `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('customers','error',0,$1)`,

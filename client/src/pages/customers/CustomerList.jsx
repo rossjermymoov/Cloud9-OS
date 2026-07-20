@@ -1,15 +1,18 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Search } from 'lucide-react';
-import { listCustomers } from '../../api/customers';
+import { Search, RefreshCw } from 'lucide-react';
+import { listCustomers, syncCustomersFromHelm } from '../../api/customers';
 
 const HEALTH = { green: { c: '#00C853', l: 'Healthy' }, amber: { c: '#F59E0B', l: 'Warning' }, red: { c: '#E91E8C', l: 'At Risk' } };
 const STATUS = { active: '#166534', on_stop: '#E91E8C', suspended: '#92400e', churned: '#64748B' };
 
 export default function CustomerList() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [search, setSearch] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['customers', search],
@@ -18,12 +21,32 @@ export default function CustomerList() {
 
   const rows = data?.data || [];
 
+  async function refreshCustomers() {
+    setSyncing(true); setSyncMsg(null);
+    try {
+      const r = await syncCustomersFromHelm();
+      await qc.invalidateQueries({ queryKey: ['customers'] });
+      setSyncMsg(`✓ ${r.inserted} new · ${r.updated} updated`);
+      setTimeout(() => setSyncMsg(null), 6000);
+    } catch (e) {
+      setSyncMsg(e?.response?.data?.error || 'Sync failed');
+    } finally { setSyncing(false); }
+  }
+
   return (
     <div style={{ width: '100%', maxWidth: 'none' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0F172A', margin: 0 }}>Customers</h1>
-        <div style={{ fontSize: 13, color: '#64748B' }}>{data?.total ?? 0} total</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {syncMsg && <span style={{ fontSize: 12.5, color: syncMsg.startsWith('✓') ? '#15803D' : '#B91C1C', fontWeight: 600 }}>{syncMsg}</span>}
+          <span style={{ fontSize: 13, color: '#64748B' }}>{data?.total ?? 0} total</span>
+          <button onClick={refreshCustomers} disabled={syncing} title="Pull new customers from Helm and fill in missing data"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: syncing ? 'default' : 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: '#0F172A', opacity: syncing ? 0.6 : 1 }}>
+            <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} /> {syncing ? 'Refreshing…' : 'Refresh customers'}
+          </button>
+        </div>
       </div>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
       <div style={{ position: 'relative', maxWidth: 320, marginBottom: 16 }}>
         <Search size={14} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />

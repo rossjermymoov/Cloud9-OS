@@ -13,18 +13,24 @@ import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured } from '../services/helmClient.js';
 import { evaluateOrders, syncRecentOrders } from '../services/slaService.js';
+import { holidaySet, lastWorkingBefore } from '../services/bankHolidayService.js';
 
 const router = express.Router();
 
-function rangeFor(periodRaw, dateRaw) {
+async function rangeFor(periodRaw, dateRaw) {
   const p = (n) => String(n).padStart(2, '0');
   const iso = (d) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   if (dateRaw && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) return { period: 'custom', from: dateRaw, to: dateRaw };
   const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(periodRaw) ? periodRaw : 'week';
   const today = new Date();
+  // 'yesterday' = the last working day (skips weekends + UK bank holidays).
+  if (period === 'yesterday') {
+    const hs = await holidaySet().catch(() => new Set());
+    const lw = lastWorkingBefore(iso(today), hs);
+    return { period, from: lw, to: lw };
+  }
   let from = new Date(today), to = new Date(today);
-  if (period === 'yesterday') { from.setDate(today.getDate() - 1); to.setDate(today.getDate() - 1); }
-  else if (period === 'week')  from.setDate(today.getDate() - 6);
+  if (period === 'week')  from.setDate(today.getDate() - 6);
   else if (period === 'month') from.setDate(today.getDate() - 29);
   else if (period === 'quarter') from.setDate(today.getDate() - 89);
   return { period, from: iso(from), to: iso(to) };
@@ -34,7 +40,7 @@ router.get('/status', (_req, res) => res.json({ configured: helmConfigured() }))
 
 router.get('/summary', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const { period, from, to } = await rangeFor(req.query.period, req.query.date);
     const r = await evaluateOrders({ fromYmd: from, toYmd: to, customerId: req.query.customer_id || null });
     res.json({
       period, from, to,
@@ -51,7 +57,7 @@ router.get('/summary', async (req, res, next) => {
 
 router.get('/breaches', async (req, res, next) => {
   try {
-    const { period, from, to } = rangeFor(req.query.period, req.query.date);
+    const { period, from, to } = await rangeFor(req.query.period, req.query.date);
     const view = ['breaches', 'pending', 'all'].includes(req.query.view) ? req.query.view : 'breaches';
     const r = await evaluateOrders({ fromYmd: from, toYmd: to, customerId: req.query.customer_id || null });
 

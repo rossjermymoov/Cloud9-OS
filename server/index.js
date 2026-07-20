@@ -11,7 +11,7 @@ import customersRouter     from './routes/customers.js';
 import trackingRouter, { clearPendingCollection } from './routes/tracking.js';
 import webhooksRouter      from './routes/webhooks.js';
 import notificationsRouter from './routes/notifications.js';
-import helmRouter, { syncPurchaseOrders } from './routes/helm.js';
+import helmRouter, { syncPurchaseOrders, syncCustomers } from './routes/helm.js';
 import { helmConfigured }  from './services/helmClient.js';
 import volumeRouter        from './routes/volume.js';
 import purchaseOrdersRouter from './routes/purchaseOrders.js';
@@ -161,6 +161,22 @@ async function start() {
       }
     }, 60 * 1000);
     console.log('📦 Storage footprint sync scheduled for 03:00 UK');
+  }
+
+  // New customers — pull fulfilment clients from Helm every morning at 06:00 UK
+  // (adds new customers + refreshes existing fields). Also run shortly after boot.
+  if (helmConfigured()) {
+    setTimeout(() => syncCustomers().catch(e => console.warn('[customer-sync]', e.message)), 30 * 1000);
+    let lastCust = null;
+    setInterval(() => {
+      const uk = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/London' }));
+      const key = `${uk.getFullYear()}-${uk.getMonth()}-${uk.getDate()}`;
+      if (uk.getHours() === 6 && uk.getMinutes() === 0 && lastCust !== key) {
+        lastCust = key;
+        syncCustomers().catch(e => console.warn('[customer-sync]', e.message));
+      }
+    }, 60 * 1000);
+    console.log('👥 Customer sync scheduled for 06:00 UK');
   }
 
   // UK bank holidays — refresh on boot and weekly (independent of Helm).
