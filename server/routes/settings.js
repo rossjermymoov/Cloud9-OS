@@ -24,10 +24,15 @@ function activeWelcome(w) {
   return { who: String(w.who).trim() };
 }
 
-router.get('/board-messages', async (_req, res, next) => {
+router.get('/board-messages', async (req, res, next) => {
   try {
     const [w, u] = await Promise.all([getSetting(WELCOME_KEY), getSetting(URGENT_KEY)]);
+    // The shareable TV-board URL, with the access key pre-filled if one is set.
+    const key = process.env.WAREHOUSE_KEY || null;
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const board_url = `${proto}://${req.get('host')}/warehouse${key ? `?key=${encodeURIComponent(key)}` : ''}`;
     res.json({
+      board_url, board_locked: !!key,
       welcome: { enabled: !!w?.enabled, who: w?.who || '' },
       urgent:  { message: u?.message || '', expires_at: u?.expires_at || null, active: !!activeUrgent(u) },
     });

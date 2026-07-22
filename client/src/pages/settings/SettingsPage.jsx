@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Settings, Tv, Mail, MessageSquare, Banknote, Check, RefreshCw, Megaphone, UserPlus, Plug, Link2, Search, Wand2 } from 'lucide-react';
+import { Settings, Tv, Mail, MessageSquare, Banknote, Check, RefreshCw, Megaphone, UserPlus, Plug, Link2, Search, Wand2, Copy, ExternalLink } from 'lucide-react';
 import {
   getBoardMessages, saveBoardWelcome, saveBoardUrgent, clearBoardUrgent,
   gmailStatus, gmailSyncNow, gmailDisconnect, gmailConnectUrl,
@@ -32,6 +32,8 @@ function BoardSection() {
   const [msg, setMsg] = useState('');
   const [mins, setMins] = useState(30);
   const [saving, setSaving] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const copyUrl = () => { if (data?.board_url) { navigator.clipboard?.writeText(data.board_url); setCopied(true); setTimeout(() => setCopied(false), 2000); } };
 
   useEffect(() => {
     if (data) { setWho(data.welcome?.who || ''); setWelcomeOn(!!data.welcome?.enabled); setMsg(data.urgent?.message || ''); }
@@ -46,7 +48,22 @@ function BoardSection() {
   const expiresAt = data?.urgent?.expires_at ? new Date(data.urgent.expires_at) : null;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(340px,1fr))', gap: 16 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Shareable TV-board URL */}
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <Tv size={17} color={ACCENT} /><span style={{ fontSize: 15, fontWeight: 800, color: HEADER }}>Warehouse board link</span>
+        </div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 12 }}>Open this on the warehouse TVs. It’s public (no login){data?.board_locked ? ' — the access key is already included below' : ''}.</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input readOnly value={data?.board_url || ''} onFocus={e => e.target.select()}
+            style={{ ...inputStyle, flex: '1 1 380px', fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12.5, color: TITLE }} />
+          <button onClick={copyUrl} style={btn(ACCENT)}><Copy size={14} /> {copied ? 'Copied!' : 'Copy'}</button>
+          <a href={data?.board_url || '#'} target="_blank" rel="noopener noreferrer" style={{ ...ghostBtn, textDecoration: 'none' }}><ExternalLink size={14} /> Open</a>
+        </div>
+      </Card>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(340px,1fr))', gap: 16 }}>
       {/* Welcome slide */}
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
@@ -92,6 +109,7 @@ function BoardSection() {
           {urgentActive && <button style={ghostBtn} onClick={clearUrgent} disabled={saving === 'clear'}>Clear now</button>}
         </div>
       </Card>
+      </div>
     </div>
   );
 }
