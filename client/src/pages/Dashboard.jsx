@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import api from '../api/client';
 import { listNotifications } from '../api/notifications';
-import { volumeTrend, volumeLeaderboard } from '../api/volume';
+import { volumeTrend, volumeLeaderboard, volumeUnattributed } from '../api/volume';
 import { listCustomers } from '../api/customers';
 
 // ── palette + status config ──────────────────────────────────
@@ -332,6 +332,7 @@ export default function Dashboard() {
     try { return JSON.parse(localStorage.getItem('c9_excluded_customers') || '[]'); } catch { return []; }
   });
   const [showExclude, setShowExclude] = useState(false);
+  const [showUnattr, setShowUnattr] = useState(false);
   const toggleExcluded = (id) => setExcluded(prev => {
     const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
     localStorage.setItem('c9_excluded_customers', JSON.stringify(next));
@@ -343,6 +344,7 @@ export default function Dashboard() {
   const { data: customers } = useQuery({ queryKey: ['customers-list'], queryFn: () => listCustomers({ limit: 500, sort: 'business_name', order: 'asc' }) });
   const { data: trend }  = useQuery({ queryKey: ['volume-trend', period, dateParam, excluded], queryFn: () => volumeTrend(period, dateParam, excluded) });
   const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort, dateParam, excluded], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort, date: dateParam, exclude: excluded }) });
+  const { data: unattr } = useQuery({ queryKey: ['volume-unattributed'], queryFn: () => volumeUnattributed(14) });
   const custList = Array.isArray(customers) ? customers : (customers?.data || customers?.rows || customers?.customers || []);
 
   const byStatus = stats?.by_status || {};
@@ -421,6 +423,37 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {unattr?.total_parcels > 0 && (
+        <div style={{ marginBottom: 16, border: '1px solid #FDE68A', background: '#FFFBEB', borderRadius: 12 }}>
+          <button onClick={() => setShowUnattr(o => !o)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '11px 16px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+            <span style={{ fontSize: 16 }}>⚠️</span>
+            <div style={{ flex: 1, fontSize: 13, color: '#92400E' }}>
+              <strong>{unattr.total_parcels.toLocaleString()} parcels</strong> in the last 14 days aren’t matched to a customer, so they’re missing from the per-customer stats.
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#B45309' }}>{showUnattr ? 'Hide ▲' : 'View ▼'}</span>
+          </button>
+          {showUnattr && (
+            <div style={{ borderTop: '1px solid #FDE68A', padding: '4px 16px 12px' }}>
+              <div style={{ fontSize: 11.5, color: '#92400E', margin: '8px 0' }}>These Voila account ids didn’t match a customer. Link them by setting the customer’s Account ID / name, then re-run the Voila backfill.</div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead><tr style={{ color: '#B45309', textAlign: 'left', fontSize: 11 }}>
+                  <th style={{ padding: '5px 4px' }}>Voila account</th><th style={{ padding: '5px 4px', textAlign: 'right' }}>Parcels</th><th style={{ padding: '5px 4px', textAlign: 'right' }}>Last shipped</th>
+                </tr></thead>
+                <tbody>
+                  {unattr.accounts.map((a, i) => (
+                    <tr key={i} style={{ borderTop: '1px solid #FDE68A' }}>
+                      <td style={{ padding: '6px 4px', fontWeight: 600, color: '#0F172A' }}>{a.account}</td>
+                      <td style={{ padding: '6px 4px', textAlign: 'right', color: '#334155' }}>{a.parcels.toLocaleString()}</td>
+                      <td style={{ padding: '6px 4px', textAlign: 'right', color: MUTED }}>{a.last_shipped || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="c9-rows">
         {/* ROW 1 — stats */}

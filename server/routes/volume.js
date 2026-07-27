@@ -36,6 +36,26 @@ router.get('/status-board', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Diagnostic — shipments that didn't match a customer (so their volume is
+// missing from the per-customer dashboard). Group by the Voila account id/name
+// so we can see exactly which shippers need linking.
+router.get('/unattributed', async (req, res, next) => {
+  try {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 14, 1), 120);
+    const { rows } = await query(`
+      SELECT COALESCE(NULLIF(customer_account, ''), '(no account id)') AS account,
+             COUNT(*)::int AS shipments,
+             COALESCE(SUM(parcel_count), 0)::int AS parcels,
+             MAX(dispatched_at)::text AS last_shipped
+      FROM shipments
+      WHERE customer_id IS NULL AND cancelled = false
+        AND dispatched_at >= CURRENT_DATE - $1::int
+      GROUP BY 1 ORDER BY parcels DESC LIMIT 100
+    `, [days]);
+    res.json({ days, total_parcels: rows.reduce((a, r) => a + r.parcels, 0), accounts: rows });
+  } catch (err) { next(err); }
+});
+
 router.get('/summary', async (_req, res, next) => {
   try {
     const [vol, picks] = await Promise.all([

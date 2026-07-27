@@ -71,8 +71,14 @@ export async function runVoilaBackfill(days = 90, { pageDelayMs = 0 } = {}) {
     logId = lr.rows[0]?.id || null;
   } catch (e) { console.warn('[voila-backfill] start row failed:', e.message); }
   try {
-    const cm = await query(`SELECT helm_accounts_id, id FROM customers WHERE helm_accounts_id IS NOT NULL`);
-    const custByAcct = new Map(cm.rows.map(r => [String(r.helm_accounts_id).trim().toLowerCase(), r.id]));
+    // Match a shipment's Voila account identifier to a customer by ANY of the
+    // fields Voila might send: the accounts id, the account number, or the
+    // business name. Previously only helm_accounts_id matched, so shippers whose
+    // Voila account name didn't equal that exact field went unattributed.
+    const cm = await query(`SELECT id, helm_accounts_id, account_number, business_name FROM customers`);
+    const custByAcct = new Map();
+    const put = (k, id) => { const s = k == null ? '' : String(k).trim().toLowerCase(); if (s) custByAcct.set(s, id); };
+    for (const r of cm.rows) { put(r.helm_accounts_id, r.id); put(r.account_number, r.id); put(r.business_name, r.id); }
 
     while (page <= 3000) {
       let list;
