@@ -368,12 +368,17 @@ export default function Dashboard() {
     try {
       await api.post('/helm/sync/customers');
       await api.post('/helm/sync/volume?days=60');
+      // The per-customer snapshots are rebuilt from Voila shipments (with the
+      // broadened account matcher) — kick that off too. It runs in the background.
+      await api.post('/voila/backfill', null, { params: { days: 60 } }).catch(() => {});
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['volume-summary'] }),
         qc.invalidateQueries({ queryKey: ['volume-trend'] }),
         qc.invalidateQueries({ queryKey: ['volume-leaderboard'] }),
+        qc.invalidateQueries({ queryKey: ['volume-unattributed'] }),
         qc.invalidateQueries({ queryKey: ['customers'] }),
       ]);
+      setSyncMsg('Rebuilding volume in the background — refresh in ~2 min.');
     } catch (e) {
       setSyncMsg(e?.response?.data?.error || 'Sync failed — check your Helm settings.');
     } finally { setSyncing(false); }
