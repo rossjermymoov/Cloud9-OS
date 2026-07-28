@@ -36,6 +36,41 @@ router.get('/status-board', async (_req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// Per-customer trend analysis. mode=weekly compares the last completed week to
+// the trailing 13-week average; mode=monthly compares the last completed month to
+// the trailing 12-month average. Also returns the same period one year earlier
+// (year-on-year). Both parcels and items. The frontend derives the % trend.
+router.get('/analytics', async (req, res, next) => {
+  try {
+    const mode = req.query.mode === 'monthly' ? 'monthly' : 'weekly';
+    const excl = req.query.exclude ? String(req.query.exclude).split(',').map(s => s.trim()).filter(Boolean) : [];
+    const cfg = mode === 'monthly'
+      ? { unit: 'month', avgSpan: "interval '11 months'", divisor: 12, yoyOff: "interval '12 months'" }
+      : { unit: 'week',  avgSpan: "interval '12 weeks'",  divisor: 13, yoyOff: "interval '52 weeks'" };
+    const { rows } = await query(`
+      WITH b AS (
+        SELECT customer_id, date_trunc('${cfg.unit}', snapshot_date)::date AS bucket,
+               SUM(parcel_count)::int AS parcels, SUM(item_count)::int AS items
+        FROM customer_volume_snapshots
+        WHERE customer_id <> ALL($1::uuid[])
+        GROUP BY 1, 2
+      ),
+      p AS (SELECT (date_trunc('${cfg.unit}', CURRENT_DATE) - interval '1 ${cfg.unit}')::date AS last_b)
+      SELECT c.id, c.business_name, p.last_b::text AS period_start,
+        COALESCE(SUM(b.parcels) FILTER (WHERE b.bucket = p.last_b), 0)::int AS cur_parcels,
+        COALESCE(SUM(b.items)   FILTER (WHERE b.bucket = p.last_b), 0)::int AS cur_items,
+        ROUND(COALESCE(SUM(b.parcels) FILTER (WHERE b.bucket BETWEEN (p.last_b - ${cfg.avgSpan})::date AND p.last_b), 0) / ${cfg.divisor}.0, 1)::float AS avg_parcels,
+        ROUND(COALESCE(SUM(b.items)   FILTER (WHERE b.bucket BETWEEN (p.last_b - ${cfg.avgSpan})::date AND p.last_b), 0) / ${cfg.divisor}.0, 1)::float AS avg_items,
+        COALESCE(SUM(b.parcels) FILTER (WHERE b.bucket = (p.last_b - ${cfg.yoyOff})::date), 0)::int AS yoy_parcels,
+        COALESCE(SUM(b.items)   FILTER (WHERE b.bucket = (p.last_b - ${cfg.yoyOff})::date), 0)::int AS yoy_items
+      FROM customers c CROSS JOIN p
+      LEFT JOIN b ON b.customer_id = c.id
+      GROUP BY c.id, c.business_name, p.last_b
+    `, [excl]);
+    res.json({ mode, avg_window: cfg.divisor, period_start: rows[0]?.period_start || null, rows });
+  } catch (err) { next(err); }
+});
+
 // Diagnostic — shipments that didn't match a customer (so their volume is
 // missing from the per-customer dashboard). Group by the Voila account id/name
 // so we can see exactly which shippers need linking.

@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import { runMigrations } from './db/migrate.js';
+import { query } from './db/index.js';
 import customersRouter     from './routes/customers.js';
 import trackingRouter, { clearPendingCollection } from './routes/tracking.js';
 import webhooksRouter      from './routes/webhooks.js';
@@ -197,6 +198,25 @@ async function start() {
       }
     }, 60 * 1000);
     console.log('🌙 Nightly Voila backfill scheduled for 19:00 UK');
+
+    // One-time backfill shortly after boot — but only if one hasn't run in the
+    // last 6 hours, so frequent redeploys don't hammer the Voila API. This makes
+    // a deploy pick up matcher/attribution changes without waiting for 19:00.
+    setTimeout(async () => {
+      try {
+        const { rows } = await query(
+          `SELECT ran_at FROM helm_sync_log WHERE sync_type='voila_backfill' AND status='ok'
+           ORDER BY ran_at DESC LIMIT 1`
+        );
+        const last = rows[0]?.ran_at ? new Date(rows[0].ran_at).getTime() : 0;
+        if (Date.now() - last > 6 * 60 * 60 * 1000) {
+          console.log('🔁 Boot Voila backfill starting (no recent run)…');
+          runVoilaBackfill(90, { pageDelayMs: 300 }).catch(e => console.warn('[boot-backfill]', e.message));
+        } else {
+          console.log('⏭️  Boot Voila backfill skipped (ran within last 6h)');
+        }
+      } catch (e) { console.warn('[boot-backfill] check failed:', e.message); }
+    }, 45 * 1000);
   }
 }
 
