@@ -318,8 +318,14 @@ router.get('/leaderboard', async (req, res, next) => {
       curStart = new Date(`${lw}T00:00:00`); curEnd = new Date(`${lw}T00:00:00`);
       prevStart = new Date(`${pw}T00:00:00`); prevEnd = new Date(`${pw}T00:00:00`);
     } else if (period === 'week') {
-      const dow = (now.getDay() + 6) % 7; const monday = add(now, -dow);
-      curStart = monday; curEnd = now; prevStart = add(monday, -7); prevEnd = add(monday, -7 + dow);
+      // Last completed week (Mon–Sun) vs the week before. Previously this was
+      // "this week to date", which on a Monday is almost empty — so any customer
+      // whose last shipment was the previous Fri/Sat dropped off the board even
+      // though they were last week's biggest shipper. This now matches the
+      // Statistics page's weekly view.
+      const dow = (now.getDay() + 6) % 7; const thisMonday = add(now, -dow);
+      curStart = add(thisMonday, -7);  curEnd = add(thisMonday, -1);
+      prevStart = add(thisMonday, -14); prevEnd = add(thisMonday, -8);
     } else if (period === 'month') {
       const ft = new Date(now.getFullYear(), now.getMonth(), 1);
       const fl = new Date(now.getFullYear(), now.getMonth() - 1, 1);
