@@ -80,7 +80,7 @@ export async function runVoilaBackfill(days = 90, { pageDelayMs = 0 } = {}) {
     const put = (k, id) => { const s = k == null ? '' : String(k).trim().toLowerCase(); if (s) custByAcct.set(s, id); };
     for (const r of cm.rows) { put(r.helm_accounts_id, r.id); put(r.account_number, r.id); put(r.business_name, r.id); }
 
-    while (page <= 3000) {
+    while (page <= 20000) {
       let list;
       try { list = await fetchShipmentsPage(isoDay(from), isoDay(to), page, 100); }
       catch (e) { console.error(`[voila-backfill] fetch page ${page}: ${e.message}`); break; }
@@ -166,9 +166,13 @@ router.post('/backfill', async (req, res, next) => {
     if (!voilaConfigured()) {
       return res.status(503).json({ error: 'Voila API not configured — set VOILA_API_USER / VOILA_API_TOKEN in server/.env' });
     }
-    const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
-    res.status(202).json({ status: 'started', days, message: `Backfilling ${days} days of Voila shipments in the background. Check GET /api/helm/sync-log.` });
-    setImmediate(() => runVoilaBackfill(days));
+    // ?full=1 pulls the entire history (as far back as Voila has data). ~11 years
+    // is a safe upper bound; the fetch loop stops once pages come back empty.
+    const full = req.query.full === '1' || req.query.full === 'true';
+    const days = full ? 4000 : Math.min(Math.max(parseInt(req.query.days) || 30, 1), 4000);
+    res.status(202).json({ status: 'started', full, days, message: `Backfilling ${full ? 'the full history' : `${days} days`} of Voila shipments in the background. This can take a while — check GET /api/helm/sync-log.` });
+    // A full run goes gently (small delay between pages) so it doesn't hammer the API.
+    setImmediate(() => runVoilaBackfill(days, { pageDelayMs: full ? 250 : 0 }));
   } catch (err) { next(err); }
 });
 

@@ -1,8 +1,16 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { TrendingUp, TrendingDown, Minus, LineChart } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, LineChart, Database } from 'lucide-react';
 import { volumeAnalytics } from '../../api/volume';
+import api from '../../api/client';
 import CustomerExcludeFilter, { useExcludedCustomers } from '../../components/CustomerExcludeFilter';
+
+const PERIOD_CFG = {
+  weekly:  { noun: 'week',    avg: '13-wk avg' },
+  monthly: { noun: 'month',   avg: '12-mo avg' },
+  quarter: { noun: 'quarter', avg: '4-qtr avg' },
+  year:    { noun: 'year',    avg: '3-yr avg' },
+};
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B';
 const GREEN = '#16A34A', RED = '#DC2626', AMBER = '#D97706';
@@ -46,8 +54,9 @@ function TrendCell({ ti, tint }) {
 }
 
 export default function StatisticsPage() {
-  const [mode, setMode] = useState('weekly');   // weekly | monthly
+  const [mode, setMode] = useState('weekly');   // weekly | monthly | quarter | year
   const [sort, setSort] = useState('p_trend');  // p_trend | i_trend | p_cur | i_cur | name
+  const [bf, setBf] = useState(null);           // backfill status message
   const { excluded, toggle, clear } = useExcludedCustomers();
 
   const { data, isLoading } = useQuery({
@@ -55,8 +64,19 @@ export default function StatisticsPage() {
     queryFn: () => volumeAnalytics({ mode, exclude: excluded }),
   });
 
-  const periodLabel = mode === 'weekly' ? 'week' : 'month';
-  const avgLabel = mode === 'weekly' ? '13-wk avg' : '12-mo avg';
+  const periodLabel = PERIOD_CFG[mode].noun;
+  const avgLabel = PERIOD_CFG[mode].avg;
+
+  async function runBackfill() {
+    if (!window.confirm('Pull the full shipment history from Voila? This runs in the background and can take several minutes. The Statistics data will fill in as it completes.')) return;
+    setBf('Starting…');
+    try {
+      await api.post('/voila/backfill', null, { params: { full: 1 } });
+      setBf('Backfilling the full history in the background — this can take several minutes. Refresh later to see the extra weeks, months, quarters and years.');
+    } catch (e) {
+      setBf(e?.response?.data?.error || 'Could not start the backfill — check the Voila connection.');
+    }
+  }
 
   const rows = useMemo(() => {
     const raw = (data?.rows || []).map(r => ({
@@ -94,11 +114,22 @@ export default function StatisticsPage() {
             {data?.period_start ? <span style={{ color: '#94A3B8' }}> · last {periodLabel} starting {data.period_start}</span> : ''}
           </p>
         </div>
-        <CustomerExcludeFilter excluded={excluded} toggle={toggle} clear={clear} />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={runBackfill} title="Pull the full shipment history so weekly/monthly/quarterly/yearly views go further back" style={{
+            display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer',
+            borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE }}>
+            <Database size={14} /> Backfill history
+          </button>
+          <CustomerExcludeFilter excluded={excluded} toggle={toggle} clear={clear} />
+        </div>
       </div>
 
+      {bf && (
+        <div style={{ background: '#FFF7ED', border: '1px solid #FED7AA', color: '#9A3412', borderRadius: 10, padding: '10px 14px', fontSize: 12.5, fontWeight: 500, marginBottom: 16 }}>{bf}</div>
+      )}
+
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
-        <Toggle options={[{ value: 'weekly', label: 'Weekly' }, { value: 'monthly', label: 'Monthly' }]} value={mode} onChange={setMode} />
+        <Toggle options={[{ value: 'weekly', label: 'Weekly' }, { value: 'monthly', label: 'Monthly' }, { value: 'quarter', label: 'Quarterly' }, { value: 'year', label: 'Yearly' }]} value={mode} onChange={setMode} />
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <Chip colour={GREEN} label={`${pUp} up`} />

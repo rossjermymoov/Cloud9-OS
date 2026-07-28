@@ -42,20 +42,24 @@ router.get('/status-board', async (_req, res, next) => {
 // (year-on-year). Both parcels and items. The frontend derives the % trend.
 router.get('/analytics', async (req, res, next) => {
   try {
-    const mode = req.query.mode === 'monthly' ? 'monthly' : 'weekly';
+    const CFG = {
+      weekly:  { trunc: 'week',    step: "interval '1 week'",   avgSpan: "interval '12 weeks'", divisor: 13, yoyOff: "interval '52 weeks'" },
+      monthly: { trunc: 'month',   step: "interval '1 month'",  avgSpan: "interval '11 months'", divisor: 12, yoyOff: "interval '12 months'" },
+      quarter: { trunc: 'quarter', step: "interval '3 months'", avgSpan: "interval '9 months'",  divisor: 4,  yoyOff: "interval '12 months'" },
+      year:    { trunc: 'year',    step: "interval '1 year'",   avgSpan: "interval '2 years'",   divisor: 3,  yoyOff: "interval '1 year'" },
+    };
+    const mode = CFG[req.query.mode] ? req.query.mode : 'weekly';
+    const cfg = CFG[mode];
     const excl = req.query.exclude ? String(req.query.exclude).split(',').map(s => s.trim()).filter(Boolean) : [];
-    const cfg = mode === 'monthly'
-      ? { unit: 'month', avgSpan: "interval '11 months'", divisor: 12, yoyOff: "interval '12 months'" }
-      : { unit: 'week',  avgSpan: "interval '12 weeks'",  divisor: 13, yoyOff: "interval '52 weeks'" };
     const { rows } = await query(`
       WITH b AS (
-        SELECT customer_id, date_trunc('${cfg.unit}', snapshot_date)::date AS bucket,
+        SELECT customer_id, date_trunc('${cfg.trunc}', snapshot_date)::date AS bucket,
                SUM(parcel_count)::int AS parcels, SUM(item_count)::int AS items
         FROM customer_volume_snapshots
         WHERE customer_id <> ALL($1::uuid[])
         GROUP BY 1, 2
       ),
-      p AS (SELECT (date_trunc('${cfg.unit}', CURRENT_DATE) - interval '1 ${cfg.unit}')::date AS last_b)
+      p AS (SELECT (date_trunc('${cfg.trunc}', CURRENT_DATE) - ${cfg.step})::date AS last_b)
       SELECT c.id, c.business_name, p.last_b::text AS period_start,
         COALESCE(SUM(b.parcels) FILTER (WHERE b.bucket = p.last_b), 0)::int AS cur_parcels,
         COALESCE(SUM(b.items)   FILTER (WHERE b.bucket = p.last_b), 0)::int AS cur_items,
