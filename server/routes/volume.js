@@ -154,6 +154,44 @@ router.get('/weekly', async (_req, res, next) => {
 function ymd(d) { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
 function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 
+// Resolve week/month/quarter to the LAST COMPLETED period, optionally stepped
+// back by `offset` whole periods (0 = most recent completed). Returns the
+// current + previous period boundaries (Dates at local midnight) and a human
+// label. "Week" viewed any day always means last week (Mon–Sun); "month" in
+// July means June; "quarter" means the last finished quarter.
+function resolveCompletedPeriod(period, offset, now) {
+  const o = Math.max(0, Math.min(parseInt(offset) || 0, 60));
+  const add = (d, n) => { const x = new Date(d); x.setDate(d.getDate() + n); return x; };
+  const monShort = (d) => d.toLocaleString('en-GB', { month: 'short' });
+  if (period === 'week') {
+    const dow = (now.getDay() + 6) % 7; const thisMonday = add(now, -dow);
+    const curStart = add(thisMonday, -7 * (o + 1)); const curEnd = add(curStart, 6);
+    const prevStart = add(curStart, -7); const prevEnd = add(curStart, -1);
+    const label = curStart.getMonth() === curEnd.getMonth()
+      ? `${curStart.getDate()}–${curEnd.getDate()} ${monShort(curEnd)} ${curEnd.getFullYear()}`
+      : `${curStart.getDate()} ${monShort(curStart)} – ${curEnd.getDate()} ${monShort(curEnd)} ${curEnd.getFullYear()}`;
+    return { curStart, curEnd, prevStart, prevEnd, label };
+  }
+  if (period === 'month') {
+    const y = now.getFullYear(), m = now.getMonth();
+    const curStart = new Date(y, m - 1 - o, 1);
+    const curEnd = new Date(y, m - o, 0);
+    const prevStart = new Date(y, m - 2 - o, 1);
+    const prevEnd = new Date(y, m - 1 - o, 0);
+    return { curStart, curEnd, prevStart, prevEnd, label: curStart.toLocaleString('en-GB', { month: 'long', year: 'numeric' }) };
+  }
+  // quarter
+  const y = now.getFullYear(), m = now.getMonth();
+  const startMonth = Math.floor(m / 3) * 3 - 3 - 3 * o;   // first month of the target completed quarter
+  const curStart = new Date(y, startMonth, 1);
+  const curEnd = new Date(y, startMonth + 3, 0);
+  const prevStart = new Date(y, startMonth - 3, 1);
+  const prevEnd = new Date(y, startMonth, 0);
+  const qNum = Math.floor(curStart.getMonth() / 3) + 1;
+  const label = `Q${qNum} ${curStart.getFullYear()} (${monShort(curStart)}–${monShort(new Date(y, startMonth + 2, 1))})`;
+  return { curStart, curEnd, prevStart, prevEnd, label };
+}
+
 // A single custom day, clamped to the last 90 days (today inclusive). Returns a
 // Date at local midnight, or null if no/invalid date was supplied.
 function parseCustomDate(s) {
@@ -248,38 +286,41 @@ router.get('/trend', async (req, res, next) => {
         totals: { current: getStr(lwStr), previous: getStr(pwStr) } });
     }
 
+    const offset = req.query.offset;
+
     if (period === 'week') {
-      const dow = (now.getDay() + 6) % 7; const monday = addDays(now, -dow);
+      // The last completed week (Mon–Sun), or `offset` weeks before that, vs the
+      // week before it. A completed week always has all 7 days.
+      const { curStart, prevStart, label } = resolveCompletedPeriod('week', offset, now);
       const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
       const current = [], previous = [];
-      for (let i = 0; i < 7; i++) {
-        const cur = addDays(monday, i);
-        current.push(cur > now ? null : get(cur));
-        previous.push(get(addDays(monday, -7 + i)));
-      }
-      return res.json(pack('compare', labels, current, previous));
+      for (let i = 0; i < 7; i++) { current.push(get(addDays(curStart, i))); previous.push(get(addDays(prevStart, i))); }
+      return res.json({ ...pack('compare', labels, current, previous), label });
     }
 
     if (period === 'month') {
-      const firstThis = new Date(now.getFullYear(), now.getMonth(), 1);
-      const firstLast = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const daysThis = now.getDate();
-      const dLast = daysInMonth(firstLast.getFullYear(), firstLast.getMonth());
-      const len = Math.max(daysThis, dLast);
+      // The last completed month (or `offset` months before) vs the month before it.
+      const { curStart, prevStart, label } = resolveCompletedPeriod('month', offset, now);
+      const dCur = daysInMonth(curStart.getFullYear(), curStart.getMonth());
+      const dPrev = daysInMonth(prevStart.getFullYear(), prevStart.getMonth());
+      const len = Math.max(dCur, dPrev);
       const labels = [], current = [], previous = [];
       for (let i = 0; i < len; i++) {
         labels.push(String(i + 1));
-        current.push(i < daysThis ? get(addDays(firstThis, i)) : null);
-        previous.push(i < dLast ? get(addDays(firstLast, i)) : null);
+        current.push(i < dCur ? get(addDays(curStart, i)) : null);
+        previous.push(i < dPrev ? get(addDays(prevStart, i)) : null);
       }
-      return res.json(pack('compare', labels, current, previous));
+      return res.json({ ...pack('compare', labels, current, previous), label });
     }
 
-    // quarter → last 6 monthly totals (bars) + this-quarter vs last-quarter totals
+    // quarter → 6 monthly totals ending at the last completed quarter (bars) +
+    // that quarter vs the previous quarter totals.
+    const { curStart: qStart, label: qLabel } = resolveCompletedPeriod('quarter', offset, now);
+    const endMonth = new Date(qStart.getFullYear(), qStart.getMonth() + 2, 1);
     const labels = [], series = [];
     let cur = { parcels: 0, items: 0, picks: 0 }, prev = { parcels: 0, items: 0, picks: 0 };
     for (let k = 5; k >= 0; k--) {
-      const mDate = new Date(now.getFullYear(), now.getMonth() - k, 1);
+      const mDate = new Date(endMonth.getFullYear(), endMonth.getMonth() - k, 1);
       const dim = daysInMonth(mDate.getFullYear(), mDate.getMonth());
       let p = 0, it = 0, pk = 0;
       for (let dd = 0; dd < dim; dd++) { const g = get(addDays(mDate, dd)); p += g.parcels; it += g.items; pk += g.picks; }
@@ -287,7 +328,7 @@ router.get('/trend', async (req, res, next) => {
       series.push({ parcels: p, items: it, picks: pk });
       if (k < 3) { cur.parcels += p; cur.items += it; cur.picks += pk; } else { prev.parcels += p; prev.items += it; prev.picks += pk; }
     }
-    return res.json({ period: 'quarter', mode: 'bars', labels, series, totals: { current: cur, previous: prev } });
+    return res.json({ period: 'quarter', mode: 'bars', labels, series, totals: { current: cur, previous: prev }, label: qLabel });
   } catch (err) { next(err); }
 });
 
@@ -303,7 +344,7 @@ router.get('/leaderboard', async (req, res, next) => {
     const now = new Date(); now.setHours(0, 0, 0, 0);
     const add = (d, n) => { const x = new Date(d); x.setDate(d.getDate() + n); return x; };
     const customDate = parseCustomDate(req.query.date);
-    let curStart, curEnd, prevStart, prevEnd;
+    let curStart, curEnd, prevStart, prevEnd, periodLabel = null;
     if (customDate) {
       curStart = customDate; curEnd = customDate; prevStart = add(customDate, -1); prevEnd = add(customDate, -1);
     } else if (period === 'day') {
@@ -317,21 +358,13 @@ router.get('/leaderboard', async (req, res, next) => {
       const pw = lastWorkingBefore(lw, hs);
       curStart = new Date(`${lw}T00:00:00`); curEnd = new Date(`${lw}T00:00:00`);
       prevStart = new Date(`${pw}T00:00:00`); prevEnd = new Date(`${pw}T00:00:00`);
-    } else if (period === 'week') {
-      // Last completed week (Mon–Sun) vs the week before. Previously this was
-      // "this week to date", which on a Monday is almost empty — so any customer
-      // whose last shipment was the previous Fri/Sat dropped off the board even
-      // though they were last week's biggest shipper. This now matches the
-      // Statistics page's weekly view.
-      const dow = (now.getDay() + 6) % 7; const thisMonday = add(now, -dow);
-      curStart = add(thisMonday, -7);  curEnd = add(thisMonday, -1);
-      prevStart = add(thisMonday, -14); prevEnd = add(thisMonday, -8);
-    } else if (period === 'month') {
-      const ft = new Date(now.getFullYear(), now.getMonth(), 1);
-      const fl = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      curStart = ft; curEnd = now; prevStart = fl; prevEnd = add(fl, now.getDate() - 1);
     } else {
-      curStart = add(now, -89); curEnd = now; prevStart = add(now, -179); prevEnd = add(now, -90);
+      // week / month / quarter → the last completed period (Mon–Sun / calendar
+      // month / calendar quarter), optionally stepped back with ?offset=N. So the
+      // board always shows a full, finished period — never an empty "this week"
+      // on a Monday — and matches the Statistics page.
+      const r = resolveCompletedPeriod(period, req.query.offset, now);
+      curStart = r.curStart; curEnd = r.curEnd; prevStart = r.prevStart; prevEnd = r.prevEnd; periodLabel = r.label;
     }
 
     const excl = req.query.exclude ? String(req.query.exclude).split(',').map(s => s.trim()).filter(Boolean) : [];
@@ -357,7 +390,7 @@ router.get('/leaderboard', async (req, res, next) => {
       return bv - av;
     }).slice(0, limit);
 
-    res.json({ period: customDate ? 'custom' : period, metric: req.query.metric === 'items' ? 'items' : 'parcels', sort, rows: ranked });
+    res.json({ period: customDate ? 'custom' : period, metric: req.query.metric === 'items' ? 'items' : 'parcels', sort, label: periodLabel, rows: ranked });
   } catch (err) { next(err); }
 });
 

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   Truck, Boxes, Send, Hand, PackageOpen, RefreshCw, Database,
-  TrendingUp, TrendingDown, Minus, Trophy, Info, Maximize2, X, Filter,
+  TrendingUp, TrendingDown, Minus, Trophy, Info, Maximize2, X, Filter, Calendar, ChevronDown,
 } from 'lucide-react';
 import api from '../api/client';
 import { listNotifications } from '../api/notifications';
@@ -107,10 +107,35 @@ function prettyCourier(name) {
 }
 
 // Flexible trend chart — dual line (current vs previous) or monthly bars.
-const PREV_LABEL = { day: 'Yesterday', yesterday: 'Prev working day', week: 'Last week', month: 'Last month', quarter: 'Prev quarter', custom: 'Prev day' };
-const CUR_LABEL  = { day: 'Today', yesterday: 'Last working day', week: 'This week', month: 'This month', quarter: 'This quarter', custom: 'Selected day' };
+const PREV_LABEL = { day: 'Yesterday', yesterday: 'Prev working day', week: 'Week before', month: 'Month before', quarter: 'Quarter before', custom: 'Prev day' };
+const CUR_LABEL  = { day: 'Today', yesterday: 'Last working day', week: 'Selected week', month: 'Selected month', quarter: 'Selected quarter', custom: 'Selected day' };
 const PERIOD_NOUN = { day: 'today', yesterday: 'last working day', week: 'this week', month: 'this month', quarter: 'this quarter' };
-const VS_NOUN     = { day: 'yesterday', yesterday: 'prior working day', week: 'last week', month: 'last month', quarter: 'last quarter' };
+const VS_NOUN     = { day: 'yesterday', yesterday: 'prior working day', week: 'the week before', month: 'the month before', quarter: 'the quarter before' };
+
+// The last completed week/month/quarter, and earlier ones, for the period picker.
+function periodInstances(period) {
+  const now = new Date(); now.setHours(0, 0, 0, 0);
+  const add = (d, n) => { const x = new Date(d); x.setDate(d.getDate() + n); return x; };
+  const monShort = (d) => d.toLocaleString('en-GB', { month: 'short' });
+  const count = period === 'week' ? 8 : period === 'month' ? 12 : period === 'quarter' ? 6 : 0;
+  const out = [];
+  for (let o = 0; o < count; o++) {
+    if (period === 'week') {
+      const dow = (now.getDay() + 6) % 7; const thisMon = add(now, -dow);
+      const s = add(thisMon, -7 * (o + 1)), e = add(s, 6);
+      const label = s.getMonth() === e.getMonth() ? `${s.getDate()}–${e.getDate()} ${monShort(e)}` : `${s.getDate()} ${monShort(s)} – ${e.getDate()} ${monShort(e)}`;
+      out.push({ offset: o, label, sub: o === 0 ? 'Last week' : `${o + 1} weeks ago` });
+    } else if (period === 'month') {
+      const s = new Date(now.getFullYear(), now.getMonth() - 1 - o, 1);
+      out.push({ offset: o, label: s.toLocaleString('en-GB', { month: 'long', year: 'numeric' }), sub: o === 0 ? 'Last month' : o === 1 ? '2 months ago' : null });
+    } else if (period === 'quarter') {
+      const sm = Math.floor(now.getMonth() / 3) * 3 - 3 - 3 * o; const s = new Date(now.getFullYear(), sm, 1);
+      out.push({ offset: o, label: `Q${Math.floor(s.getMonth() / 3) + 1} ${s.getFullYear()}`, sub: o === 0 ? 'Last quarter' : null });
+    }
+  }
+  return out;
+}
+const instanceLabel = (period, offset) => (periodInstances(period).find(i => i.offset === offset) || {}).label || '';
 function TrendChart({ trend, metric }) {
   const [hoverIdx, setHoverIdx] = useState(null);
   if (!trend) return null;
@@ -156,7 +181,7 @@ function TrendChart({ trend, metric }) {
   return (
     <div>
       <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 11.5, color: MUTED }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 3, background: ACCENT, borderRadius: 2 }} /> {CUR_LABEL[trend.period]}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 3, background: ACCENT, borderRadius: 2 }} /> {trend.label || CUR_LABEL[trend.period]}</span>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 0, borderTop: `2px dashed ${LAST}` }} /> {PREV_LABEL[trend.period]}</span>
       </div>
       <div style={{ position: 'relative', height: 180 }}>
@@ -186,6 +211,39 @@ function Seg({ options, value, onChange }) {
           background: value === o.v ? '#fff' : 'transparent', color: value === o.v ? ACCENT : MUTED, boxShadow: value === o.v ? CARD_SHADOW : 'none',
         }}>{o.l}</button>
       ))}
+    </div>
+  );
+}
+
+// Dropdown to pick which completed week / month / quarter to view.
+function PeriodPicker({ period, offset, setOffset }) {
+  const [open, setOpen] = useState(false);
+  const insts = periodInstances(period);
+  if (!insts.length) return null;
+  const sel = insts.find(i => i.offset === offset) || insts[0];
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)} title="Choose which period to view" style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid #E2E8F0',
+        background: offset > 0 ? '#EEF4FF' : '#fff', cursor: 'pointer', borderRadius: 9,
+        padding: '7px 11px', fontSize: 12.5, fontWeight: 600, color: offset > 0 ? ACCENT : TITLE }}>
+        <Calendar size={13} /> {sel.label} <ChevronDown size={13} />
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: '112%', left: 0, width: 230, maxHeight: 320, overflowY: 'auto', background: '#fff', border: '1px solid #E2E8F0', borderRadius: 10, boxShadow: CARD_SHADOW, zIndex: 50, padding: 6 }}>
+            {insts.map(i => (
+              <button key={i.offset} onClick={() => { setOffset(i.offset); setOpen(false); }} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', border: 'none',
+                background: i.offset === offset ? '#EEF4FF' : 'transparent', cursor: 'pointer', borderRadius: 6,
+                padding: '8px 10px', fontSize: 12.5, fontWeight: 600, color: i.offset === offset ? ACCENT : TITLE, textAlign: 'left' }}>
+                <span>{i.label}</span>{i.sub && <span style={{ fontSize: 11, color: MUTED, fontWeight: 500 }}>{i.sub}</span>}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -229,11 +287,11 @@ function PendingCard({ total, byCourier }) {
   );
 }
 
-function AllCustomersModal({ period, metric, dateParam, periodLabel, onClose, navigate }) {
+function AllCustomersModal({ period, metric, dateParam, offset, periodLabel, onClose, navigate }) {
   const unit = metric === 'items' ? 'items' : 'parcels';
   const { data } = useQuery({
-    queryKey: ['volume-all', period, metric, dateParam],
-    queryFn: () => volumeLeaderboard({ period, metric, sort: 'volume', limit: 500, date: dateParam }),
+    queryKey: ['volume-all', period, metric, dateParam, offset],
+    queryFn: () => volumeLeaderboard({ period, metric, sort: 'volume', limit: 500, date: dateParam, offset }),
   });
   const rows = (data?.rows || []).filter(r => r.current > 0).sort((a, b) => b.current - a.current);
   const total = rows.reduce((a, r) => a + r.current, 0);
@@ -259,7 +317,7 @@ function AllCustomersModal({ period, metric, dateParam, periodLabel, onClose, na
   );
 }
 
-function Leaderboard({ data, metric, sort, setSort, navigate, period, dateParam, periodLabel }) {
+function Leaderboard({ data, metric, sort, setSort, navigate, period, dateParam, offset, periodLabel }) {
   const rows = data?.rows || [];
   const unit = metric === 'items' ? 'items' : 'parcels';
   const [showAll, setShowAll] = useState(false);
@@ -285,7 +343,7 @@ function Leaderboard({ data, metric, sort, setSort, navigate, period, dateParam,
           </button>
         </div>
       </div>
-      {showAll && <AllCustomersModal period={period} metric={metric} dateParam={dateParam} periodLabel={periodLabel} onClose={() => setShowAll(false)} navigate={navigate} />}
+      {showAll && <AllCustomersModal period={period} metric={metric} dateParam={dateParam} offset={offset} periodLabel={periodLabel} onClose={() => setShowAll(false)} navigate={navigate} />}
       {rows.length === 0
         ? <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '20px 0', color: '#94A3B8' }}>
             <ListeningPill /><span style={{ fontSize: 12 }}>No customer volume yet.</span></div>
@@ -321,6 +379,7 @@ export default function Dashboard() {
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState(null);
   const [period, setPeriod] = useState('day');
+  const [offset, setOffset] = useState(0);   // 0 = most recent completed week/month/quarter
   const [metric, setMetric] = useState('parcels');
   const [boardSort, setBoardSort] = useState('volume');
   const isoOf = (d) => { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
@@ -342,8 +401,8 @@ export default function Dashboard() {
   const { data: stats }  = useQuery({ queryKey: ['tracking-stats'], queryFn: () => api.get('/tracking/stats').then(r => r.data) });
   const { data: notifs } = useQuery({ queryKey: ['dashboard-notifs'], queryFn: () => listNotifications({ limit: 7 }) });
   const { data: customers } = useQuery({ queryKey: ['customers-list'], queryFn: () => listCustomers({ limit: 500, sort: 'business_name', order: 'asc' }) });
-  const { data: trend }  = useQuery({ queryKey: ['volume-trend', period, dateParam, excluded], queryFn: () => volumeTrend(period, dateParam, excluded) });
-  const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort, dateParam, excluded], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort, date: dateParam, exclude: excluded }) });
+  const { data: trend }  = useQuery({ queryKey: ['volume-trend', period, dateParam, excluded, offset], queryFn: () => volumeTrend(period, dateParam, excluded, offset) });
+  const { data: board }  = useQuery({ queryKey: ['volume-leaderboard', period, metric, boardSort, dateParam, excluded, offset], queryFn: () => volumeLeaderboard({ period, metric, sort: boardSort, date: dateParam, exclude: excluded, offset }) });
   const { data: unattr } = useQuery({ queryKey: ['volume-unattributed'], queryFn: () => volumeUnattributed(14) });
   const custList = Array.isArray(customers) ? customers : (customers?.data || customers?.rows || customers?.customers || []);
 
@@ -357,7 +416,9 @@ export default function Dashboard() {
   const cur = trend?.totals?.current  || { parcels: 0, items: 0, picks: 0 };
   const prv = trend?.totals?.previous || { parcels: 0, items: 0, picks: 0 };
   const prettyCustom = new Date(`${customDate}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  const periodNoun = period === 'custom' ? `on ${prettyCustom}` : (PERIOD_NOUN[period] || `this ${period}`);
+  const usePicker  = ['week', 'month', 'quarter'].includes(period);
+  const instLabel  = usePicker ? instanceLabel(period, offset) : null;
+  const periodNoun = period === 'custom' ? `on ${prettyCustom}` : (instLabel || PERIOD_NOUN[period] || `this ${period}`);
   const vsNoun     = period === 'custom' ? 'prev day' : (VS_NOUN[period] || `last ${period}`);
   const tc = cur[metric] ?? 0;
   const tp = prv[metric] ?? 0;
@@ -394,7 +455,8 @@ export default function Dashboard() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Seg value={metric} onChange={setMetric} options={[{ v: 'parcels', l: 'Parcels' }, { v: 'items', l: 'Items' }]} />
-          <Seg value={period} onChange={setPeriod} options={[{ v: 'day', l: 'Day' }, { v: 'yesterday', l: 'Last working day' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }, { v: 'custom', l: 'Custom' }]} />
+          <Seg value={period} onChange={(v) => { setPeriod(v); setOffset(0); }} options={[{ v: 'day', l: 'Day' }, { v: 'yesterday', l: 'Last working day' }, { v: 'week', l: 'Week' }, { v: 'month', l: 'Month' }, { v: 'quarter', l: 'Quarter' }, { v: 'custom', l: 'Custom' }]} />
+          {usePicker && <PeriodPicker period={period} offset={offset} setOffset={setOffset} />}
           {period === 'custom' && (
             <input type="date" value={customDate} min={minStr} max={todayStr}
               onChange={e => setCustomDate(e.target.value || todayStr)}
@@ -479,7 +541,7 @@ export default function Dashboard() {
             {hasTrend && (
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
                 <span style={{ fontSize: 26, fontWeight: 800, color: HEADER, letterSpacing: -0.6 }}>{tc.toLocaleString()}</span>
-                <span style={{ fontSize: 12, color: MUTED }}>{metric} {CUR_LABEL[period].toLowerCase()}</span>
+                <span style={{ fontSize: 12, color: MUTED }}>{metric} {usePicker ? periodNoun : CUR_LABEL[period].toLowerCase()}</span>
                 <Pill tone={trendPct == null ? 'green' : trendPct >= 0 ? 'green' : 'amber'}
                   text={trendPct == null ? `New vs ${PREV_LABEL[period].toLowerCase()}` : `${trendPct >= 0 ? '+' : ''}${trendPct}% vs ${PREV_LABEL[period].toLowerCase()} (${tp.toLocaleString()})`} />
               </div>
@@ -507,7 +569,7 @@ export default function Dashboard() {
           </Card>
 
           <Card>
-            <Leaderboard data={board} metric={metric} sort={boardSort} setSort={setBoardSort} navigate={navigate} period={period} dateParam={dateParam} periodLabel={periodNoun} />
+            <Leaderboard data={board} metric={metric} sort={boardSort} setSort={setBoardSort} navigate={navigate} period={period} dateParam={dateParam} offset={offset} periodLabel={periodNoun} />
           </Card>
         </div>
 
