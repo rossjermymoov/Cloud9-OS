@@ -45,16 +45,16 @@ export default function StatusBoardPage() {
           </div>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(235px, 1fr))', gap: 16 }}>
           {statuses.map((s, i) => {
             const col = cardColour(s, i);
             return (
-              <div key={s.status_id} style={{ background: '#fff', borderRadius: 12, boxShadow: SHADOW, padding: '14px 16px', borderLeft: `4px solid ${col}`, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: col, flexShrink: 0 }} />
-                  <span style={{ fontSize: 12.5, fontWeight: 600, color: MUTED, lineHeight: 1.25 }}>{s.name || `Status ${s.status_id}`}</span>
+              <div key={s.status_id} style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, padding: '22px 24px', borderLeft: `5px solid ${col}`, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 128, justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                  <span style={{ width: 11, height: 11, borderRadius: '50%', background: col, flexShrink: 0 }} />
+                  <span style={{ fontSize: 14, fontWeight: 600, color: MUTED, lineHeight: 1.25 }}>{s.name || `Status ${s.status_id}`}</span>
                 </div>
-                <div style={{ fontSize: 32, fontWeight: 800, color: HEADER, letterSpacing: -1, lineHeight: 1 }}>{s.count.toLocaleString()}</div>
+                <div style={{ fontSize: 46, fontWeight: 800, color: HEADER, letterSpacing: -1.5, lineHeight: 1 }}>{s.count.toLocaleString()}</div>
               </div>
             );
           })}
