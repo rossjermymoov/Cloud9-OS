@@ -132,6 +132,14 @@ async function start() {
     setTimeout(() => syncOrderStatuses(1).catch(e => console.warn('[status-sync]', e.message)), 30 * 1000);
     setInterval(() => syncOrderStatuses(1).catch(e => console.warn('[status-sync]', e.message)), 5 * 60 * 1000);
     console.log('🏭 Order-status auto-sync scheduled every 5 minutes');
+
+    // Wide reconcile every 15 min (and once on boot) — the 1-day window above
+    // keeps the board fresh minute-to-minute, but an order that changed status a
+    // while ago can drift out of sync. A 60-day window re-checks the whole open
+    // pipeline so the Status Board always matches Helm's live counts.
+    setTimeout(() => syncOrderStatuses(60).catch(e => console.warn('[status-reconcile]', e.message)), 75 * 1000);
+    setInterval(() => syncOrderStatuses(60).catch(e => console.warn('[status-reconcile]', e.message)), 15 * 60 * 1000);
+    console.log('🔄 Order-status reconcile scheduled every 15 minutes (60-day window)');
   }
 
   // Clear "pending collection" to 0 every night at 20:00 UK — couriers have been

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { LayoutGrid, RefreshCw } from 'lucide-react';
 import { statusBoard } from '../../api/volume';
+import api from '../../api/client';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
 const SHADOW = '0 1px 2px rgba(16,24,40,0.06), 0 1px 3px rgba(16,24,40,0.10)';
@@ -11,12 +12,22 @@ const PALETTE = ['#3B82F6', '#A855F7', '#22D3EE', '#EC4899', '#F59E0B', '#10B981
 const cardColour = (s, i) => (s.colour && /^#?[0-9a-fA-F]{6}$/.test(s.colour.replace('#', '')) ? (s.colour.startsWith('#') ? s.colour : `#${s.colour}`) : PALETTE[i % PALETTE.length]);
 
 export default function StatusBoardPage() {
+  const [syncing, setSyncing] = useState(false);
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['status-board'],
     queryFn: () => statusBoard(),
     refetchInterval: 15 * 60 * 1000,   // refresh every 15 minutes
   });
   const statuses = data?.statuses || [];
+
+  // Pull live statuses from Helm (fixes drift), then re-read the counts a couple
+  // of times as the background sync writes them.
+  async function refresh() {
+    setSyncing(true);
+    try { await api.post('/helm/sync/statuses', null, { params: { days: 60 } }); } catch { /* still refetch below */ }
+    setTimeout(() => refetch(), 6000);
+    setTimeout(() => { refetch(); setSyncing(false); }, 16000);
+  }
 
   return (
     <div style={{ width: '100%', maxWidth: 'none' }}>
@@ -30,8 +41,8 @@ export default function StatusBoardPage() {
             {data ? <span style={{ color: '#94A3B8' }}> · {data.total.toLocaleString()} orders across {statuses.length} statuses · right now</span> : ''}
           </p>
         </div>
-        <button onClick={() => refetch()} style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE }}>
-          <RefreshCw size={14} style={{ animation: isFetching ? 'spin 1s linear infinite' : 'none' }} /> Refresh
+        <button onClick={refresh} disabled={syncing} title="Pull the latest order statuses from Helm" style={{ display: 'flex', alignItems: 'center', gap: 7, border: '1px solid #E2E8F0', background: '#fff', cursor: syncing ? 'default' : 'pointer', borderRadius: 9, padding: '8px 13px', fontSize: 12.5, fontWeight: 600, color: TITLE, opacity: syncing ? 0.7 : 1 }}>
+          <RefreshCw size={14} style={{ animation: (isFetching || syncing) ? 'spin 1s linear infinite' : 'none' }} /> {syncing ? 'Refreshing from Helm…' : 'Refresh'}
         </button>
       </div>
 
