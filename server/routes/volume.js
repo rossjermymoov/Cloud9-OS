@@ -18,6 +18,10 @@ const router = express.Router();
 // "dashboard" flag), so we build the board straight from the synced orders: an
 // order's status_id is its current state, so this is a pure right-now snapshot.
 // helm_order_statuses is joined only for a colour/name override when available.
+// Status names to keep off the board entirely (in addition to terminal ids).
+const HIDDEN_STATUS_NAMES = new Set(['returned', 'partially returned', 'homeware hold']);
+const keepStatus = (r) => r.name && !HIDDEN_STATUS_NAMES.has(String(r.name).trim().toLowerCase());
+
 router.get('/status-board', async (_req, res, next) => {
   try {
     // Prefer the live snapshot pulled straight from Helm by status (authoritative,
@@ -36,7 +40,8 @@ router.get('/status-board', async (_req, res, next) => {
     `).catch(() => ({ rows: [] }));
 
     if (snap.rows.length) {
-      return res.json({ statuses: snap.rows, total: snap.rows.reduce((a, r) => a + r.count, 0), source: 'live', updated_at: snap.rows[0]?.updated_at || null });
+      const shown = snap.rows.filter(keepStatus);
+      return res.json({ statuses: shown, total: shown.reduce((a, r) => a + r.count, 0), source: 'live', updated_at: snap.rows[0]?.updated_at || null });
     }
 
     const { rows } = await query(`
@@ -50,7 +55,8 @@ router.get('/status-board', async (_req, res, next) => {
       GROUP BY o.status_id
       ORDER BY count DESC, name
     `);
-    res.json({ statuses: rows, total: rows.reduce((a, r) => a + r.count, 0), source: 'synced' });
+    const shown = rows.filter(keepStatus);
+    res.json({ statuses: shown, total: shown.reduce((a, r) => a + r.count, 0), source: 'synced' });
   } catch (err) { next(err); }
 });
 

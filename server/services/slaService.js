@@ -215,6 +215,8 @@ const TERMINAL_STATUSES = [5, 6, 26, 81];
 // Known open pipeline statuses, so we still query a status even when it has no
 // local rows yet. Unioned with whatever else we've seen.
 const KNOWN_OPEN_STATUSES = [1, 2, 3, 4, 8, 10, 82, 2700, 2711, 2800, 2990, 3002, 3010, 3015, 3019];
+// Never show these on the board (matched by name, since ids vary/unknown).
+const HIDDEN_STATUS_NAMES = new Set(['returned', 'partially returned', 'homeware hold']);
 
 /**
  * Rebuild the Status Board snapshot by asking Helm directly for EVERY order in
@@ -252,6 +254,7 @@ export async function syncStatusBoard() {
       if (sid == null || term.has(sid)) continue;
       const so = (o.status && typeof o.status === 'object') ? o.status : null;
       const name = so ? (so.status || so.name) : (typeof o.status === 'string' ? o.status : o.status_label);
+      if (name && HIDDEN_STATUS_NAMES.has(String(name).trim().toLowerCase())) continue;
       const cur = counts.get(sid) || { count: 0, name: null };
       cur.count++; if (!cur.name && name) cur.name = name;
       counts.set(sid, cur);
