@@ -12,7 +12,7 @@
  */
 
 import { query } from '../db/index.js';
-import { helmConfigured, fetchOrdersForClient, fetchOrdersUpdatedRange } from './helmClient.js';
+import { helmConfigured, fetchOrdersForClient, fetchOrdersUpdatedRange, fetchOrdersByStatus } from './helmClient.js';
 import { pickParcelCount } from './volumeService.js';
 import { holidaySet, isWorkingDay, firstWorkingAfter } from './bankHolidayService.js';
 
@@ -206,6 +206,75 @@ export async function syncOrderStatuses(days = 1) {
   } catch (err) {
     console.warn('[order-status-sync]', err.message);
     return { stored, error: err.message };
+  }
+}
+
+// Terminal / non-actionable statuses that never belong on the board.
+// 5 Despatched, 6 Cancelled, 26 Importing, 81 Partially Shipped.
+const TERMINAL_STATUSES = [5, 6, 26, 81];
+// Known open pipeline statuses, so we still query a status even when it has no
+// local rows yet. Unioned with whatever else we've seen.
+const KNOWN_OPEN_STATUSES = [1, 2, 3, 4, 8, 10, 82, 2700, 2711, 2800, 2990, 3002, 3010, 3015, 3019];
+
+/**
+ * Rebuild the Status Board snapshot by asking Helm directly for EVERY order in
+ * each open status (filters[status][], no date window) and counting them — so the
+ * board matches Helm exactly, including orders that have sat in a status for a
+ * long time and fall outside the incremental sync windows.
+ */
+export async function syncStatusBoard() {
+  if (!helmConfigured()) return { error: 'Helm not configured' };
+  // Which statuses to count: known open ones + anything else we've recorded,
+  // minus terminal states.
+  const seen = await query(`
+    SELECT DISTINCT status_id FROM orders WHERE status_id IS NOT NULL
+    UNION SELECT status_id FROM helm_order_statuses
+  `).catch(() => ({ rows: [] }));
+  const term = new Set(TERMINAL_STATUSES);
+  const statusIds = [...new Set([...KNOWN_OPEN_STATUSES, ...seen.rows.map(r => r.status_id)])]
+    .filter(s => s != null && !term.has(Number(s)));
+
+  let logId = null;
+  try {
+    const lr = await query(
+      `INSERT INTO helm_sync_log (sync_type, status, records, detail) VALUES ('status_board','running',0,$1) RETURNING id`,
+      [`counting ${statusIds.length} statuses at ${new Date().toISOString()}`]
+    ).catch(() => ({ rows: [] }));
+    logId = lr.rows[0]?.id || null;
+  } catch { /* logging is best-effort */ }
+
+  try {
+    const orders = await fetchOrdersByStatus(statusIds);
+    const counts = new Map();   // status_id -> { count, name }
+    for (const raw of orders) {
+      const o = raw.order || raw;
+      const sid = o.status_id != null ? parseInt(o.status_id) : null;
+      if (sid == null || term.has(sid)) continue;
+      const so = (o.status && typeof o.status === 'object') ? o.status : null;
+      const name = so ? (so.status || so.name) : (typeof o.status === 'string' ? o.status : o.status_label);
+      const cur = counts.get(sid) || { count: 0, name: null };
+      cur.count++; if (!cur.name && name) cur.name = name;
+      counts.set(sid, cur);
+    }
+
+    await query('DELETE FROM status_board_counts');
+    for (const [sid, v] of counts) {
+      await query(
+        `INSERT INTO status_board_counts (status_id, name, count, updated_at)
+         VALUES ($1,$2,$3,NOW())
+         ON CONFLICT (status_id) DO UPDATE SET name=EXCLUDED.name, count=EXCLUDED.count, updated_at=NOW()`,
+        [sid, v.name || null, v.count]
+      );
+    }
+
+    const total = [...counts.values()].reduce((a, v) => a + v.count, 0);
+    const detail = `${counts.size} statuses, ${total} open orders, ${orders.length} pulled`;
+    if (logId) await query(`UPDATE helm_sync_log SET status='ok', records=$1, detail=$2, ran_at=NOW() WHERE id=$3`, [total, detail, logId]).catch(() => {});
+    return { statuses: counts.size, total };
+  } catch (err) {
+    console.warn('[status-board-sync]', err.message);
+    if (logId) await query(`UPDATE helm_sync_log SET status='error', detail=$1, ran_at=NOW() WHERE id=$2`, [err.message, logId]).catch(() => {});
+    return { error: err.message };
   }
 }
 

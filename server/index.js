@@ -22,7 +22,7 @@ import { voilaConfigured }  from './services/voilaClient.js';
 import pickingRouter        from './routes/picking.js';
 import { syncPicks }        from './services/pickingService.js';
 import slaRouter            from './routes/sla.js';
-import { syncRecentOrders, syncOrderStatuses } from './services/slaService.js';
+import { syncRecentOrders, syncOrderStatuses, syncStatusBoard } from './services/slaService.js';
 import { syncBankHolidays } from './services/bankHolidayService.js';
 import authRouter, { requireAuth } from './routes/auth.js';
 import settingsRouter       from './routes/settings.js';
@@ -133,13 +133,12 @@ async function start() {
     setInterval(() => syncOrderStatuses(1).catch(e => console.warn('[status-sync]', e.message)), 5 * 60 * 1000);
     console.log('🏭 Order-status auto-sync scheduled every 5 minutes');
 
-    // Wide reconcile every 15 min (and once on boot) — the 1-day window above
-    // keeps the board fresh minute-to-minute, but an order that changed status a
-    // while ago can drift out of sync. A 60-day window re-checks the whole open
-    // pipeline so the Status Board always matches Helm's live counts.
-    setTimeout(() => syncOrderStatuses(60).catch(e => console.warn('[status-reconcile]', e.message)), 75 * 1000);
-    setInterval(() => syncOrderStatuses(60).catch(e => console.warn('[status-reconcile]', e.message)), 15 * 60 * 1000);
-    console.log('🔄 Order-status reconcile scheduled every 15 minutes (60-day window)');
+    // Live Status Board: pull EVERY open order from Helm by status and rebuild the
+    // snapshot, so the board matches Helm's counts exactly (no dependence on the
+    // incremental sync windows). Once shortly after boot, then every 15 minutes.
+    setTimeout(() => syncStatusBoard().catch(e => console.warn('[status-board]', e.message)), 75 * 1000);
+    setInterval(() => syncStatusBoard().catch(e => console.warn('[status-board]', e.message)), 15 * 60 * 1000);
+    console.log('🔄 Status Board live pull scheduled every 15 minutes (by status)');
   }
 
   // Clear "pending collection" to 0 every night at 20:00 UK — couriers have been

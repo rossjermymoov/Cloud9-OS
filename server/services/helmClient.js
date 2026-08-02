@@ -225,6 +225,32 @@ export async function fetchOrdersUpdatedRange({ from, to, maxPages = 400 }) {
 }
 
 /**
+ * Fetch ALL orders currently in the given statuses (no date window), so we can
+ * count the live pipeline exactly the way Helm does — e.g. every order sitting in
+ * Despatch Ready, however long it's been there. `statusIds` is a list of Helm
+ * status_ids passed as filters[status][].
+ */
+export async function fetchOrdersByStatus(statusIds, { maxPages = 2000 } = {}) {
+  if (!Array.isArray(statusIds) || statusIds.length === 0) return [];
+  const all = [];
+  let page = 1;
+  for (let i = 0; i < maxPages; i++) {
+    const qs = new URLSearchParams();
+    qs.set('page', String(page));
+    qs.set('limit', '100');
+    qs.set('sort', 'datereceived_rp');
+    for (const s of statusIds) qs.append('filters[status][]', String(s));
+    const res = await authedGet(`/orders?${qs.toString()}`);
+    const rows = res.data || [];
+    all.push(...rows);
+    const lastPage = parseInt(res.last_page) || 1;
+    if (!res.next_page_url || page >= lastPage || rows.length === 0) break;
+    page++;
+  }
+  return all;
+}
+
+/**
  * Aggregate a list of despatched orders into { 'YYYY-MM-DD': {parcels, items, revenue} }.
  * items   = sum of total_inventory_quantity (units shipped)
  * parcels = sum of shipment[].length, defaulting to 1 parcel per order when the

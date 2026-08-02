@@ -20,6 +20,25 @@ const router = express.Router();
 // helm_order_statuses is joined only for a colour/name override when available.
 router.get('/status-board', async (_req, res, next) => {
   try {
+    // Prefer the live snapshot pulled straight from Helm by status (authoritative,
+    // matches Helm's own counts exactly). Fall back to the incrementally-synced
+    // orders table if the snapshot hasn't been built yet.
+    const snap = await query(`
+      SELECT s.status_id,
+             COALESCE(s.name, hs.name, 'Status ' || s.status_id) AS name,
+             hs.colour AS colour,
+             s.count::int AS count,
+             s.updated_at
+      FROM status_board_counts s
+      LEFT JOIN helm_order_statuses hs ON hs.status_id = s.status_id
+      WHERE s.count > 0 AND s.status_id NOT IN (5, 6, 26)
+      ORDER BY s.count DESC, name
+    `).catch(() => ({ rows: [] }));
+
+    if (snap.rows.length) {
+      return res.json({ statuses: snap.rows, total: snap.rows.reduce((a, r) => a + r.count, 0), source: 'live', updated_at: snap.rows[0]?.updated_at || null });
+    }
+
     const { rows } = await query(`
       SELECT o.status_id,
              COALESCE(MAX(hs.name), MAX(o.status_label), 'Status ' || o.status_id) AS name,
@@ -27,12 +46,11 @@ router.get('/status-board', async (_req, res, next) => {
              COUNT(*)::int AS count
       FROM orders o
       LEFT JOIN helm_order_statuses hs ON hs.status_id = o.status_id
-      -- Exclude terminal / non-actionable: 5 Despatched, 6 Cancelled, 26 Importing.
       WHERE o.status_id IS NOT NULL AND o.status_id NOT IN (5, 6, 26)
       GROUP BY o.status_id
       ORDER BY count DESC, name
     `);
-    res.json({ statuses: rows, total: rows.reduce((a, r) => a + r.count, 0) });
+    res.json({ statuses: rows, total: rows.reduce((a, r) => a + r.count, 0), source: 'synced' });
   } catch (err) { next(err); }
 });
 

@@ -14,20 +14,23 @@ import {
 } from '../services/helmClient.js';
 import { normaliseOrder, upsertOrder } from '../services/volumeService.js';
 import { recomputeHealthAll } from '../services/healthService.js';
-import { syncOrderStatuses } from '../services/slaService.js';
+import { syncOrderStatuses, syncStatusBoard } from '../services/slaService.js';
 
 const router = express.Router();
 
-// Reconcile live order statuses from Helm — fixes a stale Status Board where an
-// order changed status a while ago and fell outside the frequent 1-day sync
-// window. Uses a wide window (default 60 days) so anything still open is
-// refreshed. Runs in the background; watch GET /api/helm/sync-log.
-router.post('/sync/statuses', async (req, res, next) => {
+// Rebuild the Status Board by pulling EVERY open order from Helm by status
+// (authoritative — matches Helm's own counts). Also refreshes recent order
+// details so downstream views stay in step. Runs in the background; watch
+// GET /api/helm/sync-log.
+router.post('/sync/statuses', async (_req, res, next) => {
   try {
     if (!helmConfigured()) return res.status(503).json({ error: 'Helm API not configured' });
-    const days = Math.min(Math.max(parseInt(req.query.days) || 60, 1), 365);
-    res.status(202).json({ status: 'started', days, message: `Refreshing order statuses from Helm (last ${days} days) in the background.` });
-    setImmediate(() => syncOrderStatuses(days).catch(e => console.warn('[status-sync-manual]', e.message)));
+    res.status(202).json({ status: 'started', message: 'Pulling all open orders from Helm by status in the background.' });
+    setImmediate(async () => {
+      try { await syncStatusBoard(); } catch (e) { console.warn('[status-board-manual]', e.message); }
+      // Keep the detail table roughly current too (best-effort, non-blocking).
+      syncOrderStatuses(3).catch(() => {});
+    });
   } catch (err) { next(err); }
 });
 

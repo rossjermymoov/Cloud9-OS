@@ -24,9 +24,10 @@ export default function StatusBoardPage() {
   // of times as the background sync writes them.
   async function refresh() {
     setSyncing(true);
-    try { await api.post('/helm/sync/statuses', null, { params: { days: 60 } }); } catch { /* still refetch below */ }
-    setTimeout(() => refetch(), 6000);
-    setTimeout(() => { refetch(); setSyncing(false); }, 16000);
+    try { await api.post('/helm/sync/statuses'); } catch { /* still poll below */ }
+    // The pull runs in the background; poll the counts a few times as it writes.
+    [8000, 16000, 25000, 35000].forEach(ms => setTimeout(() => refetch(), ms));
+    setTimeout(() => setSyncing(false), 36000);
   }
 
   return (
