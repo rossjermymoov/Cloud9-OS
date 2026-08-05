@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardCheck, Search, Play, RefreshCw } from 'lucide-react';
+import { ClipboardCheck, Search, Play, RefreshCw, Star } from 'lucide-react';
 import { listCustomers } from '../../api/customers';
 import { inventoryFields, startInventoryValidation, getInventoryValidation } from '../../api/inventory';
 
@@ -15,6 +15,8 @@ export default function InventoryValidator() {
   const [customerId, setCustomerId] = useState('');
   const [selected, setSelected] = useState([]);          // field paths
   const [search, setSearch] = useState('');
+  const [favs, setFavs] = useState(() => { try { return JSON.parse(localStorage.getItem('c9_inv_fav_fields') || '[]'); } catch { return []; } });
+  const [hideDetail, setHideDetail] = useState(() => localStorage.getItem('c9_inv_hide_detail') === '1');
   const [runId, setRunId] = useState(null);
   const [starting, setStarting] = useState(false);
   const [err, setErr] = useState(null);
@@ -38,12 +40,26 @@ export default function InventoryValidator() {
     refetchInterval: (q) => (q.state.data?.status === 'running' ? 2500 : false),
   });
 
+  const isFav = (p) => favs.includes(p);
   const shownFields = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? fields.filter(f => f.path.toLowerCase().includes(q) || (f.label || '').toLowerCase().includes(q)) : fields;
-  }, [fields, search]);
+    const arr = fields.filter(f => {
+      if (q && !(f.path.toLowerCase().includes(q) || (f.label || '').toLowerCase().includes(q))) return false;
+      // Hide detail-level fields when asked — but never hide a pinned favourite.
+      if (hideDetail && f.source === 'detail' && !favs.includes(f.path)) return false;
+      return true;
+    });
+    // Favourites float to the top, keeping their existing order otherwise.
+    return arr.slice().sort((a, b) => (favs.includes(b.path) ? 1 : 0) - (favs.includes(a.path) ? 1 : 0));
+  }, [fields, search, hideDetail, favs]);
 
   const toggleField = (p) => setSelected(s => s.includes(p) ? s.filter(x => x !== p) : [...s, p]);
+  const toggleFav = (p) => setFavs(prev => {
+    const next = prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p];
+    localStorage.setItem('c9_inv_fav_fields', JSON.stringify(next));
+    return next;
+  });
+  const setHide = (v) => { setHideDetail(v); localStorage.setItem('c9_inv_hide_detail', v ? '1' : '0'); };
 
   async function interrogate() {
     setErr(null); setStarting(true); setRunId(null);
@@ -109,27 +125,38 @@ export default function InventoryValidator() {
             : fields.length === 0 ? <div style={{ color: MUTED, fontSize: 13 }}>No inventory found to sample.</div>
             : (
               <>
-                <div style={{ position: 'relative', marginBottom: 10 }}>
+                <div style={{ position: 'relative', marginBottom: 8 }}>
                   <Search size={14} style={{ position: 'absolute', left: 10, top: 9, color: '#94A3B8' }} />
                   <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter fields…"
                     style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #E2E8F0', borderRadius: 8, padding: '7px 10px 7px 30px', fontSize: 12.5, fontFamily: 'inherit' }} />
                 </div>
+                {fields.some(f => f.source === 'detail') && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8, fontSize: 12, color: MUTED, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={hideDetail} onChange={e => setHide(e.target.checked)} />
+                    Hide detail fields <span style={{ color: '#94A3B8' }}>(pinned ones stay)</span>
+                  </label>
+                )}
                 <div style={{ maxHeight: 460, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
                   {shownFields.map(f => (
-                    <label key={f.path} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '7px 8px', borderRadius: 7, cursor: 'pointer', background: selected.includes(f.path) ? '#F5F8FF' : 'transparent' }}>
-                      <input type="checkbox" checked={selected.includes(f.path)} onChange={() => toggleField(f.path)} style={{ marginTop: 2 }} />
-                      <span style={{ flex: 1, minWidth: 0 }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: 12.5, fontWeight: 600, color: TITLE }}>{f.label}</span>
-                          {f.source === 'detail' && <span style={{ fontSize: 9.5, fontWeight: 700, color: '#7C3AED', background: '#F3E8FF', borderRadius: 5, padding: '1px 5px' }}>DETAIL</span>}
+                    <div key={f.path} style={{ display: 'flex', alignItems: 'flex-start', gap: 4, padding: '7px 8px', borderRadius: 7, background: selected.includes(f.path) ? '#F5F8FF' : 'transparent' }}>
+                      <button onClick={() => toggleFav(f.path)} title={isFav(f.path) ? 'Unpin' : 'Pin to top'} style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: '1px 2px', marginTop: 1, lineHeight: 0, flexShrink: 0 }}>
+                        <Star size={14} fill={isFav(f.path) ? '#F59E0B' : 'none'} color={isFav(f.path) ? '#F59E0B' : '#CBD5E1'} />
+                      </button>
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={selected.includes(f.path)} onChange={() => toggleField(f.path)} style={{ marginTop: 2 }} />
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span style={{ fontSize: 12.5, fontWeight: 600, color: TITLE }}>{f.label}</span>
+                            {f.source === 'detail' && <span style={{ fontSize: 9.5, fontWeight: 700, color: '#7C3AED', background: '#F3E8FF', borderRadius: 5, padding: '1px 5px' }}>DETAIL</span>}
+                          </span>
+                          <span style={{ display: 'block', fontSize: 11, color: '#94A3B8', fontFamily: 'ui-monospace, monospace' }}>{f.path}</span>
+                          {f.sampleValue != null && <span style={{ display: 'block', fontSize: 11, color: MUTED }}>e.g. {f.sampleValue}</span>}
                         </span>
-                        <span style={{ display: 'block', fontSize: 11, color: '#94A3B8', fontFamily: 'ui-monospace, monospace' }}>{f.path}</span>
-                        {f.sampleValue != null && <span style={{ display: 'block', fontSize: 11, color: MUTED }}>e.g. {f.sampleValue}</span>}
-                      </span>
-                    </label>
+                      </label>
+                    </div>
                   ))}
                 </div>
-                {fields.some(f => f.source === 'detail') && (
+                {fields.some(f => f.source === 'detail') && !hideDetail && (
                   <div style={{ marginTop: 10, fontSize: 11, color: '#94A3B8' }}>DETAIL fields need an extra API call per item — slower on big catalogues.</div>
                 )}
               </>
