@@ -29,6 +29,7 @@ import settingsRouter       from './routes/settings.js';
 import xeroRouter           from './routes/xero.js';
 import warehouseRouter      from './routes/warehouse.js';
 import storageRouter        from './routes/storage.js';
+import inventoryRouter      from './routes/inventory.js';
 import { syncStorage }       from './services/storageService.js';
 import queriesRouter        from './routes/queries.js';
 import emailRouter          from './routes/email.js';
@@ -69,6 +70,7 @@ app.use('/api/returns',         requireAuth, returnsRouter);
 app.use('/api/voila',           requireAuth, voilaRouter);
 app.use('/api/picking',         requireAuth, pickingRouter);
 app.use('/api/storage',         requireAuth, storageRouter);
+app.use('/api/inventory',       requireAuth, inventoryRouter);
 app.use('/api/sla',             requireAuth, slaRouter);
 
 // Queries & Claims module (ported from Moov OS). slaRules mounts at /api/sla-rules

@@ -16,6 +16,7 @@ import QueriesPage from './pages/queries/QueriesPage';
 import WarehouseBoard from './pages/warehouse/WarehouseBoard';
 import StatusBoardPage from './pages/statusBoard/StatusBoardPage';
 import StatisticsPage from './pages/statistics/StatisticsPage';
+import InventoryValidator from './pages/inventory/InventoryValidator';
 import SettingsPage from './pages/settings/SettingsPage';
 import { LoginScreen, SetupScreen, AuthLoading } from './pages/auth/AuthScreens';
 import Placeholder from './pages/Placeholder';
@@ -49,6 +50,7 @@ function GatedApp() {
         <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
         <Route path="picking"         element={<PickingPage />} />
         <Route path="storage"         element={<StoragePage />} />
+        <Route path="inventory-validator" element={<InventoryValidator />} />
         <Route path="on-time"         element={<OnTimePage />} />
         <Route path="returns"         element={<ReturnsPage />} />
         <Route path="notifications"   element={<NotificationCenter />} />
