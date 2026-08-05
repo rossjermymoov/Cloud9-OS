@@ -24,14 +24,20 @@ export default function InventoryValidator() {
   const { data: custData } = useQuery({ queryKey: ['customers-list-inv'], queryFn: () => listCustomers({ limit: 500, sort: 'business_name', order: 'asc' }) });
   const customers = Array.isArray(custData) ? custData : (custData?.data || custData?.rows || custData?.customers || []);
 
-  // Discover the live fields. For "all" we sample the first customer's inventory.
-  const fieldsKey = scope === 'customer' ? customerId : 'all';
-  const { data: fieldsData, isLoading: fieldsLoading, error: fieldsErr } = useQuery({
-    queryKey: ['inv-fields', fieldsKey],
-    queryFn: () => inventoryFields(scope === 'customer' ? customerId : null),
-    enabled: scope === 'all' || !!customerId,
+  // The field schema is the same for every customer and rarely changes, so we
+  // fetch the cached list once and reuse it — no Helm call when switching
+  // customers. "Rediscover" forces a fresh pull.
+  const { data: fieldsData, isLoading: fieldsLoading, error: fieldsErr, refetch: refetchFields } = useQuery({
+    queryKey: ['inv-fields'],
+    queryFn: () => inventoryFields(),
+    staleTime: Infinity,
   });
   const fields = fieldsData?.fields || [];
+  const [rediscovering, setRediscovering] = useState(false);
+  async function rediscover() {
+    setRediscovering(true);
+    try { await inventoryFields(true); await refetchFields(); } catch { /* keep old list */ } finally { setRediscovering(false); }
+  }
 
   const { data: run } = useQuery({
     queryKey: ['inv-run', runId],
@@ -119,10 +125,15 @@ export default function InventoryValidator() {
             )}
           </div>
 
-          {(scope === 'all' || customerId) ? (
-            fieldsLoading ? <div style={{ color: MUTED, fontSize: 13, padding: '20px 0' }}>Discovering fields from Helm…</div>
+          {(
+            fieldsLoading ? <div style={{ color: MUTED, fontSize: 13, padding: '20px 0' }}>Loading fields…</div>
             : fieldsErr ? <div style={{ color: RED, fontSize: 12.5 }}>{fieldsErr?.response?.data?.error || 'Could not load fields.'}</div>
-            : fields.length === 0 ? <div style={{ color: MUTED, fontSize: 13 }}>No inventory found to sample.</div>
+            : fields.length === 0 ? (
+              <div style={{ color: MUTED, fontSize: 13, padding: '8px 0' }}>
+                No field list cached yet.
+                <button onClick={rediscover} disabled={rediscovering} style={{ marginLeft: 8, border: '1px solid #E2E8F0', background: '#fff', borderRadius: 8, padding: '5px 10px', fontSize: 12, fontWeight: 600, color: ACCENT, cursor: 'pointer' }}>{rediscovering ? 'Discovering…' : 'Discover from Helm'}</button>
+              </div>
+            )
             : (
               <>
                 <div style={{ position: 'relative', marginBottom: 8 }}>
@@ -159,10 +170,14 @@ export default function InventoryValidator() {
                 {fields.some(f => f.source === 'detail') && !hideDetail && (
                   <div style={{ marginTop: 10, fontSize: 11, color: '#94A3B8' }}>DETAIL fields need an extra API call per item — slower on big catalogues.</div>
                 )}
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 10.5, color: '#94A3B8' }}>Cached list{fieldsData?.generated_at ? ` · ${new Date(fieldsData.generated_at).toLocaleDateString('en-GB')}` : ''}</span>
+                  <button onClick={rediscover} disabled={rediscovering} title="Re-pull the field list from Helm" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid #E2E8F0', background: '#fff', borderRadius: 8, padding: '4px 9px', fontSize: 11, fontWeight: 600, color: MUTED, cursor: rediscovering ? 'default' : 'pointer' }}>
+                    <RefreshCw size={11} style={{ animation: rediscovering ? 'spin 1s linear infinite' : 'none' }} /> {rediscovering ? 'Rediscovering…' : 'Rediscover'}
+                  </button>
+                </div>
               </>
             )
-          ) : (
-            <div style={{ color: MUTED, fontSize: 13, padding: '20px 0' }}>Pick a customer to see the available fields.</div>
           )}
         </div>
 

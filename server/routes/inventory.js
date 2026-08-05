@@ -14,8 +14,10 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured, fetchInventoryForClient, fetchInventoryDetail } from '../services/helmClient.js';
+import { getSetting, setSetting } from '../services/appSettings.js';
 
 const router = express.Router();
+const FIELDS_CACHE_KEY = 'inventory_fields';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── field helpers ────────────────────────────────────────────────────────────
@@ -59,6 +61,15 @@ async function resolveHelmId(customerId) {
 // ── field discovery ──────────────────────────────────────────────────────────
 router.get('/fields', async (req, res, next) => {
   try {
+    const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    // The field schema doesn't change, so serve the cached list unless a refresh
+    // is explicitly requested — no Helm call on a normal page load.
+    if (!refresh) {
+      const cached = await getSetting(FIELDS_CACHE_KEY, null);
+      if (cached && Array.isArray(cached.fields) && cached.fields.length) {
+        return res.json({ ...cached, cached: true });
+      }
+    }
     if (!helmConfigured()) return res.status(503).json({ error: 'Helm API not configured' });
     const helmId = await resolveHelmId(req.query.customer_id);
     if (!helmId) return res.status(409).json({ error: 'No customer with a Helm id found — sync customers first.' });
@@ -85,7 +96,9 @@ router.get('/fields', async (req, res, next) => {
     }
     const out = [...fields.values()].sort((a, b) =>
       a.source === b.source ? a.path.localeCompare(b.path) : (a.source === 'list' ? -1 : 1));
-    res.json({ helm_client_id: helmId, sampled: sample.length, fields: out });
+    const payload = { sampled: sample.length, generated_at: new Date().toISOString(), fields: out };
+    await setSetting(FIELDS_CACHE_KEY, payload).catch(() => {});
+    res.json({ ...payload, cached: false });
   } catch (err) { next(err); }
 });
 
