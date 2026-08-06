@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ClipboardCheck, Search, Play, RefreshCw, Star } from 'lucide-react';
 import { listCustomers } from '../../api/customers';
 import { inventoryFields, startInventoryValidation, getInventoryValidation } from '../../api/inventory';
+import SearchableSelect from '../../components/SearchableSelect';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
 const GREEN = '#16A34A', RED = '#DC2626', AMBER = '#D97706';
@@ -32,7 +33,9 @@ export default function InventoryValidator() {
     queryFn: () => inventoryFields(),
     staleTime: Infinity,
   });
-  const fields = fieldsData?.fields || [];
+  // Detail-level fields are hidden from the picker (per request) — the list-level
+  // fields cover what's needed and avoid the per-item detail call.
+  const fields = (fieldsData?.fields || []).filter(f => f.source !== 'detail');
   const [rediscovering, setRediscovering] = useState(false);
   async function rediscover() {
     setRediscovering(true);
@@ -95,11 +98,13 @@ export default function InventoryValidator() {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           <Seg value={scope} onChange={(v) => { setScope(v); setRunId(null); }} options={[{ v: 'customer', l: 'One customer' }, { v: 'all', l: 'All customers' }]} />
           {scope === 'customer' && (
-            <select value={customerId} onChange={e => { setCustomerId(e.target.value); setRunId(null); }}
-              style={{ border: '1px solid #E2E8F0', borderRadius: 9, padding: '8px 12px', fontSize: 13, fontWeight: 600, color: TITLE, fontFamily: 'inherit', minWidth: 220, background: '#fff' }}>
-              <option value="">Select a customer…</option>
-              {customers.map(c => <option key={c.id} value={c.id}>{c.business_name}</option>)}
-            </select>
+            <SearchableSelect
+              value={customerId}
+              onChange={(v) => { setCustomerId(v); setRunId(null); }}
+              options={customers.map(c => ({ value: c.id, label: c.business_name }))}
+              placeholder="Select a customer…"
+              minWidth={220}
+            />
           )}
           <div style={{ flex: 1 }} />
           <button onClick={interrogate} disabled={!canRun} style={{

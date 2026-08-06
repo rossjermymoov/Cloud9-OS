@@ -391,6 +391,7 @@ export default function Dashboard() {
     try { return JSON.parse(localStorage.getItem('c9_excluded_customers') || '[]'); } catch { return []; }
   });
   const [showExclude, setShowExclude] = useState(false);
+  const [exclSearch, setExclSearch] = useState('');
   const [showUnattr, setShowUnattr] = useState(false);
   const toggleExcluded = (id) => setExcluded(prev => {
     const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id];
@@ -477,7 +478,9 @@ export default function Dashboard() {
                     <span style={{ fontSize: 12, fontWeight: 700, color: TITLE }}>Exclude from stats</span>
                     {excluded.length > 0 && <span onClick={() => { setExcluded([]); localStorage.setItem('c9_excluded_customers', '[]'); }} style={{ fontSize: 11.5, color: ACCENT, cursor: 'pointer', fontWeight: 600 }}>Clear all</span>}
                   </div>
-                  {custList.map(c => (
+                  <input autoFocus value={exclSearch} onChange={e => setExclSearch(e.target.value)} placeholder="Search customers…"
+                    style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #E2E8F0', borderRadius: 7, padding: '6px 9px', fontSize: 12, fontFamily: 'inherit', margin: '0 0 6px', outline: 'none' }} />
+                  {custList.filter(c => !exclSearch.trim() || String(c.business_name || '').toLowerCase().includes(exclSearch.trim().toLowerCase())).map(c => (
                     <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }}>
                       <input type="checkbox" checked={excluded.includes(c.id)} onChange={() => toggleExcluded(c.id)} />
                       <span style={{ color: TITLE }}>{c.business_name}</span>

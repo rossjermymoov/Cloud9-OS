@@ -16,6 +16,7 @@ import axios from 'axios';
 import { startOfDay, endOfDay, startOfMonth, subDays, format } from 'date-fns';
 import { getCourierLogo } from '../../utils/courierLogos';
 import { getAuthToken } from '../../context/AuthContext';
+import SearchableSelect from '../../components/SearchableSelect';
 
 const api = axios.create({ baseURL: '/api' });
 // Attach the login token — tracking endpoints now require auth.
@@ -925,15 +926,14 @@ export default function TrackingPage() {
 
         {/* Customer — only shows customers who have parcels */}
         {customers.length > 0 && (
-          <div style={{ position: 'relative' }}>
-            <select value={customerFilter} onChange={e => setCustomerFilter(e.target.value)} style={{ ...darkSelect, minWidth: 170 }}>
-              <option value="">All customers</option>
-              {customers.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-            <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: '#64748B', pointerEvents: 'none', fontSize: 10 }}>▾</span>
-          </div>
+          <SearchableSelect
+            value={customerFilter}
+            onChange={setCustomerFilter}
+            options={customers.map(c => ({ value: c.id, label: c.name }))}
+            allLabel="All customers"
+            dark
+            minWidth={170}
+          />
         )}
 
         {/* Status — only shows statuses that exist in the table */}

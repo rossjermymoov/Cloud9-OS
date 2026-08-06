@@ -23,8 +23,10 @@ export function useExcludedCustomers() {
 
 export default function CustomerExcludeFilter({ excluded, toggle, clear }) {
   const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
   const { data } = useQuery({ queryKey: ['customers-list-excl'], queryFn: () => listCustomers({ limit: 500, sort: 'business_name', order: 'asc' }) });
-  const list = Array.isArray(data) ? data : (data?.data || data?.rows || data?.customers || []);
+  const all = Array.isArray(data) ? data : (data?.data || data?.rows || data?.customers || []);
+  const list = q.trim() ? all.filter(c => String(c.business_name || '').toLowerCase().includes(q.trim().toLowerCase())) : all;
 
   return (
     <div style={{ position: 'relative' }}>
@@ -42,6 +44,8 @@ export default function CustomerExcludeFilter({ excluded, toggle, clear }) {
               <span style={{ fontSize: 12, fontWeight: 700, color: TITLE }}>Exclude from stats</span>
               {excluded.length > 0 && <span onClick={clear} style={{ fontSize: 11.5, color: ACCENT, cursor: 'pointer', fontWeight: 600 }}>Clear all</span>}
             </div>
+            <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Search customers…"
+              style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #E2E8F0', borderRadius: 7, padding: '6px 9px', fontSize: 12, fontFamily: 'inherit', margin: '0 0 6px', outline: 'none' }} />
             {list.map(c => (
               <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', fontSize: 12.5, cursor: 'pointer', borderRadius: 6 }}>
                 <input type="checkbox" checked={excluded.includes(c.id)} onChange={() => toggle(c.id)} />
