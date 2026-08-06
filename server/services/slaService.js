@@ -295,7 +295,14 @@ export async function evaluateOrders({ fromYmd, toYmd, customerId = null }) {
   // Neither should ever count as a breach even if it sits past its due date.
   let where = `o.received_at IS NOT NULL AND o.received_at >= $1 AND o.received_at <= $2
                AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')
-               AND (o.status_id IS NULL OR o.status_id NOT IN (1, 3019))`;
+               AND (o.status_id IS NULL OR o.status_id NOT IN (1, 3019))
+               -- If a customer has ANY order sitting in "On Stop", they're on stop
+               -- (credit/account hold), so none of their orders count towards
+               -- on-time dispatch — we're deliberately not shipping them.
+               AND NOT EXISTS (
+                 SELECT 1 FROM orders os
+                 WHERE os.customer_id = o.customer_id AND os.status_label ILIKE '%on stop%'
+               )`;
   if (customerId) { vals.push(customerId); where += ` AND o.customer_id = $${vals.length}`; }
 
   const { rows } = await query(`
