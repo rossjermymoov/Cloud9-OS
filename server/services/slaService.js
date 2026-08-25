@@ -18,26 +18,38 @@ import { holidaySet, isWorkingDay, firstWorkingAfter } from './bankHolidayServic
 
 function cleanDate(d) { if (!d) return null; const s = String(d); return s.startsWith('0000') ? null : s; }
 
+// London calendar day (YYYY-MM-DD) + minutes-since-midnight for a true instant.
+function londonParts(date) {
+  const p = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  const g = (t) => p.find(x => x.type === t)?.value;
+  return { ymd: `${g('year')}-${g('month')}-${g('day')}`, minutes: parseInt(g('hour'), 10) * 60 + parseInt(g('minute'), 10) };
+}
+
 /**
- * Wall-clock calendar day + minutes-since-midnight for a Helm timestamp.
- * Helm sends LONDON local wall-clock (e.g. '2026-06-16 13:38:19') with no zone.
- * Those land in TIMESTAMPTZ as that wall-clock stored against UTC, so we read
- * the components back as-is (string → parse directly; Date → UTC getters) and
- * do NOT re-convert through a timezone (which previously shifted by the BST
- * offset and pushed pre-cutoff orders over the line).
+ * Wall-clock London calendar day + minutes-since-midnight for a Helm timestamp.
+ * Helm timestamps are real instants (UTC), so an order taken at 14:30 during BST
+ * is 13:30 UTC. The cutoff is a London wall-clock time (e.g. 14:00), so we must
+ * read the received time in London too — otherwise a 14:30 order reads as 13:30
+ * and is wrongly treated as before the 2pm cutoff. TIMESTAMPTZ columns come back
+ * as Date instants; only a bare string with no zone is taken as literal wall-clock.
  */
 function wallClock(input) {
   if (input == null) return null;
-  if (input instanceof Date) {
-    if (isNaN(input.getTime())) return null;
-    return { ymd: input.toISOString().slice(0, 10), minutes: input.getUTCHours() * 60 + input.getUTCMinutes() };
-  }
+  if (input instanceof Date) return isNaN(input.getTime()) ? null : londonParts(input);
   const s = String(input).trim();
+  // Carries a zone (…Z or ±hh:mm) → a real instant → convert to London.
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) {
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? null : londonParts(d);
+  }
+  // Bare 'YYYY-MM-DD HH:MM' with no zone → take the written time as-is.
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
   if (m) return { ymd: `${m[1]}-${m[2]}-${m[3]}`, minutes: parseInt(m[4], 10) * 60 + parseInt(m[5], 10) };
   const d = new Date(s);
-  if (isNaN(d.getTime())) return null;
-  return { ymd: d.toISOString().slice(0, 10), minutes: d.getUTCHours() * 60 + d.getUTCMinutes() };
+  return isNaN(d.getTime()) ? null : londonParts(d);
 }
 
 // Current London calendar date (now() is a true instant, so this is a real convert).
