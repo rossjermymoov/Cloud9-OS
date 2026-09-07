@@ -45,13 +45,23 @@ export function buildPickupRequest(p) {
   const readyStr = String(p.readyTime || '10:00').replace(/[^0-9]/g, '').padEnd(4, '0').slice(0, 4);
   const closeStr = String(p.closeTime || '17:00').replace(/[^0-9]/g, '').padEnd(4, '0').slice(0, 4);
 
-  // Ensure AddressLine is an array of non-empty strings (max 35 chars per line per UPS spec)
-  let addrLines = [p.addressLine1 || p.addressLine || p.address, p.addressLine2]
-    .map(S)
-    .map(s => s.replace(/[,;.]/g, ' ').replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
-  if (!addrLines.length) {
-    addrLines = ['Units 3-5 Kettlebridge Road', 'Parkway Link'];
+  // Format address line(s)
+  // In UPS PickupCreation API v1 REST, AddressLine is expected as a single string (or array of max 3 lines, up to 35 chars each).
+  // Passing a single clean string AddressLine (or joining if line2 exists, up to 35 chars) works most reliably across UPS regions.
+  let line1 = S(p.addressLine1 || p.addressLine || p.address || 'Units 3-5 Kettlebridge Road')
+    .replace(/[,;]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 35);
+  let line2 = S(p.addressLine2 || '')
+    .replace(/[,;]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 35);
+
+  let addressLineValue = line1;
+  if (line2) {
+    addressLineValue = [line1, line2].filter(Boolean);
   }
 
   let phone = String(p.phone || '').replace(/[^0-9+]/g, '');
@@ -95,16 +105,16 @@ export function buildPickupRequest(p) {
       PickupAddress: {
         CompanyName: S(p.companyName || 'Cloud9 Fulfillment').trim().slice(0, 35),
         ContactName: S(p.contactName || 'Joshua Hegarty').trim().slice(0, 35),
-        AddressLine: addrLines.map(l => l.slice(0, 35)),
+        AddressLine: addressLineValue,
         City: S(p.city || 'Sheffield').trim().slice(0, 30),
-        PostalCode: S(p.postalCode || p.postcode || 'S9 3AJ').trim().slice(0, 10),
+        PostalCode: S(p.postalCode || p.postcode || 'S9 3AJ').trim().replace(/\s+/g, ' ').slice(0, 10),
         CountryCode: originCountry || 'GB',
         ResidentialIndicator: p.residential ? 'Y' : 'N',
         Phone: {
           Number: phone.slice(0, 15),
         },
       },
-      AlternateAddressIndicator: originCountry !== 'GB' ? 'Y' : 'N',
+      AlternateAddressIndicator: 'Y',
       PickupPiece: [
         {
           ServiceCode: serviceCode,
