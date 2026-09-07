@@ -86,7 +86,7 @@ export default function CollectionsPage() {
     queryKey: ['collections-list'],
     queryFn: () => listCollections({ limit: 50 }),
   });
-  const collections = data?.collections || [];
+  const collections = (data?.collections || []).filter(c => c.status !== 'failed' && c.prn);
 
   // Book collection mutation
   const bookMutation = useMutation({

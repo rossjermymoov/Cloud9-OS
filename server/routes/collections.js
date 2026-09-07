@@ -13,12 +13,12 @@ import { createPickup, cancelPickup } from '../services/upsClient.js';
 
 const router = express.Router();
 
-// GET /api/collections — list recent collections
+// GET /api/collections — list recent collections (excluding failed attempts)
 router.get('/', async (req, res, next) => {
   try {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
     const { rows } = await query(
-      `SELECT * FROM collections ORDER BY created_at DESC LIMIT $1`,
+      `SELECT * FROM collections WHERE status != 'failed' AND prn IS NOT NULL ORDER BY created_at DESC LIMIT $1`,
       [limit]
     );
     res.json({ collections: rows });
@@ -44,6 +44,16 @@ router.post('/', async (req, res, next) => {
 
     const r = await createPickup(payload);
 
+    if (!r.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: r.error,
+        status: r.status,
+        raw: r.raw,
+        request: r.request,
+      });
+    }
+
     let saved = null;
     try {
       const fullAddress = addr + (payload.addressLine2 ? ', ' + payload.addressLine2 : '');
@@ -56,15 +66,15 @@ router.post('/', async (req, res, next) => {
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
         RETURNING id, prn, created_at, status`,
         [
-          r.prn || null,
-          r.ok ? 'booked' : 'failed',
-          payload.companyName || payload.company || payload.contactName || null,
-          payload.contactName || payload.companyName || null,
-          payload.phone || null,
-          payload.email || null,
+          r.prn,
+          'booked',
+          payload.companyName || payload.company || payload.contactName || 'Cloud9 Fulfillment',
+          payload.contactName || payload.companyName || 'Joshua Hegarty',
+          payload.phone || '0114 551 138',
+          payload.email || 'service@cloud9fulfillment.co.uk',
           fullAddress || null,
-          payload.city || null,
-          pc || null,
+          payload.city || 'Sheffield',
+          pc || 'S9 3AJ',
           payload.country || 'GB',
           payload.pickupDate || null,
           payload.readyTime || null,
@@ -81,17 +91,6 @@ router.post('/', async (req, res, next) => {
       saved = rows[0];
     } catch (dbErr) {
       console.error('[collections db]', dbErr.message);
-    }
-
-    if (!r.ok) {
-      return res.status(400).json({
-        ok: false,
-        error: r.error,
-        status: r.status,
-        raw: r.raw,
-        request: r.request,
-        savedId: saved ? saved.id : null,
-      });
     }
 
     res.json({
