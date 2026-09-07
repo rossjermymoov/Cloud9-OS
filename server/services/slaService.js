@@ -29,27 +29,24 @@ function londonParts(date) {
 }
 
 /**
- * Wall-clock London calendar day + minutes-since-midnight for a Helm timestamp.
- * Helm timestamps are real instants (UTC), so an order taken at 14:30 during BST
- * is 13:30 UTC. The cutoff is a London wall-clock time (e.g. 14:00), so we must
- * read the received time in London too — otherwise a 14:30 order reads as 13:30
- * and is wrongly treated as before the 2pm cutoff. TIMESTAMPTZ columns come back
- * as Date instants; only a bare string with no zone is taken as literal wall-clock.
+ * Wall-clock London calendar day + minutes-since-midnight for an order timestamp.
+ * Helm timestamps and DB TIMESTAMPTZ values are real instants (UTC), so an order taken
+ * at 14:30 during BST is 13:30 UTC. The customer cutoff is a London wall-clock time
+ * (default 14:00 Europe/London), so received and dispatched times are always converted
+ * into Europe/London calendar day and minutes.
  */
 function wallClock(input) {
   if (input == null) return null;
   if (input instanceof Date) return isNaN(input.getTime()) ? null : londonParts(input);
   const s = String(input).trim();
-  // Carries a zone (…Z or ±hh:mm) → a real instant → convert to London.
-  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s)) {
-    const d = new Date(s);
-    return isNaN(d.getTime()) ? null : londonParts(d);
-  }
-  // Bare 'YYYY-MM-DD HH:MM' with no zone → take the written time as-is.
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
-  if (m) return { ymd: `${m[1]}-${m[2]}-${m[3]}`, minutes: parseInt(m[4], 10) * 60 + parseInt(m[5], 10) };
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : londonParts(d);
+  if (!s) return null;
+  // If string has no timezone indicator (e.g. '2026-08-25 13:30:00' or '2026-08-25T13:30:00'),
+  // treat as UTC instant since Helm API / DB timestamps are UTC.
+  const iso = s.includes('T') ? (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s}Z`) : `${s.replace(' ', 'T')}Z`;
+  const d = new Date(iso);
+  if (!isNaN(d.getTime())) return londonParts(d);
+  const fallback = new Date(s);
+  return isNaN(fallback.getTime()) ? null : londonParts(fallback);
 }
 
 // Current London calendar date (now() is a true instant, so this is a real convert).

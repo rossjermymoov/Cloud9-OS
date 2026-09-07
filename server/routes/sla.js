@@ -12,28 +12,26 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured } from '../services/helmClient.js';
-import { evaluateOrders, syncRecentOrders } from '../services/slaService.js';
-import { holidaySet, lastWorkingBefore } from '../services/bankHolidayService.js';
+import { evaluateOrders, syncRecentOrders, todayLondonYmd } from '../services/slaService.js';
+import { holidaySet, lastWorkingBefore, addDaysStr } from '../services/bankHolidayService.js';
 
 const router = express.Router();
 
 async function rangeFor(periodRaw, dateRaw) {
-  const p = (n) => String(n).padStart(2, '0');
-  const iso = (d) => `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   if (dateRaw && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) return { period: 'custom', from: dateRaw, to: dateRaw };
   const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(periodRaw) ? periodRaw : 'week';
-  const today = new Date();
+  const today = todayLondonYmd();
   // 'yesterday' = the last working day (skips weekends + UK bank holidays).
   if (period === 'yesterday') {
     const hs = await holidaySet().catch(() => new Set());
-    const lw = lastWorkingBefore(iso(today), hs);
+    const lw = lastWorkingBefore(today, hs);
     return { period, from: lw, to: lw };
   }
-  let from = new Date(today), to = new Date(today);
-  if (period === 'week')  from.setDate(today.getDate() - 6);
-  else if (period === 'month') from.setDate(today.getDate() - 29);
-  else if (period === 'quarter') from.setDate(today.getDate() - 89);
-  return { period, from: iso(from), to: iso(to) };
+  let from = today, to = today;
+  if (period === 'week')  from = addDaysStr(today, -6);
+  else if (period === 'month') from = addDaysStr(today, -29);
+  else if (period === 'quarter') from = addDaysStr(today, -89);
+  return { period, from, to };
 }
 
 router.get('/status', (_req, res) => res.json({ configured: helmConfigured() }));

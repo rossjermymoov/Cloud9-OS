@@ -17,6 +17,7 @@ import WarehouseBoard from './pages/warehouse/WarehouseBoard';
 import StatusBoardPage from './pages/statusBoard/StatusBoardPage';
 import StatisticsPage from './pages/statistics/StatisticsPage';
 import InventoryValidator from './pages/inventory/InventoryValidator';
+import CollectionsPage from './pages/collections/CollectionsPage';
 import SettingsPage from './pages/settings/SettingsPage';
 import { LoginScreen, SetupScreen, AuthLoading } from './pages/auth/AuthScreens';
 import Placeholder from './pages/Placeholder';
@@ -47,6 +48,7 @@ function GatedApp() {
           <Route path=":id" element={<CustomerRecord />} />
         </Route>
         <Route path="tracking"        element={<TrackingPage />} />
+        <Route path="collections"     element={<CollectionsPage />} />
         <Route path="purchase-orders" element={<PurchaseOrdersPage />} />
         <Route path="picking"         element={<PickingPage />} />
         <Route path="storage"         element={<StoragePage />} />

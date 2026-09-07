@@ -35,6 +35,7 @@ import queriesRouter        from './routes/queries.js';
 import emailRouter          from './routes/email.js';
 import gmailRouter          from './routes/gmail.js';
 import slaRulesRouter       from './routes/slaRules.js';
+import collectionsRouter    from './routes/collections.js';
 
 dotenv.config();
 
@@ -81,6 +82,7 @@ app.use('/api/gmail',           gmailRouter);   // OAuth start/callback public; 
 app.use('/api/xero',            xeroRouter);    // OAuth connect/callback public; data endpoints guarded per-route
 app.use('/api/settings',        requireAuth, settingsRouter);
 app.use('/api/sla-rules',       requireAuth, slaRulesRouter);
+app.use('/api/collections',     requireAuth, collectionsRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'cloud9-os' }));
 
