@@ -45,8 +45,19 @@ export function buildPickupRequest(p) {
   const readyStr = String(p.readyTime || '10:00').replace(/[^0-9]/g, '').padEnd(4, '0').slice(0, 4);
   const closeStr = String(p.closeTime || '17:00').replace(/[^0-9]/g, '').padEnd(4, '0').slice(0, 4);
 
-  const addrLines = [p.addressLine1 || p.addressLine || p.address, p.addressLine2].map(S).filter(Boolean);
-  if (!addrLines.length) addrLines.push(S(p.address || 'Address'));
+  // Ensure AddressLine is an array of non-empty strings (max 35 chars per line per UPS spec)
+  let addrLines = [p.addressLine1 || p.addressLine || p.address, p.addressLine2]
+    .map(S)
+    .map(s => s.trim())
+    .filter(Boolean);
+  if (!addrLines.length) {
+    addrLines = ['Units 3-5, Kettlebridge Road', 'Parkway Link'];
+  }
+  // If line 1 contains a comma and is long, split across lines if line 2 wasn't provided
+  if (addrLines.length === 1 && addrLines[0].length > 35 && addrLines[0].includes(',')) {
+    const parts = addrLines[0].split(',').map(s => s.trim()).filter(Boolean);
+    addrLines = [parts[0], parts.slice(1).join(', ')].filter(Boolean);
+  }
 
   let phone = String(p.phone || '').replace(/[^0-9+]/g, '');
   if (!phone || phone.length < 7) phone = '0114551138';
@@ -87,15 +98,15 @@ export function buildPickupRequest(p) {
         PickupDate: dateStr,
       },
       PickupAddress: {
-        CompanyName: S(p.companyName || 'Cloud9 Fulfillment'),
-        ContactName: S(p.contactName || 'Joshua Hegarty'),
-        AddressLine: addrLines.length ? addrLines : ['Units 3-5, Kettlebridge Road', 'Parkway Link'],
-        City: S(p.city || 'Sheffield'),
-        PostalCode: S(p.postalCode || p.postcode || 'S9 3AJ'),
+        CompanyName: S(p.companyName || 'Cloud9 Fulfillment').trim().slice(0, 35),
+        ContactName: S(p.contactName || 'Joshua Hegarty').trim().slice(0, 35),
+        AddressLine: addrLines.map(l => l.slice(0, 35)),
+        City: S(p.city || 'Sheffield').trim().slice(0, 30),
+        PostalCode: S(p.postalCode || p.postcode || 'S9 3AJ').trim().slice(0, 10),
         CountryCode: originCountry || 'GB',
         ResidentialIndicator: p.residential ? 'Y' : 'N',
         Phone: {
-          Number: phone,
+          Number: phone.slice(0, 15),
         },
       },
       AlternateAddressIndicator: originCountry !== 'GB' ? 'Y' : 'N',
@@ -166,9 +177,13 @@ export async function createPickup(payload) {
       errMsg = json.response.errors.map((e) => e.message || e.code).join('; ');
     } else if (json && json.Error && json.Error.Description) {
       errMsg = json.Error.Description;
+    } else if (json && json.PickupCreationResponse && json.PickupCreationResponse.Response && json.PickupCreationResponse.Response.Error) {
+      const err = json.PickupCreationResponse.Response.Error;
+      errMsg = err.ErrorDescription || err.Description || JSON.stringify(err);
     } else if (text) {
       errMsg += ': ' + text.slice(0, 300);
     }
+    console.error('[ups pickup failed]', errMsg, 'Request:', JSON.stringify(reqBody), 'Response:', text);
     return { ok: false, status: res.status, error: errMsg, raw: text, request: reqBody };
   }
 
