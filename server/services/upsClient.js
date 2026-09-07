@@ -49,7 +49,8 @@ export function buildPickupRequest(p) {
   if (!addrLines.length) addrLines.push(S(p.address || 'Address'));
 
   let phone = String(p.phone || '').replace(/[^0-9+]/g, '');
-  if (!phone || phone.length < 7) phone = '07498991612';
+  if (!phone || phone.length < 7) phone = '0114551138';
+  const email = S(p.email || 'service@cloud9fulfillment.co.uk').trim();
   const parcels = Math.max(1, Math.floor(Number(p.parcels) || 1));
   const weight = Math.max(0.1, Number(p.weight || p.totalWeight) || 1.0);
 
@@ -86,11 +87,11 @@ export function buildPickupRequest(p) {
         PickupDate: dateStr,
       },
       PickupAddress: {
-        CompanyName: S(p.companyName || p.company || p.contactName || 'Company'),
-        ContactName: S(p.contactName || p.companyName || 'Contact'),
-        AddressLine: addrLines,
-        City: S(p.city),
-        PostalCode: S(p.postalCode || p.postcode),
+        CompanyName: S(p.companyName || 'Cloud9 Fulfillment'),
+        ContactName: S(p.contactName || 'Joshua Hegarty'),
+        AddressLine: addrLines.length ? addrLines : ['Units 3-5, Kettlebridge Road', 'Parkway Link'],
+        City: S(p.city || 'Sheffield'),
+        PostalCode: S(p.postalCode || p.postcode || 'S9 3AJ'),
         CountryCode: originCountry || 'GB',
         ResidentialIndicator: p.residential ? 'Y' : 'N',
         Phone: {
@@ -115,8 +116,8 @@ export function buildPickupRequest(p) {
     },
   };
 
-  if (p.email) {
-    req.PickupCreationRequest.PickupAddress.EMailAddress = S(p.email).trim();
+  if (email) {
+    req.PickupCreationRequest.PickupAddress.EMailAddress = email;
   }
   let instructions = S(p.specialInstruction || p.instructions || '').slice(0, 100);
   const isCrossBorder = originCountry && destCountry && originCountry.toUpperCase() !== destCountry.toUpperCase();
