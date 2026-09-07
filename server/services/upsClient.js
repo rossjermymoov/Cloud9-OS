@@ -45,24 +45,19 @@ export function buildPickupRequest(p) {
   const readyStr = String(p.readyTime || '10:00').replace(/[^0-9]/g, '').padEnd(4, '0').slice(0, 4);
   const closeStr = String(p.closeTime || '17:00').replace(/[^0-9]/g, '').padEnd(4, '0').slice(0, 4);
 
-  // Format address line(s)
-  // In UPS PickupCreation API v1 REST, AddressLine is expected as a single string (or array of max 3 lines, up to 35 chars each).
-  // Passing a single clean string AddressLine (or joining if line2 exists, up to 35 chars) works most reliably across UPS regions.
-  let line1 = S(p.addressLine1 || p.addressLine || p.address || 'Units 3-5 Kettlebridge Road')
-    .replace(/[,;]/g, ' ')
+  // Format address line
+  // In the UPS REST PickupCreation API, PickupAddress.AddressLine must be a single string (max 35 chars).
+  // Multi-line arrays trigger "missing or invalid address line" schema validation errors.
+  let fullAddr = [p.addressLine1 || p.addressLine || p.address, p.addressLine2]
+    .map(S)
+    .join(' ')
+    .replace(/[,;.]/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 35);
-  let line2 = S(p.addressLine2 || '')
-    .replace(/[,;]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 35);
-
-  let addressLineValue = line1;
-  if (line2) {
-    addressLineValue = [line1, line2].filter(Boolean);
+    .trim();
+  if (!fullAddr) {
+    fullAddr = 'Units 3-5 Kettlebridge Road';
   }
+  const addressLineValue = fullAddr.slice(0, 35);
 
   let phone = String(p.phone || '').replace(/[^0-9+]/g, '');
   if (!phone || phone.length < 7) phone = '0114551138';

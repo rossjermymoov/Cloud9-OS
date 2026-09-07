@@ -506,28 +506,23 @@ export default function CollectionsPage() {
                 <AlertTriangle size={18} style={{ flexShrink: 0 }} />
                 <span><strong>Booking Failed:</strong> {errorMessage}</span>
               </div>
-              {errorDetails && (errorDetails.raw || errorDetails.request) && (
-                <details style={{ background: '#fff', padding: '10px 14px', borderRadius: 6, border: '1px solid rgba(233,30,140,0.2)', fontSize: 11.5 }}>
-                  <summary style={{ cursor: 'pointer', fontWeight: 600, color: '#9D174D' }}>
-                    View Raw UPS API Error & Request Payload
-                  </summary>
-                  {errorDetails.raw && (
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ fontWeight: 700, color: '#475569', marginBottom: 4 }}>UPS Raw Response:</div>
-                      <pre style={{ margin: 0, padding: 8, background: '#F8FAFC', borderRadius: 4, overflowX: 'auto', maxHeight: 150, fontFamily: 'monospace', color: '#0F172A' }}>
-                        {errorDetails.raw}
-                      </pre>
-                    </div>
-                  )}
+              {errorDetails && errorDetails.raw && (
+                <div style={{ marginTop: 4, background: '#fff', padding: '10px 14px', borderRadius: 6, border: '1px solid rgba(233,30,140,0.2)' }}>
+                  <div style={{ fontWeight: 700, color: '#9D174D', marginBottom: 4, fontSize: 12 }}>
+                    UPS Response Details (HTTP {errorDetails.status || 400}):
+                  </div>
+                  <pre style={{ margin: 0, padding: 8, background: '#F8FAFC', borderRadius: 4, overflowX: 'auto', maxHeight: 180, fontFamily: 'monospace', fontSize: 11.5, color: '#0F172A', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {typeof errorDetails.raw === 'string' ? errorDetails.raw : JSON.stringify(errorDetails.raw, null, 2)}
+                  </pre>
                   {errorDetails.request && (
                     <div style={{ marginTop: 8 }}>
-                      <div style={{ fontWeight: 700, color: '#475569', marginBottom: 4 }}>Sent Payload:</div>
-                      <pre style={{ margin: 0, padding: 8, background: '#F8FAFC', borderRadius: 4, overflowX: 'auto', maxHeight: 150, fontFamily: 'monospace', color: '#0F172A' }}>
+                      <div style={{ fontWeight: 700, color: '#475569', marginBottom: 4, fontSize: 12 }}>Payload Sent:</div>
+                      <pre style={{ margin: 0, padding: 8, background: '#F8FAFC', borderRadius: 4, overflowX: 'auto', maxHeight: 180, fontFamily: 'monospace', fontSize: 11.5, color: '#0F172A', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                         {JSON.stringify(errorDetails.request, null, 2)}
                       </pre>
                     </div>
                   )}
-                </details>
+                </div>
               )}
             </div>
           )}
