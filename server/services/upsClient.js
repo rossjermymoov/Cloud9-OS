@@ -48,15 +48,10 @@ export function buildPickupRequest(p) {
   // Ensure AddressLine is an array of non-empty strings (max 35 chars per line per UPS spec)
   let addrLines = [p.addressLine1 || p.addressLine || p.address, p.addressLine2]
     .map(S)
-    .map(s => s.trim())
+    .map(s => s.replace(/[,;.]/g, ' ').replace(/\s+/g, ' ').trim())
     .filter(Boolean);
   if (!addrLines.length) {
-    addrLines = ['Units 3-5, Kettlebridge Road', 'Parkway Link'];
-  }
-  // If line 1 contains a comma and is long, split across lines if line 2 wasn't provided
-  if (addrLines.length === 1 && addrLines[0].length > 35 && addrLines[0].includes(',')) {
-    const parts = addrLines[0].split(',').map(s => s.trim()).filter(Boolean);
-    addrLines = [parts[0], parts.slice(1).join(', ')].filter(Boolean);
+    addrLines = ['Units 3-5 Kettlebridge Road', 'Parkway Link'];
   }
 
   let phone = String(p.phone || '').replace(/[^0-9+]/g, '');

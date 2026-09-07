@@ -54,7 +54,7 @@ export default function CollectionsPage() {
   const [serviceCode, setServiceCode] = useState('011');
   const [companyName, setCompanyName] = useState('Cloud9 Fulfillment');
   const [contactName, setContactName] = useState('Joshua Hegarty');
-  const [addressLine1, setAddressLine1] = useState('Units 3-5, Kettlebridge Road');
+  const [addressLine1, setAddressLine1] = useState('Units 3-5 Kettlebridge Road');
   const [addressLine2, setAddressLine2] = useState('Parkway Link');
   const [city, setCity] = useState('Sheffield');
   const [postcode, setPostcode] = useState('S9 3AJ');
