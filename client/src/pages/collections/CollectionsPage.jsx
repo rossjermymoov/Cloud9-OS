@@ -89,17 +89,25 @@ export default function CollectionsPage() {
   const collections = (data?.collections || []).filter(c => c.status !== 'failed' && c.prn);
 
   // Book collection mutation
+  const [errorDetails, setErrorDetails] = useState(null);
   const bookMutation = useMutation({
     mutationFn: createCollection,
     onSuccess: (res) => {
       setErrorMessage(null);
+      setErrorDetails(null);
       setSuccessResult(res);
       queryClient.invalidateQueries({ queryKey: ['collections-list'] });
     },
     onError: (err) => {
       setSuccessResult(null);
-      const msg = err.response?.data?.error || err.message || 'Failed to book collection with UPS';
+      const data = err.response?.data;
+      const msg = data?.error || err.message || 'Failed to book collection with UPS';
       setErrorMessage(msg);
+      setErrorDetails({
+        status: data?.status || err.response?.status,
+        raw: data?.raw,
+        request: data?.request,
+      });
     },
   });
 
@@ -490,12 +498,37 @@ export default function CollectionsPage() {
           {/* Error Banner */}
           {errorMessage && (
             <div style={{
-              marginTop: 20, padding: '12px 16px', borderRadius: 8,
-              background: 'rgba(233,30,140,0.1)', border: '1px solid rgba(233,30,140,0.3)',
-              color: '#BE185D', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8,
+              marginTop: 20, padding: '16px 18px', borderRadius: 8,
+              background: 'rgba(233,30,140,0.08)', border: '1px solid rgba(233,30,140,0.3)',
+              color: '#BE185D', fontSize: 13, display: 'flex', flexDirection: 'column', gap: 10,
             }}>
-              <AlertTriangle size={18} />
-              <span><strong>Booking Failed:</strong> {errorMessage}</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+                <span><strong>Booking Failed:</strong> {errorMessage}</span>
+              </div>
+              {errorDetails && (errorDetails.raw || errorDetails.request) && (
+                <details style={{ background: '#fff', padding: '10px 14px', borderRadius: 6, border: '1px solid rgba(233,30,140,0.2)', fontSize: 11.5 }}>
+                  <summary style={{ cursor: 'pointer', fontWeight: 600, color: '#9D174D' }}>
+                    View Raw UPS API Error & Request Payload
+                  </summary>
+                  {errorDetails.raw && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontWeight: 700, color: '#475569', marginBottom: 4 }}>UPS Raw Response:</div>
+                      <pre style={{ margin: 0, padding: 8, background: '#F8FAFC', borderRadius: 4, overflowX: 'auto', maxHeight: 150, fontFamily: 'monospace', color: '#0F172A' }}>
+                        {errorDetails.raw}
+                      </pre>
+                    </div>
+                  )}
+                  {errorDetails.request && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontWeight: 700, color: '#475569', marginBottom: 4 }}>Sent Payload:</div>
+                      <pre style={{ margin: 0, padding: 8, background: '#F8FAFC', borderRadius: 4, overflowX: 'auto', maxHeight: 150, fontFamily: 'monospace', color: '#0F172A' }}>
+                        {JSON.stringify(errorDetails.request, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </details>
+              )}
             </div>
           )}
 
