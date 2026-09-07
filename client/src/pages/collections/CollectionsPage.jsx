@@ -611,16 +611,25 @@ export default function CollectionsPage() {
               )}
               {collections.map(c => {
                 const isCancelled = c.status === 'cancelled';
+                let bookedDateStr = '—';
+                let bookedTimeStr = '';
+                if (c.created_at) {
+                  try {
+                    const d = new Date(c.created_at);
+                    if (!isNaN(d.getTime())) {
+                      bookedDateStr = d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+                      bookedTimeStr = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+                    }
+                  } catch (_) {}
+                }
                 return (
-                  <tr key={c.id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+                  <tr key={c.id || c.prn || Math.random()} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
                     <td style={{ ...td, fontWeight: 700, fontFamily: 'monospace', color: '#7B2FBE' }}>
                       {c.prn || '—'}
                     </td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                      {new Date(c.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}{' '}
-                      <span style={{ color: '#94A3B8', fontSize: 11 }}>
-                        {new Date(c.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
+                      {bookedDateStr}{' '}
+                      {bookedTimeStr && <span style={{ color: '#94A3B8', fontSize: 11 }}>{bookedTimeStr}</span>}
                     </td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
                       <div style={{ fontWeight: 600, color: '#0F172A' }}>{c.pickup_date || '—'}</div>
@@ -632,7 +641,7 @@ export default function CollectionsPage() {
                     </td>
                     <td style={{ ...td, maxWidth: 220 }}>
                       <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {c.address_line}, {c.city} {c.postal_code}
+                        {[c.address_line, c.city, c.postal_code].filter(Boolean).join(', ') || '—'}
                       </div>
                     </td>
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
