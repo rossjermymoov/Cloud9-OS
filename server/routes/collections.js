@@ -13,12 +13,23 @@ import { createPickup, cancelPickup } from '../services/upsClient.js';
 
 const router = express.Router();
 
-// GET /api/collections — list recent collections (excluding failed attempts)
+// GET /api/collections — list recent collections (excluding failed attempts), enriched with live tracking status
 router.get('/', async (req, res, next) => {
   try {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
     const { rows } = await query(
-      `SELECT * FROM collections WHERE status != 'failed' AND prn IS NOT NULL ORDER BY created_at DESC LIMIT $1`,
+      `SELECT 
+         c.*,
+         p.status AS tracking_status,
+         p.status_description AS tracking_description,
+         p.last_location AS tracking_location,
+         p.last_event_at AS tracking_event_at,
+         p.delivered_at AS tracking_delivered_at
+       FROM collections c
+       LEFT JOIN parcels p ON p.consignment_number = c.tracking_number
+       WHERE c.status != 'failed' AND c.prn IS NOT NULL
+       ORDER BY c.created_at DESC
+       LIMIT $1`,
       [limit]
     );
     res.json({ collections: rows });

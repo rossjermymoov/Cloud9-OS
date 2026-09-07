@@ -572,23 +572,21 @@ export default function CollectionsPage() {
 
       {/* Recent Collections History Table */}
       <div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 14, overflow: 'hidden' }}>
-        <div style={{ padding: '16px 20px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
-            <h2 style={{ fontSize: 16, fontWeight: 700, color: '#0F172A', margin: 0 }}>Recent UPS Collections</h2>
-            <div style={{ fontSize: 12, color: '#64748B' }}>Real-time status of driver pickup bookings</div>
+            <h2 style={{ fontSize: 15, fontWeight: 700, color: '#0F172A', margin: 0 }}>Recent UPS Collections</h2>
+            <div style={{ fontSize: 11.5, color: '#64748B' }}>Live collection & tracking progression</div>
           </div>
         </div>
 
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#F8FAFC', color: '#64748B', textAlign: 'left' }}>
                 <th style={th}>PRN</th>
-                <th style={th}>Booked At</th>
-                <th style={th}>Pickup Window</th>
-                <th style={th}>Contact / Company</th>
-                <th style={th}>Address</th>
-                <th style={th}>Parcels</th>
+                <th style={th}>Schedule & Times</th>
+                <th style={th}>Contact / Location</th>
+                <th style={th}>Parcels & Wt</th>
                 <th style={th}>Tracking #</th>
                 <th style={th}>Status</th>
                 <th style={{ ...th, textAlign: 'right' }}>Actions</th>
@@ -597,14 +595,14 @@ export default function CollectionsPage() {
             <tbody>
               {isLoading && (
                 <tr>
-                  <td colSpan={9} style={{ ...td, textAlign: 'center', color: '#94A3B8', padding: 24 }}>
+                  <td colSpan={7} style={{ ...td, textAlign: 'center', color: '#94A3B8', padding: 20 }}>
                     Loading collections…
                   </td>
                 </tr>
               )}
               {!isLoading && collections.length === 0 && (
                 <tr>
-                  <td colSpan={9} style={{ ...td, textAlign: 'center', color: '#94A3B8', padding: 24 }}>
+                  <td colSpan={7} style={{ ...td, textAlign: 'center', color: '#94A3B8', padding: 20 }}>
                     No collections booked yet. Use the form above to schedule a collection with UPS.
                   </td>
                 </tr>
@@ -622,56 +620,115 @@ export default function CollectionsPage() {
                     }
                   } catch (_) {}
                 }
+
+                // Resolve effective tracking / collection status
+                let displayStatus = c.status || 'booked';
+                if (isCancelled) {
+                  displayStatus = 'cancelled';
+                } else if (c.tracking_status) {
+                  const ts = String(c.tracking_status).toLowerCase();
+                  if (ts.includes('deliver')) displayStatus = 'delivered';
+                  else if (ts.includes('transit') || ts.includes('depot') || ts.includes('delivery')) displayStatus = 'in transit';
+                  else if (ts.includes('collect') || ts.includes('picked')) displayStatus = 'collected';
+                  else displayStatus = c.tracking_status.replace(/_/g, ' ');
+                }
+
+                // Status color map
+                let statusBg = 'rgba(245,158,11,0.12)';
+                let statusColor = '#D97706';
+                if (displayStatus === 'delivered') {
+                  statusBg = 'rgba(0,200,83,0.14)';
+                  statusColor = '#008738';
+                } else if (displayStatus === 'in transit') {
+                  statusBg = 'rgba(33,150,243,0.12)';
+                  statusColor = '#0284C7';
+                } else if (displayStatus === 'collected') {
+                  statusBg = 'rgba(123,47,190,0.12)';
+                  statusColor = '#7B2FBE';
+                } else if (displayStatus === 'cancelled') {
+                  statusBg = 'rgba(233,30,140,0.12)';
+                  statusColor = '#BE185D';
+                }
+
                 return (
                   <tr key={c.id || c.prn || Math.random()} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+                    {/* PRN */}
                     <td style={{ ...td, fontWeight: 700, fontFamily: 'monospace', color: '#7B2FBE' }}>
                       {c.prn || '—'}
                     </td>
+
+                    {/* Schedule: Date & Window stacked */}
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                      {bookedDateStr}{' '}
-                      {bookedTimeStr && <span style={{ color: '#94A3B8', fontSize: 11 }}>{bookedTimeStr}</span>}
-                    </td>
-                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                      <div style={{ fontWeight: 600, color: '#0F172A' }}>{c.pickup_date || '—'}</div>
-                      <div style={{ fontSize: 11, color: '#64748B' }}>{c.ready_time || '09:00'} – {c.close_time || '17:00'}</div>
-                    </td>
-                    <td style={td}>
-                      <div style={{ fontWeight: 600, color: '#0F172A' }}>{c.company_name || c.contact_name || '—'}</div>
-                      {c.phone && <div style={{ fontSize: 11, color: '#64748B' }}>{c.phone}</div>}
-                    </td>
-                    <td style={{ ...td, maxWidth: 220 }}>
-                      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {[c.address_line, c.city, c.postal_code].filter(Boolean).join(', ') || '—'}
+                      <div style={{ fontWeight: 600, color: '#0F172A', fontSize: 12.5 }}>
+                        {c.pickup_date || bookedDateStr}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#64748B' }}>
+                        {c.ready_time || '09:00'} – {c.close_time || '17:00'}
+                      </div>
+                      <div style={{ fontSize: 10, color: '#94A3B8' }}>
+                        Booked: {bookedDateStr} {bookedTimeStr}
                       </div>
                     </td>
+
+                    {/* Contact & Location stacked */}
+                    <td style={{ ...td, maxWidth: 220 }}>
+                      <div style={{ fontWeight: 600, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.company_name || c.contact_name || 'Cloud9 Fulfillment'}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#64748B', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {[c.address_line, c.city, c.postal_code].filter(Boolean).join(', ')}
+                      </div>
+                    </td>
+
+                    {/* Parcels & Weight stacked */}
                     <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                      {c.parcels || 1} pkg {c.total_weight_kg ? `· ${c.total_weight_kg}kg` : ''}
+                      <div style={{ fontWeight: 600, color: '#0F172A' }}>
+                        {c.parcels || 1} {Number(c.parcels) === 1 ? 'pkg' : 'pkgs'}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#64748B' }}>
+                        {c.total_weight_kg ? `${c.total_weight_kg} kg` : '—'}
+                      </div>
                     </td>
-                    <td style={{ ...td, fontFamily: 'monospace', fontSize: 12 }}>
+
+                    {/* Tracking # */}
+                    <td style={{ ...td, fontFamily: 'monospace', fontSize: 11.5 }}>
                       {c.tracking_number ? (
-                        <span style={{ background: 'rgba(0,188,212,0.1)', color: '#00838F', padding: '2px 6px', borderRadius: 4, fontWeight: 600 }}>
-                          {c.tracking_number}
-                        </span>
-                      ) : '—'}
+                        <div>
+                          <span style={{ background: 'rgba(0,188,212,0.1)', color: '#00838F', padding: '2px 6px', borderRadius: 4, fontWeight: 600 }}>
+                            {c.tracking_number}
+                          </span>
+                          {c.tracking_location && (
+                            <div style={{ fontSize: 10, color: '#64748B', marginTop: 2, fontFamily: 'sans-serif' }}>
+                              📍 {c.tracking_location}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span style={{ color: '#94A3B8' }}>—</span>
+                      )}
                     </td>
-                    <td style={td}>
+
+                    {/* Status Badge */}
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
                       <span style={{
                         display: 'inline-flex', alignItems: 'center', gap: 4,
-                        padding: '2px 8px', borderRadius: 9999, fontSize: 11, fontWeight: 700,
-                        textTransform: 'uppercase',
-                        background: c.status === 'booked' ? 'rgba(0,200,83,0.12)' : (c.status === 'cancelled' ? 'rgba(233,30,140,0.12)' : 'rgba(245,158,11,0.12)'),
-                        color: c.status === 'booked' ? '#00C853' : (c.status === 'cancelled' ? '#E91E8C' : '#F59E0B'),
+                        padding: '3px 8px', borderRadius: 9999, fontSize: 11, fontWeight: 700,
+                        textTransform: 'capitalize',
+                        background: statusBg,
+                        color: statusColor,
                       }}>
-                        {c.status}
+                        {displayStatus}
                       </span>
                     </td>
+
+                    {/* Actions */}
                     <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                       {c.prn && !isCancelled ? (
                         <div style={{ display: 'inline-flex', gap: 6 }}>
                           <button
                             onClick={() => openReschedule(c)}
                             style={{
-                              padding: '4px 10px', borderRadius: 6, background: '#F1F5F9',
+                              padding: '3px 8px', borderRadius: 6, background: '#F1F5F9',
                               border: '1px solid rgba(0,0,0,0.08)', fontSize: 11, fontWeight: 600,
                               color: '#334155', cursor: 'pointer'
                             }}
@@ -682,7 +739,7 @@ export default function CollectionsPage() {
                             onClick={() => handleCancel(c.prn)}
                             disabled={cancelMutation.isPending}
                             style={{
-                              padding: '4px 10px', borderRadius: 6, background: 'rgba(233,30,140,0.08)',
+                              padding: '3px 8px', borderRadius: 6, background: 'rgba(233,30,140,0.08)',
                               border: '1px solid rgba(233,30,140,0.2)', fontSize: 11, fontWeight: 600,
                               color: '#E91E8C', cursor: 'pointer'
                             }}
@@ -691,7 +748,7 @@ export default function CollectionsPage() {
                           </button>
                         </div>
                       ) : (
-                        <span style={{ color: '#94A3B8', fontSize: 12 }}>—</span>
+                        <span style={{ color: '#94A3B8', fontSize: 11 }}>—</span>
                       )}
                     </td>
                   </tr>
