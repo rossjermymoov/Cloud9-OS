@@ -651,12 +651,21 @@ export default function CollectionsPage() {
                 let displayStatus = c.status || 'booked';
                 if (isCancelled) {
                   displayStatus = 'cancelled';
-                } else if (c.tracking_status) {
+                } else if (c.tracking_status && c.tracking_status !== 'unknown') {
                   const ts = String(c.tracking_status).toLowerCase();
                   if (ts.includes('deliver')) displayStatus = 'delivered';
                   else if (ts.includes('transit') || ts.includes('depot') || ts.includes('delivery')) displayStatus = 'in transit';
                   else if (ts.includes('collect') || ts.includes('picked')) displayStatus = 'collected';
                   else displayStatus = c.tracking_status.replace(/_/g, ' ');
+                } else if (c.tracking_description) {
+                  const td = String(c.tracking_description).toLowerCase();
+                  if (td.includes('deliver')) displayStatus = 'delivered';
+                  else if (td.includes('transit') || td.includes('depart') || td.includes('facility') || td.includes('arrival') || td.includes('scan')) displayStatus = 'in transit';
+                  else if (td.includes('collect') || td.includes('pickup')) displayStatus = 'collected';
+                }
+
+                if (displayStatus === 'unknown') {
+                  displayStatus = c.status || 'in transit';
                 }
 
                 // Status color map

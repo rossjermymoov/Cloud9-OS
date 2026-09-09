@@ -17,32 +17,49 @@ const STATUS_MAP = {
   '8':  'on_hold', '9':  'exception', '10': 'returned', '11': 'tracking_expired',
   '12': 'cancelled', '13': 'awaiting_collection', '16': 'damaged', '18': 'customs_hold',
 
+  // UPS Status Type codes & terms
+  'd': 'delivered', 'dl': 'delivered', 'del': 'delivered',
+  'i': 'in_transit', 'it': 'in_transit', 'tr': 'in_transit',
+  'p': 'collected', 'pu': 'collected', 'pk': 'collected',
+  'm': 'booked', 'mp': 'booked', 'or': 'booked',
+  'o': 'out_for_delivery', 'of': 'out_for_delivery', 'od': 'out_for_delivery',
+  'x': 'exception', 'ex': 'exception', 'sr': 'in_transit', 'do': 'delivered',
+
   booked: 'booked', created: 'booked', label_created: 'booked',
   label_printed: 'booked', manifested: 'booked', registered: 'booked',
+  order_processed: 'booked', shipment_ready: 'booked', ready_for_ups: 'booked',
 
   collected: 'collected', collection: 'collected', picked_up: 'collected',
   collection_made: 'collected', collected_from_sender: 'collected',
+  pickup: 'collected', origin_scan: 'collected', pickup_scan: 'collected',
 
   in_transit: 'in_transit', transit: 'in_transit', on_its_way: 'in_transit',
   forwarded: 'in_transit', processed: 'in_transit', departed_depot: 'in_transit',
   despatched: 'in_transit', dispatched: 'in_transit',
   left_hub: 'in_transit', parcel_left_hub: 'in_transit', departed_hub: 'in_transit',
   left_depot: 'in_transit', departed_facility: 'in_transit', left_facility: 'in_transit',
+  departure_scan: 'in_transit', arrival_scan: 'at_depot', facility_scan: 'at_depot',
+  customs_clearance: 'in_transit', released_by_customs: 'in_transit',
 
   at_hub: 'at_depot', hub: 'at_depot', in_depot: 'at_depot',
   arrived_at_depot: 'at_depot', at_depot: 'at_depot',
   sorting: 'at_depot', sorted: 'at_depot', at_facility: 'at_depot',
   arrived_at_hub: 'at_depot', held_at_hub: 'at_depot',
   parcel_at_hub: 'at_depot', received_at_hub: 'at_depot',
+  hub_scan: 'at_depot', destination_scan: 'at_depot',
 
   out_for_delivery: 'out_for_delivery', out_for_del: 'out_for_delivery',
   on_vehicle: 'out_for_delivery', with_driver: 'out_for_delivery',
   loaded_on_van: 'out_for_delivery', with_courier: 'out_for_delivery',
-  on_delivery_run: 'out_for_delivery',
+  on_delivery_run: 'out_for_delivery', loaded_on_delivery_vehicle: 'out_for_delivery',
+  out_for_delivery_today: 'out_for_delivery',
 
   delivered: 'delivered', delivery_complete: 'delivered',
   signed_for: 'delivered', parcel_delivered: 'delivered',
   delivered_to_neighbour: 'delivered', delivered_to_safe_place: 'delivered',
+  delivered_by_ups: 'delivered', delivered_front_door: 'delivered',
+  delivered_reception: 'delivered', delivered_dock: 'delivered',
+  proof_of_delivery: 'delivered', delivered_to_receiver: 'delivered',
 
   failed_delivery: 'failed_delivery', delivery_failed: 'failed_delivery',
   missed: 'failed_delivery', attempted: 'failed_delivery', not_delivered: 'failed_delivery',
@@ -65,10 +82,25 @@ export const VERIFIED_STATUSES = new Set([
 
 export function normaliseStatus(raw) {
   if (!raw) return 'unknown';
-  const exact = STATUS_MAP[String(raw)];
+  const str = String(raw).trim();
+  const exact = STATUS_MAP[str];
   if (exact) return exact;
-  const key = String(raw).toLowerCase().replace(/[\s\-]+/g, '_').replace(/[^a-z_]/g, '');
-  return STATUS_MAP[key] || 'unknown';
+  const key = str.toLowerCase().replace(/[\s\-]+/g, '_').replace(/[^a-z0-9_]/g, '');
+  if (STATUS_MAP[key]) return STATUS_MAP[key];
+
+  // Smart phrase fallback matching
+  const lstr = str.toLowerCase();
+  if (lstr.includes('deliver')) return 'delivered';
+  if (lstr.includes('out for del') || lstr.includes('on vehicle') || lstr.includes('with courier')) return 'out_for_delivery';
+  if (lstr.includes('hub') || lstr.includes('depot') || lstr.includes('facility') || lstr.includes('sorting')) return 'at_depot';
+  if (lstr.includes('transit') || lstr.includes('depart') || lstr.includes('despatch') || lstr.includes('forward') || lstr.includes('way') || lstr.includes('customs')) return 'in_transit';
+  if (lstr.includes('collect') || lstr.includes('picked up') || lstr.includes('origin scan')) return 'collected';
+  if (lstr.includes('cancel') || lstr.includes('void')) return 'cancelled';
+  if (lstr.includes('return')) return 'returned';
+  if (lstr.includes('hold')) return 'on_hold';
+  if (lstr.includes('exception') || lstr.includes('delay') || lstr.includes('issue') || lstr.includes('damage')) return 'exception';
+
+  return 'in_transit';
 }
 
 // request_shipment may arrive as a JSON string or an object; return it parsed.

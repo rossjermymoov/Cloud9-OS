@@ -287,11 +287,24 @@ export async function trackShipment(trackingNumber) {
   const shipment = json?.trackResponse?.shipment?.[0];
   const pkg = shipment?.package?.[0];
   const currentStatus = pkg?.currentStatus || shipment?.currentStatus;
-  const rawStatus = currentStatus?.description || currentStatus?.code || 'in_transit';
   const activity = pkg?.activity || [];
   const latestActivity = activity[0] || {};
   const locationObj = latestActivity.location?.address;
   const location = locationObj ? [locationObj.city, locationObj.countryCode || locationObj.country].filter(Boolean).join(', ') : null;
+
+  // Extract best status descriptor from UPS Track Response
+  const rawStatus = currentStatus?.simplifiedTextDescription
+    || currentStatus?.description
+    || currentStatus?.type
+    || currentStatus?.code
+    || latestActivity.status?.description
+    || latestActivity.status?.type
+    || 'in_transit';
+
+  const statusDescription = currentStatus?.description
+    || currentStatus?.simplifiedTextDescription
+    || latestActivity.status?.description
+    || rawStatus;
 
   const deliveryDate = pkg?.deliveryDate?.[0]?.date || shipment?.deliveryDate?.[0]?.date;
   const deliveryTime = pkg?.deliveryTime?.endTime || shipment?.deliveryTime?.endTime;
@@ -300,8 +313,8 @@ export async function trackShipment(trackingNumber) {
     ok: true,
     trackingNumber: cleanTrack,
     rawStatus,
-    statusCode: currentStatus?.code,
-    statusDescription: currentStatus?.description || rawStatus,
+    statusCode: currentStatus?.code || currentStatus?.type,
+    statusDescription,
     location,
     deliveryDate,
     deliveryTime,
