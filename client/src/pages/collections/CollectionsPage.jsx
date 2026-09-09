@@ -5,7 +5,7 @@ import {
   Package, Truck, Clock, MapPin, Building2, Phone, Mail,
   X, AlertCircle, Sparkles, ChevronRight
 } from 'lucide-react';
-import { listCollections, createCollection, cancelCollection, rescheduleCollection } from '../../api/collections';
+import { listCollections, createCollection, cancelCollection, rescheduleCollection, syncTracking } from '../../api/collections';
 
 const COUNTRIES = [
   { code: 'GB', name: 'United Kingdom' },
@@ -135,6 +135,17 @@ export default function CollectionsPage() {
     },
   });
 
+  // Manual Sync Tracking mutation
+  const syncMutation = useMutation({
+    mutationFn: syncTracking,
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['collections-list'] });
+    },
+    onError: (err) => {
+      console.warn('Sync tracking error:', err.message);
+    },
+  });
+
   const handleSubmit = (e) => {
     e.preventDefault();
     setErrorMessage(null);
@@ -154,25 +165,25 @@ export default function CollectionsPage() {
     }
 
     bookMutation.mutate({
-      trackingNumber: trackingNumber.trim() || undefined,
+      trackingNumber: trackingNumber.trim() || null,
       serviceCode,
-      companyName: companyName.trim() || undefined,
-      contactName: contactName.trim() || undefined,
+      companyName: companyName.trim() || 'Cloud9 Fulfillment',
+      contactName: contactName.trim() || 'Joshua Hegarty',
       addressLine1: addressLine1.trim(),
-      addressLine2: addressLine2.trim() || undefined,
+      addressLine2: addressLine2.trim() || null,
       city: city.trim(),
       postalCode: postcode.trim(),
       country,
       destinationCountry: destCountry,
       phone: phone.trim(),
-      email: email.trim() || undefined,
+      email: email.trim() || 'service@cloud9fulfillment.co.uk',
       residential,
       pickupDate,
       readyTime,
       closeTime,
-      parcels: Number(parcels) || 1,
-      weight: Number(weight) || 1.0,
-      specialInstruction: specialInstruction.trim() || undefined,
+      parcels: Math.max(1, parseInt(parcels) || 1),
+      weight: Math.max(0.1, parseFloat(weight) || 1.0),
+      specialInstruction: specialInstruction.trim() || null,
     });
   };
 
@@ -220,18 +231,33 @@ export default function CollectionsPage() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => refetch()}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            padding: '7px 14px', borderRadius: 8, background: '#fff',
-            border: '1px solid rgba(0,0,0,0.12)', fontSize: 13, fontWeight: 600,
-            color: '#334155', cursor: 'pointer'
-          }}
-        >
-          <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={() => syncMutation.mutate()}
+            disabled={syncMutation.isPending}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 14px', borderRadius: 8, background: '#F8FAFC',
+              border: '1px solid rgba(0,0,0,0.12)', fontSize: 13, fontWeight: 600,
+              color: '#475569', cursor: syncMutation.isPending ? 'not-allowed' : 'pointer'
+            }}
+          >
+            <Truck size={14} className={syncMutation.isPending ? 'animate-spin' : ''} />
+            {syncMutation.isPending ? 'Syncing UPS…' : 'Sync Live Status'}
+          </button>
+          <button
+            onClick={() => { refetch(); syncMutation.mutate(); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '7px 14px', borderRadius: 8, background: '#fff',
+              border: '1px solid rgba(0,0,0,0.12)', fontSize: 13, fontWeight: 600,
+              color: '#334155', cursor: 'pointer'
+            }}
+          >
+            <RefreshCw size={14} className={isFetching || syncMutation.isPending ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Main Booking Form Card */}

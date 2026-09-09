@@ -243,3 +243,130 @@ export async function cancelPickup(prn) {
     json,
   };
 }
+
+/**
+ * Query UPS Track API v1 for a tracking number.
+ * Returns normalized status, delivery info, and activity timeline.
+ */
+export async function trackShipment(trackingNumber) {
+  if (!trackingNumber) return { ok: false, error: 'Tracking number is required' };
+  const cleanTrack = String(trackingNumber).trim();
+  const tk = await token();
+  if (!tk) return { ok: false, error: 'UPS credentials not configured' };
+
+  const headers = {
+    'Authorization': 'Bearer ' + tk,
+    'transId': 'cloud9_track_' + Date.now(),
+    'transactionSrc': 'Cloud9-OS',
+  };
+  if (process.env.UPS_ACCOUNT_NUMBER) {
+    headers['x-merchant-id'] = process.env.UPS_ACCOUNT_NUMBER;
+  }
+
+  const url = base() + `/api/track/v1/details/${encodeURIComponent(cleanTrack)}?locale=en_GB&returnSignature=false`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers,
+    signal: AbortSignal.timeout(10000),
+  });
+
+  const text = await res.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (_) {}
+
+  if (!res.ok) {
+    let errMsg = 'UPS Tracking ' + res.status;
+    if (json?.response?.errors?.length) {
+      errMsg = json.response.errors.map(e => e.message || e.code).join('; ');
+    } else if (text) {
+      errMsg += ': ' + text.slice(0, 200);
+    }
+    return { ok: false, status: res.status, error: errMsg, raw: text };
+  }
+
+  const shipment = json?.trackResponse?.shipment?.[0];
+  const pkg = shipment?.package?.[0];
+  const currentStatus = pkg?.currentStatus || shipment?.currentStatus;
+  const rawStatus = currentStatus?.description || currentStatus?.code || 'in_transit';
+  const activity = pkg?.activity || [];
+  const latestActivity = activity[0] || {};
+  const locationObj = latestActivity.location?.address;
+  const location = locationObj ? [locationObj.city, locationObj.countryCode || locationObj.country].filter(Boolean).join(', ') : null;
+
+  const deliveryDate = pkg?.deliveryDate?.[0]?.date || shipment?.deliveryDate?.[0]?.date;
+  const deliveryTime = pkg?.deliveryTime?.endTime || shipment?.deliveryTime?.endTime;
+
+  return {
+    ok: true,
+    trackingNumber: cleanTrack,
+    rawStatus,
+    statusCode: currentStatus?.code,
+    statusDescription: currentStatus?.description || rawStatus,
+    location,
+    deliveryDate,
+    deliveryTime,
+    activity,
+    json,
+  };
+}
+
+/**
+ * Cron Job: Sync tracking status for all recent UPS collections.
+ * Finds collections created in the last 14 days with tracking numbers that aren't marked delivered/cancelled.
+ */
+export async function syncCollectionsTracking() {
+  if (!configured()) return 0;
+  const { query } = await import('../db/index.js');
+  const { upsertEvent, normaliseStatus } = await import('./statusEngine.js');
+
+  const { rows: collections } = await query(`
+    SELECT c.id, c.prn, c.tracking_number, c.company_name, c.contact_name, c.phone, c.status,
+           c.address_line, c.city, c.postal_code, c.total_weight_kg, c.pickup_date
+    FROM collections c
+    WHERE c.tracking_number IS NOT NULL
+      AND c.tracking_number != ''
+      AND c.status NOT IN ('delivered', 'cancelled', 'failed')
+      AND c.created_at >= NOW() - INTERVAL '14 days'
+    ORDER BY c.created_at DESC
+  `);
+
+  if (!collections.length) return 0;
+
+  let updated = 0;
+  for (const c of collections) {
+    try {
+      const res = await trackShipment(c.tracking_number);
+      if (res.ok) {
+        const normStatus = normaliseStatus(res.rawStatus);
+        
+        // Ingest event into the status engine (updates parcels and tracking_events tables)
+        await upsertEvent({
+          consignment_number: c.tracking_number,
+          courier_name: 'UPS',
+          courier_code: 'ups',
+          status: normStatus,
+          status_description: res.statusDescription,
+          location: res.location,
+          weight_kg: c.total_weight_kg,
+          recipient_name: c.contact_name || c.company_name,
+          recipient_postcode: c.postal_code,
+          recipient_address: [c.address_line, c.city].filter(Boolean).join(', '),
+          event_at: new Date().toISOString(),
+        });
+
+        // If the shipment is delivered or cancelled, mirror it directly onto the collections record status
+        if (normStatus === 'delivered' || normStatus === 'cancelled') {
+          await query(`UPDATE collections SET status = $1, updated_at = NOW() WHERE id = $2`, [normStatus, c.id]);
+        }
+        updated++;
+      }
+      // Small pause between UPS API requests
+      await new Promise(r => setTimeout(r, 200));
+    } catch (err) {
+      console.warn(`[ups-sync-track] Failed to sync tracking for ${c.tracking_number}:`, err.message);
+    }
+  }
+
+  console.log(`📦 UPS collections tracking synced: ${updated}/${collections.length} package(s)`);
+  return updated;
+}

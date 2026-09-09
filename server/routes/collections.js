@@ -259,4 +259,15 @@ router.post('/reschedule', async (req, res, next) => {
   }
 });
 
+// POST /api/collections/sync-tracking — trigger on-demand sync of UPS tracking events
+router.post('/sync-tracking', async (req, res, next) => {
+  try {
+    const { syncCollectionsTracking } = await import('../services/upsClient.js');
+    const updatedCount = await syncCollectionsTracking();
+    res.json({ ok: true, synced: updatedCount });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

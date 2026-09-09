@@ -25,3 +25,8 @@ export async function rescheduleCollection({ oldPrn, pickupDate, readyTime, clos
   });
   return res.data;
 }
+
+export async function syncTracking() {
+  const res = await api.post('/collections/sync-tracking');
+  return res.data;
+}

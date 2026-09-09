@@ -36,6 +36,7 @@ import emailRouter          from './routes/email.js';
 import gmailRouter          from './routes/gmail.js';
 import slaRulesRouter       from './routes/slaRules.js';
 import collectionsRouter    from './routes/collections.js';
+import { configured as upsConfigured, syncCollectionsTracking } from './services/upsClient.js';
 
 dotenv.config();
 
@@ -228,6 +229,13 @@ async function start() {
         }
       } catch (e) { console.warn('[boot-backfill] check failed:', e.message); }
     }, 45 * 1000);
+  }
+
+  // UPS Collection & Tracking auto-sync — every 15 minutes
+  if (upsConfigured()) {
+    setTimeout(() => syncCollectionsTracking().catch(e => console.warn('[ups-track-sync]', e.message)), 20 * 1000);
+    setInterval(() => syncCollectionsTracking().catch(e => console.warn('[ups-track-sync]', e.message)), 15 * 60 * 1000);
+    console.log('🚚 UPS collections tracking auto-sync scheduled every 15 minutes');
   }
 }
 
