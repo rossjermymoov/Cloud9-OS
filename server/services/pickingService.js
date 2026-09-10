@@ -54,47 +54,149 @@ export async function syncUsers() {
   return map;
 }
 
-/** Reduce a pick detail body into the metrics we store. */
-function summarisePick(detail, header) {
-  const d = detail?.data || detail || {};
-  const invs = Array.isArray(d.pick_inventories)
-    ? d.pick_inventories
-    : (Array.isArray(d.inventories) ? d.inventories : (Array.isArray(d.items) ? d.items : []));
-  const orderData = Array.isArray(d.order_data)
-    ? d.order_data
-    : (Array.isArray(d.orders) ? d.orders : []);
-
-  let items = 0;
-  const orders = new Set();
-  for (const pi of invs) {
-    items += num(pi.quantity_picked) || num(pi.quantity_to_pick) || num(pi.quantity) || num(pi.qty) || num(pi.total_quantity) || 0;
-    if (pi.order_summary_id != null) orders.add(String(pi.order_summary_id));
-    if (pi.order_id != null) orders.add(String(pi.order_id));
+/**
+ * Thoroughly extract all items and orders from any Helm pick detail or raw payload.
+ * Handles nested data wrappers, order_data, pick_inventories, lines, and various quantity keys.
+ */
+export function extractPickItemsAndOrders(detail, header = {}) {
+  let d = detail?.data || detail || {};
+  if (d.pick && typeof d.pick === 'object' && !Array.isArray(d.pick)) {
+    d = { ...d, ...d.pick };
   }
 
-  // If pick_inventories was empty or 0 items, derive from order_data
-  for (const o of orderData) {
-    const oId = o.id || o.order_summary_id || o.order_id || o.channel_order_id;
-    if (oId != null) orders.add(String(oId));
-    if (invs.length === 0 || items === 0) {
-      const orderInvs = Array.isArray(o.order_inventories) ? o.order_inventories : (Array.isArray(o.order_items) ? o.order_items : (Array.isArray(o.items) ? o.items : []));
-      if (orderInvs.length > 0) {
-        for (const oi of orderInvs) {
-          items += num(oi.quantity_picked) || num(oi.quantity_to_pick) || num(oi.quantity) || num(oi.qty) || 0;
+  // 1. Gather all potential inventory/item arrays
+  const rawInvs = Array.isArray(d.pick_inventories) ? d.pick_inventories
+    : (Array.isArray(d.inventories) ? d.inventories
+    : (Array.isArray(d.items) ? d.items
+    : (Array.isArray(d.pick_items) ? d.pick_items
+    : (Array.isArray(d.lines) ? d.lines
+    : (Array.isArray(d.pick_lines) ? d.pick_lines : [])))));
+
+  // 2. Gather all potential order arrays
+  const rawOrders = Array.isArray(d.order_data) ? d.order_data
+    : (Array.isArray(d.orders) ? d.orders
+    : (Array.isArray(d.pick_orders) ? d.pick_orders
+    : (Array.isArray(d.order_summaries) ? d.order_summaries
+    : (Array.isArray(d.order_details) ? d.order_details
+    : (d.order && typeof d.order === 'object' ? [d.order] : [])))));
+
+  // Format orders
+  const orders = [];
+  const orderIds = new Set();
+
+  for (const o of rawOrders) {
+    const oId = o.id != null ? String(o.id) : (o.order_summary_id != null ? String(o.order_summary_id) : (o.order_id != null ? String(o.order_id) : null));
+    if (oId) orderIds.add(oId);
+
+    const oInvs = Array.isArray(o.order_inventories) ? o.order_inventories
+      : (Array.isArray(o.order_items) ? o.order_items
+      : (Array.isArray(o.items) ? o.items
+      : (Array.isArray(o.inventories) ? o.inventories : [])));
+
+    let oItemsCount = num(o.total_inventory_quantity) || num(o.total_items) || num(o.item_count) || num(o.quantity) || num(o.total_quantity) || 0;
+    if (oItemsCount === 0 && oInvs.length > 0) {
+      oItemsCount = oInvs.reduce((acc, x) => acc + (num(x.quantity_picked) || num(x.quantity_to_pick) || num(x.quantity) || num(x.qty) || num(x.total_quantity) || 1), 0);
+    }
+    if (oItemsCount === 0) oItemsCount = 1;
+
+    orders.push({
+      order_id: oId,
+      channel_order_id: o.channel_order_id || o.channel_order_number || o.order_number || o.invoice_number || o.reference || (oId ? `Order #${oId}` : 'Order'),
+      invoice_number: o.invoice_number || null,
+      customer_name: [o.customer?.first_name, o.customer?.last_name].filter(Boolean).join(' ') || o.customer_name || o.shipping_contact_name || o.delivery_name || o.contact_name || null,
+      status: o.status || o.status_name || o.status_label || (o.status_id === 5 ? 'Despatched' : null),
+      item_count: oItemsCount,
+      shipping_method: o.shipping_method || o.courier_service_name || o.delivery_method || o.courier_name || null,
+      _raw_invs: oInvs,
+    });
+  }
+
+  // Format items
+  let items = [];
+  if (rawInvs.length > 0) {
+    items = rawInvs.map(pi => {
+      const targetQty = num(pi.quantity_to_pick) || num(pi.quantity) || num(pi.qty) || num(pi.total_quantity) || num(pi.quantity_picked) || 1;
+      const pickedQty = pi.quantity_picked != null && num(pi.quantity_picked) > 0 ? num(pi.quantity_picked) : targetQty;
+      const oId = pi.order_summary_id != null ? String(pi.order_summary_id) : (pi.order_id != null ? String(pi.order_id) : null);
+      if (oId) orderIds.add(oId);
+
+      return {
+        id: pi.id || pi.inventory_id || null,
+        sku: pi.sku || pi.product_sku || pi.inventory_sku || pi.inventory?.sku || pi.code || pi.barcode || '—',
+        product_name: pi.name || pi.product_name || pi.inventory_name || pi.inventory?.name || pi.title || pi.description || 'Item',
+        barcode: pi.barcode || pi.inventory?.barcode || null,
+        location: pi.location_name || pi.location?.name || pi.bin || pi.location_code || (pi.location_id ? `Location ${pi.location_id}` : '—'),
+        quantity_to_pick: targetQty,
+        quantity_picked: pickedQty,
+        order_summary_id: oId,
+        picked_by: pi.picked_by != null ? String(pi.picked_by) : null,
+      };
+    });
+  } else if (orders.length > 0) {
+    // Extract from orders
+    for (const o of orders) {
+      if (o._raw_invs && o._raw_invs.length > 0) {
+        for (const oi of o._raw_invs) {
+          const targetQty = num(oi.quantity_to_pick) || num(oi.quantity) || num(oi.qty) || num(oi.total_quantity) || num(oi.quantity_picked) || 1;
+          const pickedQty = oi.quantity_picked != null && num(oi.quantity_picked) > 0 ? num(oi.quantity_picked) : targetQty;
+          items.push({
+            id: oi.id || oi.inventory_id || null,
+            sku: oi.sku || oi.product_sku || oi.inventory_sku || oi.inventory?.sku || oi.code || oi.barcode || '—',
+            product_name: oi.name || oi.product_name || oi.inventory_name || oi.inventory?.name || oi.title || oi.description || 'Item',
+            barcode: oi.barcode || oi.inventory?.barcode || null,
+            location: oi.location_name || oi.location?.name || oi.bin || oi.location_code || (oi.location_id ? `Location ${oi.location_id}` : '—'),
+            quantity_to_pick: targetQty,
+            quantity_picked: pickedQty,
+            order_summary_id: o.order_id,
+            channel_order_id: o.channel_order_id,
+          });
         }
       } else {
-        items += num(o.total_inventory_quantity) || num(o.quantity) || num(o.total_items) || 0;
+        // Order has no item lines but has item_count
+        items.push({
+          id: null,
+          sku: '—',
+          product_name: `Items for ${o.channel_order_id}`,
+          barcode: null,
+          location: '—',
+          quantity_to_pick: o.item_count,
+          quantity_picked: o.item_count,
+          order_summary_id: o.order_id,
+          channel_order_id: o.channel_order_id,
+        });
       }
     }
   }
 
+  // Fallback total item count
+  let totalItemsCount = items.reduce((acc, it) => acc + (it.quantity_picked || it.quantity_to_pick || 0), 0);
+  if (totalItemsCount === 0) {
+    totalItemsCount = orders.reduce((acc, o) => acc + (o.item_count || 0), 0);
+  }
+  if (totalItemsCount === 0) {
+    totalItemsCount = num(d.total_inventory_quantity) || num(d.total_items) || num(d.item_count) || num(d.quantity) || num(d.total_quantity)
+      || num(header.total_inventory_quantity) || num(header.total_items) || num(header.item_count) || num(header.quantity) || num(header.total_quantity) || 0;
+  }
+
+  return {
+    items,
+    orders: orders.map(({ _raw_invs, ...rest }) => rest),
+    orderIds: [...orderIds],
+    totalItems: totalItemsCount,
+  };
+}
+
+/** Reduce a pick detail body into the metrics we store. */
+function summarisePick(detail, header) {
+  const d = detail?.data || detail || {};
+  const { items: extractedItems, orders: extractedOrders, orderIds, totalItems } = extractPickItemsAndOrders(detail, header);
+
+  const items = totalItems;
+  const invs = Array.isArray(d.pick_inventories) ? d.pick_inventories : [];
+
   // Helm `duration` is ACTIVE time on each action, in SECONDS (decimals). Each
   // action also carries the user_id who performed it, and ITEM_SCAN actions carry
   // the quantity confirmed — so we split BOTH time and items per user.
-  // A Helm "pick" is a WAVE; the true unit of picking work is a single ITEM_SCAN
-  // (one scan of an item line). So alongside total handling time we track the
-  // ITEM_SCAN duration + count — both overall and per user — to report a real
-  // "average time per pick" (item_scan time ÷ number of item scans).
   const tt = Array.isArray(d.time_tracking_data) ? d.time_tracking_data : [];
   let handlingSec = 0, itemScanSec = 0, itemScanCount = 0;
   const byUser = {};   // user_id -> { sec, items, scans, itemSec, itemScans }
@@ -148,9 +250,9 @@ function summarisePick(detail, header) {
   const completed = toDate(d.completed_at || header?.completed_at);
   const elapsedMs = (created && completed) ? Math.max(0, completed.getTime() - created.getTime()) : 0;
 
-  return { items, lineCount: invs.length || orderData.length, orderCount: orders.size, handlingMs, elapsedMs,
+  return { items, lineCount: extractedItems.length || extractedOrders.length || 1, orderCount: orderIds.length || extractedOrders.length || 1, handlingMs, elapsedMs,
            itemScanMs, itemScanCount,
-           pickerId, contributions, created, completed, orderIds: [...orders] };
+           pickerId, contributions, created, completed, orderIds };
 }
 
 /**
@@ -189,15 +291,17 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
                 pickerId: h.assigned_to != null ? String(h.assigned_to) : null, contributions: [], orderIds: [],
                 created: toDate(h.created_at), completed: toDate(h.completed_at) };
 
-      // Only completed picks carry meaningful items/time — fetch detail for those.
+      // Completed or force-completed picks carry meaningful items/time — fetch detail for those.
+      const isCompleted = status === 1 || String(h.status_name || '').toUpperCase() === 'COMPLETED'
+        || Boolean(h.completed_at) || Boolean(h.force_completed) || Boolean(h.is_batch);
+
       let rawToStore = h;
-      if (status === 1) {
+      if (isCompleted) {
         try {
           const detail = await fetchPickDetail(pickId);
           s = summarisePick(detail, h);
           detailed++;
-          // Keep the timing-relevant parts of the detail (NOT the huge order_data
-          // blobs) so we can audit how time/items were derived.
+          // Keep the timing-relevant parts of the detail
           const rawDetailPayload = detail?.data || detail || {};
           rawToStore = {
             header: h,
@@ -212,9 +316,20 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
                   inventory_id: pi.inventory_id, location_id: pi.location_id,
                 }))
               : null,
+            orders_summary: Array.isArray(rawDetailPayload?.order_data)
+              ? rawDetailPayload.order_data.map(o => ({
+                  id: o.id, channel_order_id: o.channel_order_id || o.order_number,
+                  customer: o.customer_name || [o.customer?.first_name, o.customer?.last_name].filter(Boolean).join(' '),
+                  item_count: o.total_inventory_quantity || o.items_count,
+                }))
+              : null,
           };
           if (pickDelayMs) await sleep(pickDelayMs);
         } catch (e) { errors++; console.warn(`[picking-sync] detail ${pickId}: ${e.message}`); }
+      }
+
+      if (s.items === 0) {
+        s.items = num(h.total_inventory_quantity) || num(h.total_items) || num(h.item_count) || num(h.quantity) || num(h.total_quantity) || 0;
       }
 
       const pickerName = s.pickerId ? (userMap.get(s.pickerId) || `User ${s.pickerId}`) : null;
@@ -246,11 +361,9 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
             pick_option=EXCLUDED.pick_option, pick_option_name=EXCLUDED.pick_option_name,
             status=EXCLUDED.status, status_name=EXCLUDED.status_name, warehouse_id=EXCLUDED.warehouse_id,
             created_by=EXCLUDED.created_by, picker_id=EXCLUDED.picker_id, picker_name=EXCLUDED.picker_name,
-            item_count=EXCLUDED.item_count, line_count=EXCLUDED.line_count, order_count=EXCLUDED.order_count,
-            -- Only overwrite timing when this sync actually measured scan time.
-            -- Bulk picks come back with 0 (no scans); keep the previously gap-derived
-            -- estimate instead of wiping it to 0 every sync — otherwise the headline
-            -- average flickers whenever a read lands mid-sync (before the gap pass re-fills).
+            item_count = CASE WHEN EXCLUDED.item_count > 0 THEN EXCLUDED.item_count ELSE picks.item_count END,
+            line_count = CASE WHEN EXCLUDED.line_count > 0 THEN EXCLUDED.line_count ELSE picks.line_count END,
+            order_count = CASE WHEN EXCLUDED.order_count > 0 THEN EXCLUDED.order_count ELSE picks.order_count END,
             handling_ms = CASE WHEN COALESCE(EXCLUDED.handling_ms,0) > 0 THEN EXCLUDED.handling_ms ELSE picks.handling_ms END,
             timing_source = CASE WHEN COALESCE(EXCLUDED.handling_ms,0) > 0 THEN EXCLUDED.timing_source ELSE picks.timing_source END,
             elapsed_ms=EXCLUDED.elapsed_ms,
@@ -292,9 +405,6 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
     }
 
     // ── Gap timing for bulk picks (no scan timing) ────────────────────────────
-    // Time each untimed pick by the gap to the picker's previous pick (using the
-    // order's label/dispatch time), excluding idle gaps over 60 min. Then mirror
-    // the derived time onto its contribution so the leaderboard picks it up.
     const fromDay = from.toISOString().slice(0, 10);
     let gapped = 0;
     try {
@@ -316,7 +426,6 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
            AND (o.label_at - o.prev) <= interval '60 minutes'
         RETURNING p.helm_pick_id`, [fromDay]);
       gapped = g.rows.length;
-      // Mirror the derived handling time onto each pick's (single) contribution.
       if (gapped) {
         await query(`
           UPDATE pick_contributions c
@@ -353,8 +462,8 @@ export async function getPickBreakdown(pickIdOrNumber) {
   let dbPick = null;
   try {
     const { rows } = await query(
-      `SELECT * FROM picks WHERE helm_pick_id = $1 OR pick_number = $1 LIMIT 1`,
-      [pickIdOrNumber]
+      `SELECT * FROM picks WHERE helm_pick_id = $1 OR pick_number = $1 OR pick_number ILIKE $2 LIMIT 1`,
+      [pickIdOrNumber, `%${pickIdOrNumber}%`]
     );
     if (rows.length) {
       dbPick = rows[0];
@@ -365,85 +474,43 @@ export async function getPickBreakdown(pickIdOrNumber) {
   }
 
   // Fetch from Helm API
-  const rawDetail = await fetchPickDetail(helmPickId);
-  const d = rawDetail?.data || rawDetail || {};
-
-  // Extract Orders
-  const rawOrders = Array.isArray(d.order_data)
-    ? d.order_data
-    : (Array.isArray(d.orders) ? d.orders : []);
-
-  const orders = rawOrders.map(o => {
-    const oInvs = Array.isArray(o.order_inventories) ? o.order_inventories : (Array.isArray(o.order_items) ? o.order_items : (Array.isArray(o.items) ? o.items : []));
-    const itemsCount = o.total_inventory_quantity != null
-      ? num(o.total_inventory_quantity)
-      : (oInvs.length > 0 ? oInvs.reduce((acc, x) => acc + (num(x.quantity) || num(x.quantity_picked) || num(x.quantity_to_pick) || 1), 0) : 1);
-
-    return {
-      order_id: o.id != null ? String(o.id) : (o.order_summary_id != null ? String(o.order_summary_id) : null),
-      channel_order_id: o.channel_order_id || o.channel_order_number || o.order_number || o.reference || (o.id ? `Order #${o.id}` : 'Order'),
-      invoice_number: o.invoice_number || null,
-      customer_name: [o.customer?.first_name, o.customer?.last_name].filter(Boolean).join(' ') || o.customer_name || o.shipping_contact_name || o.delivery_name || o.contact_name || null,
-      status: o.status || o.status_name || o.status_label || null,
-      item_count: itemsCount,
-      shipping_method: o.shipping_method || o.courier_service_name || o.delivery_method || null,
-    };
-  });
-
-  // Extract Items
-  const rawInvs = Array.isArray(d.pick_inventories)
-    ? d.pick_inventories
-    : (Array.isArray(d.inventories) ? d.inventories : (Array.isArray(d.items) ? d.items : []));
-
-  let items = [];
-  if (rawInvs.length > 0) {
-    items = rawInvs.map(pi => {
-      const qtyToPick = num(pi.quantity_to_pick) || num(pi.quantity) || num(pi.qty) || num(pi.quantity_picked) || 0;
-      const qtyPicked = pi.quantity_picked != null ? num(pi.quantity_picked) : qtyToPick;
-      return {
-        id: pi.id || pi.inventory_id || null,
-        sku: pi.sku || pi.product_sku || pi.inventory_sku || pi.inventory?.sku || pi.code || '—',
-        product_name: pi.name || pi.product_name || pi.inventory_name || pi.inventory?.name || pi.description || 'Item',
-        barcode: pi.barcode || pi.inventory?.barcode || null,
-        location: pi.location_name || pi.location?.name || pi.bin || pi.location_code || (pi.location_id ? `Location ${pi.location_id}` : '—'),
-        quantity_to_pick: qtyToPick,
-        quantity_picked: qtyPicked,
-        order_summary_id: pi.order_summary_id != null ? String(pi.order_summary_id) : null,
-        picked_by: pi.picked_by != null ? String(pi.picked_by) : null,
-      };
-    });
-  } else if (rawOrders.length > 0) {
-    // Flatten from order_data
-    for (const o of rawOrders) {
-      const oInvs = Array.isArray(o.order_inventories) ? o.order_inventories : (Array.isArray(o.order_items) ? o.order_items : (Array.isArray(o.items) ? o.items : []));
-      for (const oi of oInvs) {
-        const qtyToPick = num(oi.quantity_to_pick) || num(oi.quantity) || num(oi.qty) || num(oi.quantity_picked) || 1;
-        const qtyPicked = oi.quantity_picked != null ? num(oi.quantity_picked) : qtyToPick;
-        items.push({
-          id: oi.id || oi.inventory_id || null,
-          sku: oi.sku || oi.product_sku || oi.inventory_sku || oi.inventory?.sku || oi.code || '—',
-          product_name: oi.name || oi.product_name || oi.inventory_name || oi.inventory?.name || oi.title || oi.description || 'Item',
-          barcode: oi.barcode || oi.inventory?.barcode || null,
-          location: oi.location_name || oi.location?.name || oi.bin || oi.location_code || (oi.location_id ? `Location ${oi.location_id}` : '—'),
-          quantity_to_pick: qtyToPick,
-          quantity_picked: qtyPicked,
-          order_summary_id: o.id != null ? String(o.id) : (o.order_summary_id != null ? String(o.order_summary_id) : null),
-          channel_order_id: o.channel_order_id || o.channel_order_number || o.order_number || null,
-        });
+  let rawDetail = null;
+  try {
+    rawDetail = await fetchPickDetail(helmPickId);
+  } catch (err) {
+    console.warn(`[getPickBreakdown] fetchPickDetail(${helmPickId}) failed:`, err.message);
+    if (dbPick?.pick_number && dbPick.pick_number !== helmPickId) {
+      try {
+        rawDetail = await fetchPickDetail(dbPick.pick_number);
+      } catch (err2) {
+        console.warn(`[getPickBreakdown] fetchPickDetail(${dbPick.pick_number}) failed:`, err2.message);
       }
     }
   }
 
-  const totalItemsCount = items.reduce((acc, it) => acc + (it.quantity_picked || it.quantity_to_pick || 0), 0)
-    || orders.reduce((acc, o) => acc + (o.item_count || 0), 0)
-    || num(d.total_items) || num(d.total_inventory_quantity) || 0;
+  const { items, orders, orderIds, totalItems } = extractPickItemsAndOrders(rawDetail, dbPick || {});
 
-  // Self-heal DB if DB had 0 or mismatched items
-  if (dbPick && totalItemsCount > 0 && (dbPick.item_count === 0 || dbPick.item_count !== totalItemsCount)) {
+  // If still 0 items, check if DB had a raw_payload we can inspect
+  if (totalItems === 0 && dbPick?.raw_payload) {
+    const fromRaw = extractPickItemsAndOrders(dbPick.raw_payload, dbPick);
+    if (fromRaw.totalItems > 0) {
+      items.push(...fromRaw.items);
+      orders.push(...fromRaw.orders);
+    }
+  }
+
+  const finalTotalItems = totalItems
+    || items.reduce((acc, it) => acc + (it.quantity_picked || it.quantity_to_pick || 0), 0)
+    || orders.reduce((acc, o) => acc + (o.item_count || 0), 0)
+    || num(dbPick?.item_count)
+    || 0;
+
+  // Self-heal DB
+  if (dbPick && finalTotalItems > 0 && (dbPick.item_count === 0 || dbPick.item_count !== finalTotalItems)) {
     try {
       await query(
         `UPDATE picks SET item_count = $1, line_count = $2, order_count = $3, updated_at = NOW() WHERE helm_pick_id = $4`,
-        [totalItemsCount, items.length || rawOrders.length, orders.length || dbPick.order_count, helmPickId]
+        [finalTotalItems, items.length || orders.length || 1, orders.length || dbPick.order_count || 1, dbPick.helm_pick_id]
       );
     } catch (e) {
       console.warn('[getPickBreakdown] DB self-heal update error:', e.message);
@@ -451,13 +518,13 @@ export async function getPickBreakdown(pickIdOrNumber) {
   }
 
   return {
-    pick_id: helmPickId,
-    pick_number: d.pick_number || dbPick?.pick_number || helmPickId,
-    status_name: d.status_name || dbPick?.status_name || null,
-    pick_type_name: d.pick_type_name || dbPick?.pick_type_name || null,
-    pick_option_name: d.pick_option_name || dbPick?.pick_option_name || null,
-    total_items: totalItemsCount,
-    total_orders: orders.length || (dbPick?.order_count || 0),
+    pick_id: dbPick?.helm_pick_id || helmPickId,
+    pick_number: dbPick?.pick_number || rawDetail?.pick_number || rawDetail?.data?.pick_number || helmPickId,
+    status_name: dbPick?.status_name || rawDetail?.status_name || rawDetail?.data?.status_name || null,
+    pick_type_name: dbPick?.pick_type_name || rawDetail?.pick_type_name || rawDetail?.data?.pick_type_name || null,
+    pick_option_name: dbPick?.pick_option_name || rawDetail?.pick_option_name || rawDetail?.data?.pick_option_name || null,
+    total_items: finalTotalItems,
+    total_orders: orders.length || (dbPick?.order_count || 1),
     orders,
     items,
   };
