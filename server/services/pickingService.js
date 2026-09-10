@@ -161,12 +161,18 @@ export function extractPickItemsAndOrders(detail, header = {}) {
       const oId = pi.order_summary_id != null ? String(pi.order_summary_id) : (pi.order_id != null ? String(pi.order_id) : null);
       if (oId) orderIds.add(oId);
 
+      const invId = pi.inventory_id != null ? String(pi.inventory_id) : (pi.id != null ? String(pi.id) : null);
+      const locId = pi.location_id != null ? String(pi.location_id) : null;
+      const locName = pi.location_name || pi.location?.name || pi.bin || pi.location_code || null;
+
       return {
         id: pi.id || pi.inventory_id || null,
+        inventory_id: invId,
+        location_id: locId,
         sku: pi.sku || pi.product_sku || pi.inventory_sku || pi.inventory?.sku || pi.code || pi.barcode || '—',
         product_name: pi.name || pi.product_name || pi.inventory_name || pi.inventory?.name || pi.title || pi.description || 'Item',
         barcode: pi.barcode || pi.inventory?.barcode || null,
-        location: pi.location_name || pi.location?.name || pi.bin || pi.location_code || (pi.location_id ? `Location ${pi.location_id}` : '—'),
+        location: locName || (locId ? `Location ${locId}` : '—'),
         quantity_to_pick: targetQty,
         quantity_picked: pickedQty,
         order_summary_id: oId,
@@ -180,12 +186,17 @@ export function extractPickItemsAndOrders(detail, header = {}) {
         for (const oi of o._raw_invs) {
           const targetQty = num(oi.quantity_to_pick) || num(oi.quantity) || num(oi.qty) || num(oi.total_quantity) || num(oi.quantity_picked) || 1;
           const pickedQty = oi.quantity_picked != null && num(oi.quantity_picked) > 0 ? num(oi.quantity_picked) : targetQty;
+          const invId = oi.inventory_id != null ? String(oi.inventory_id) : (oi.id != null ? String(oi.id) : null);
+          const locId = oi.location_id != null ? String(oi.location_id) : null;
+          const locName = oi.location_name || oi.location?.name || oi.bin || oi.location_code || null;
           items.push({
             id: oi.id || oi.inventory_id || null,
+            inventory_id: invId,
+            location_id: locId,
             sku: oi.sku || oi.product_sku || oi.inventory_sku || oi.inventory?.sku || oi.code || oi.barcode || '—',
             product_name: oi.name || oi.product_name || oi.inventory_name || oi.inventory?.name || oi.title || oi.description || 'Item',
             barcode: oi.barcode || oi.inventory?.barcode || null,
-            location: oi.location_name || oi.location?.name || oi.bin || oi.location_code || (oi.location_id ? `Location ${oi.location_id}` : '—'),
+            location: locName || (locId ? `Location ${locId}` : '—'),
             quantity_to_pick: targetQty,
             quantity_picked: pickedQty,
             order_summary_id: o.order_id,
@@ -196,6 +207,8 @@ export function extractPickItemsAndOrders(detail, header = {}) {
         // Order has no item lines but has item_count
         items.push({
           id: null,
+          inventory_id: null,
+          location_id: null,
           sku: '—',
           product_name: `Items for ${o.channel_order_id}`,
           barcode: null,
@@ -589,34 +602,80 @@ export async function getPickBreakdown(pickIdOrNumber) {
     }
   }
 
-  for (const it of items) {
-    const itId = it.id != null ? String(it.id) : null;
-    if (itId && orderInvMap.has(itId)) {
-      const oi = orderInvMap.get(itId);
-      if (oi.sku) it.sku = oi.sku;
-      if (oi.name) it.product_name = oi.name;
-      if (oi.barcode) it.barcode = oi.barcode;
-      if (oi.location) it.location = oi.location;
+  // 1. Check local storage_lines table for SKUs, names, and location names
+  const invIds = items.map(it => it.inventory_id || it.id).filter(Boolean);
+  const locIds = items.map(it => it.location_id).filter(Boolean);
+
+  const storageInvMap = new Map();
+  const storageLocMap = new Map();
+
+  if (invIds.length > 0 || locIds.length > 0) {
+    try {
+      const { rows } = await query(
+        `SELECT helm_inventory_id, sku, name, location_id, location_name
+         FROM storage_lines
+         WHERE helm_inventory_id = ANY($1) OR location_id = ANY($2)`,
+        [invIds.map(String), locIds.map(String)]
+      );
+      for (const r of rows) {
+        if (r.helm_inventory_id) {
+          storageInvMap.set(String(r.helm_inventory_id), r);
+        }
+        if (r.location_id && r.location_name) {
+          storageLocMap.set(String(r.location_id), r.location_name);
+        }
+      }
+    } catch (e) {
+      console.warn('[getPickBreakdown] storage_lines lookup error:', e.message);
     }
-    if (itId && (!it.sku || it.sku === '—' || !it.product_name || it.product_name === 'Item' || !it.location || it.location.startsWith('Location '))) {
+  }
+
+  // 2. Map items with order info, storage_lines, and Helm inventory API
+  for (const it of items) {
+    const itInvId = it.inventory_id != null ? String(it.inventory_id) : (it.id != null ? String(it.id) : null);
+    const itLocId = it.location_id != null ? String(it.location_id) : (it.location && String(it.location).startsWith('Location ') ? String(it.location).replace(/^Location\s*/i, '').trim() : null);
+
+    // Try storage_lines
+    if (itInvId && storageInvMap.has(itInvId)) {
+      const sRow = storageInvMap.get(itInvId);
+      if (sRow.sku && (!it.sku || it.sku === '—')) it.sku = sRow.sku;
+      if (sRow.name && (!it.product_name || it.product_name === 'Item')) it.product_name = sRow.name;
+      if (sRow.location_name && (!it.location || it.location === '—' || it.location.startsWith('Location '))) it.location = sRow.location_name;
+    }
+
+    if (itLocId && storageLocMap.has(itLocId)) {
+      it.location = storageLocMap.get(itLocId);
+    }
+
+    // Try orderInvMap
+    if (itInvId && orderInvMap.has(itInvId)) {
+      const oi = orderInvMap.get(itInvId);
+      if (oi.sku && (!it.sku || it.sku === '—')) it.sku = oi.sku;
+      if (oi.name && (!it.product_name || it.product_name === 'Item')) it.product_name = oi.name;
+      if (oi.barcode && !it.barcode) it.barcode = oi.barcode;
+      if (oi.location && (!it.location || it.location === '—' || it.location.startsWith('Location '))) it.location = oi.location;
+    }
+
+    // Fallback: Resolve via Helm inventory API if still missing SKU, product name, or real bin location
+    const needsInv = (!it.sku || it.sku === '—' || !it.product_name || it.product_name === 'Item' || !it.location || it.location === '—' || it.location.startsWith('Location ') || /^\d+$/.test(it.location));
+    if (itInvId && needsInv) {
       try {
-        const invInfo = await resolveInventory(itId);
+        const invInfo = await resolveInventory(itInvId);
         if (invInfo) {
-          if (invInfo.sku) it.sku = invInfo.sku;
-          if (invInfo.name) it.product_name = invInfo.name;
-          if (invInfo.barcode) it.barcode = invInfo.barcode;
-          if (invInfo.locations && invInfo.locations.length) {
-            const locId = it.location_id != null ? String(it.location_id) : (it.location ? String(it.location).replace(/^Location\s*/i, '') : null);
-            const matched = invInfo.locations.find(l => l.id === locId) || invInfo.locations[0];
-            if (matched?.name) it.location = matched.name;
+          if (invInfo.sku && (!it.sku || it.sku === '—')) it.sku = invInfo.sku;
+          if (invInfo.name && (!it.product_name || it.product_name === 'Item')) it.product_name = invInfo.name;
+          if (invInfo.barcode && !it.barcode) it.barcode = invInfo.barcode;
+          if (invInfo.locations && invInfo.locations.length > 0) {
+            const matched = invInfo.locations.find(l => l.id && String(l.id) === String(itLocId))
+              || (invInfo.locations.length === 1 ? invInfo.locations[0] : null);
+            if (matched?.name) {
+              it.location = matched.name;
+            }
           }
         }
-      } catch {}
-    }
-    // Clean up location formatting
-    if (it.location && /^Location\s*\d+$/i.test(it.location)) {
-      const rawLocNum = it.location.replace(/^Location\s*/i, '');
-      it.location = `Bin ${rawLocNum}`;
+      } catch (err) {
+        console.warn(`[getPickBreakdown] resolveInventory(${itInvId}) failed:`, err.message);
+      }
     }
   }
 
