@@ -15,13 +15,38 @@
  */
 
 import { query } from '../db/index.js';
-import { fetchUsers, fetchPicks, fetchPickDetail, helmConfigured } from './helmClient.js';
+import { fetchUsers, fetchPicks, fetchPickDetail, fetchInventoryDetail, helmConfigured } from './helmClient.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const TYPE_NAME   = { 1: 'Single', 2: 'Multi' };
 const OPTION_NAME = { 1: 'Order by Order', 2: 'Bulk and Sort', 3: 'Tote', 4: 'Bulk' };
 const STATUS_NAME = { 0: 'OPEN', 1: 'COMPLETED', 2: 'CANCELLED', 3: 'INPROGRESS', 4: 'IDLE' };
+
+const inventoryCache = new Map();
+
+export async function resolveInventory(invId) {
+  if (!invId) return null;
+  const idStr = String(invId);
+  if (inventoryCache.has(idStr)) return inventoryCache.get(idStr);
+  try {
+    const raw = await fetchInventoryDetail(idStr);
+    const d = raw?.data || raw || {};
+    const info = {
+      sku: d.sku || d.product_sku || d.code || null,
+      name: d.name || d.product_name || d.description || d.title || null,
+      barcode: d.barcode || null,
+      locations: Array.isArray(d.locations) ? d.locations.map(l => ({
+        id: l.id != null ? String(l.id) : null,
+        name: l.name || l.location_name || l.bin || l.code || null,
+      })) : [],
+    };
+    inventoryCache.set(idStr, info);
+    return info;
+  } catch {
+    return null;
+  }
+}
 
 function toDate(v) {
   if (!v) return null;
@@ -59,7 +84,22 @@ export async function syncUsers() {
  * Handles nested data wrappers, order_data, pick_inventories, lines, and various quantity keys.
  */
 export function extractPickItemsAndOrders(detail, header = {}) {
-  let d = detail?.data || detail || {};
+  let d = detail;
+  if (typeof d === 'string') {
+    try { d = JSON.parse(d); } catch {}
+  }
+  let h = header;
+  if (typeof h === 'string') {
+    try { h = JSON.parse(h); } catch {}
+  }
+  if (!d && h.raw_payload) {
+    let raw = h.raw_payload;
+    if (typeof raw === 'string') {
+      try { raw = JSON.parse(raw); } catch {}
+    }
+    d = raw;
+  }
+  d = d?.data || d || {};
   if (d.pick && typeof d.pick === 'object' && !Array.isArray(d.pick)) {
     d = { ...d, ...d.pick };
   }
@@ -75,10 +115,11 @@ export function extractPickItemsAndOrders(detail, header = {}) {
   // 2. Gather all potential order arrays
   const rawOrders = Array.isArray(d.order_data) ? d.order_data
     : (Array.isArray(d.orders) ? d.orders
+    : (Array.isArray(d.orders_summary) ? d.orders_summary
     : (Array.isArray(d.pick_orders) ? d.pick_orders
     : (Array.isArray(d.order_summaries) ? d.order_summaries
     : (Array.isArray(d.order_details) ? d.order_details
-    : (d.order && typeof d.order === 'object' ? [d.order] : [])))));
+    : (d.order && typeof d.order === 'object' ? [d.order] : []))))));
 
   // Format orders
   const orders = [];
@@ -175,7 +216,34 @@ export function extractPickItemsAndOrders(detail, header = {}) {
   }
   if (totalItemsCount === 0) {
     totalItemsCount = num(d.total_inventory_quantity) || num(d.total_items) || num(d.item_count) || num(d.quantity) || num(d.total_quantity)
-      || num(header.total_inventory_quantity) || num(header.total_items) || num(header.item_count) || num(header.quantity) || num(header.total_quantity) || 0;
+      || num(h.total_inventory_quantity) || num(h.total_items) || num(h.item_count) || num(h.quantity) || num(h.total_quantity) || 0;
+  }
+
+  // If wave header knows item_count > 0 but no line items were returned by Helm API
+  if (items.length === 0 && (num(h.item_count) > 0 || totalItemsCount > 0)) {
+    const totalCount = num(h.item_count) || totalItemsCount;
+    const waveNum = h.pick_number || d.pick_number || 'Wave';
+    orders.push({
+      order_id: h.helm_pick_id || d.id || null,
+      channel_order_id: waveNum,
+      invoice_number: null,
+      customer_name: h.picker_name ? `Picked by ${h.picker_name}` : 'Completed Wave',
+      status: h.status_name || d.status_name || 'Completed',
+      item_count: totalCount,
+      shipping_method: h.pick_type_name || d.pick_type_name || 'Standard',
+    });
+    items.push({
+      id: null,
+      sku: 'WAVE-ITEMS',
+      product_name: `${totalCount} item(s) in wave ${waveNum}`,
+      barcode: null,
+      location: 'Warehouse',
+      quantity_to_pick: totalCount,
+      quantity_picked: totalCount,
+      order_summary_id: h.helm_pick_id || null,
+      channel_order_id: waveNum,
+    });
+    totalItemsCount = totalCount;
   }
 
   return {
@@ -496,6 +564,59 @@ export async function getPickBreakdown(pickIdOrNumber) {
     if (fromRaw.totalItems > 0) {
       items.push(...fromRaw.items);
       orders.push(...fromRaw.orders);
+    }
+  }
+
+  // Enrich items with real SKU, product titles, barcode, and location names
+  const rawOrders = Array.isArray(rawDetail?.order_data) ? rawDetail.order_data
+    : (Array.isArray(rawDetail?.orders) ? rawDetail.orders
+    : (Array.isArray(rawDetail?.data?.order_data) ? rawDetail.data.order_data
+    : (Array.isArray(rawDetail?.data?.orders) ? rawDetail.data.orders : [])));
+
+  const orderInvMap = new Map();
+  for (const o of rawOrders) {
+    const oInvs = Array.isArray(o.order_inventories) ? o.order_inventories : (Array.isArray(o.order_items) ? o.order_items : (Array.isArray(o.items) ? o.items : []));
+    for (const oi of oInvs) {
+      const k = String(oi.inventory_id || oi.id || '');
+      if (k) {
+        orderInvMap.set(k, {
+          sku: oi.sku || oi.product_sku || oi.inventory_sku || oi.code,
+          name: oi.name || oi.product_name || oi.title || oi.description,
+          barcode: oi.barcode,
+          location: oi.location_name || oi.bin || oi.location,
+        });
+      }
+    }
+  }
+
+  for (const it of items) {
+    const itId = it.id != null ? String(it.id) : null;
+    if (itId && orderInvMap.has(itId)) {
+      const oi = orderInvMap.get(itId);
+      if (oi.sku) it.sku = oi.sku;
+      if (oi.name) it.product_name = oi.name;
+      if (oi.barcode) it.barcode = oi.barcode;
+      if (oi.location) it.location = oi.location;
+    }
+    if (itId && (!it.sku || it.sku === '—' || !it.product_name || it.product_name === 'Item' || !it.location || it.location.startsWith('Location '))) {
+      try {
+        const invInfo = await resolveInventory(itId);
+        if (invInfo) {
+          if (invInfo.sku) it.sku = invInfo.sku;
+          if (invInfo.name) it.product_name = invInfo.name;
+          if (invInfo.barcode) it.barcode = invInfo.barcode;
+          if (invInfo.locations && invInfo.locations.length) {
+            const locId = it.location_id != null ? String(it.location_id) : (it.location ? String(it.location).replace(/^Location\s*/i, '') : null);
+            const matched = invInfo.locations.find(l => l.id === locId) || invInfo.locations[0];
+            if (matched?.name) it.location = matched.name;
+          }
+        }
+      } catch {}
+    }
+    // Clean up location formatting
+    if (it.location && /^Location\s*\d+$/i.test(it.location)) {
+      const rawLocNum = it.location.replace(/^Location\s*/i, '');
+      it.location = `Bin ${rawLocNum}`;
     }
   }
 

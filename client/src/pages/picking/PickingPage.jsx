@@ -226,27 +226,50 @@ function PickDetailDrawer({ pickId, pickNumber, currentItemCount }) {
                 </tr>
               </thead>
               <tbody>
-                {items.map((it, idx) => (
-                  <tr key={it.id || idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}>
-                    <td style={{ padding: '6px 6px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontWeight: 600, color: TITLE }}>
-                      {it.sku || '—'}
-                    </td>
-                    <td style={{ padding: '6px 6px', color: '#334155', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.product_name}>
-                      {it.product_name || '—'}
-                    </td>
-                    <td style={{ padding: '6px 6px', color: MUTED }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: '#F1F5F9', padding: '1px 6px', borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
-                        <MapPin size={10} /> {it.location || '—'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '6px 6px', textAlign: 'right', color: MUTED }}>
-                      {it.quantity_to_pick ?? '—'}
-                    </td>
-                    <td style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, color: GREEN }}>
-                      {it.quantity_picked ?? it.quantity_to_pick ?? '—'}
-                    </td>
-                  </tr>
-                ))}
+                {items.map((it, idx) => {
+                  const target = it.quantity_to_pick ?? 1;
+                  const picked = it.quantity_picked ?? target;
+                  const isComplete = picked >= target && target > 0;
+                  const isShort = picked < target;
+                  return (
+                    <tr key={it.id || idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                      <td style={{ padding: '8px 6px', verticalAlign: 'middle' }}>
+                        <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontWeight: 700, color: TITLE, background: '#fff', border: '1px solid #E2E8F0', padding: '2px 7px', borderRadius: 5, fontSize: 11.5, display: 'inline-block' }}>
+                          {it.sku && it.sku !== '—' ? it.sku : (it.barcode || '—')}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 6px', verticalAlign: 'middle', maxWidth: 280 }} title={it.product_name}>
+                        <div style={{ color: TITLE, fontWeight: 600, fontSize: 12.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {it.product_name && it.product_name !== 'Item' ? it.product_name : (it.sku || 'Item')}
+                        </div>
+                        {it.barcode && it.barcode !== it.sku && (
+                          <div style={{ fontSize: 10.5, color: MUTED }}>Barcode: {it.barcode}</div>
+                        )}
+                      </td>
+                      <td style={{ padding: '8px 6px', verticalAlign: 'middle' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#fff', border: '1px solid #E2E8F0', padding: '2px 8px', borderRadius: 5, fontSize: 11.5, fontWeight: 600, color: '#334155' }}>
+                          <MapPin size={11} color={ACCENT} /> {it.location || '—'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 6px', textAlign: 'right', color: MUTED, fontWeight: 600, verticalAlign: 'middle' }}>
+                        {target}
+                      </td>
+                      <td style={{ padding: '8px 6px', textAlign: 'right', verticalAlign: 'middle' }}>
+                        {isComplete ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#047857', padding: '2px 8px', borderRadius: 6, fontSize: 11.5, fontWeight: 700 }}>
+                            <Check size={11} strokeWidth={3} /> {picked}
+                          </span>
+                        ) : isShort ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: '#FEF2F2', border: '1px solid #FECACA', color: '#DC2626', padding: '2px 8px', borderRadius: 6, fontSize: 11.5, fontWeight: 700 }}>
+                            {picked} / {target}
+                          </span>
+                        ) : (
+                          <span style={{ fontWeight: 700, color: TITLE }}>{picked}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

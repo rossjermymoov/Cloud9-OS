@@ -320,7 +320,26 @@ export async function fetchPicks({ from, to, statuses = [], perPage = 100, maxPa
 
 /** Full pick: header + pick_inventories[] + time_tracking_data[]. */
 export async function fetchPickDetail(pickId) {
-  return authedGet(`/picks/${pickId}`);
+  if (!pickId) throw new Error('pickId required');
+  const cleanId = String(pickId).trim();
+  try {
+    return await authedGet(`/picks/${cleanId}`);
+  } catch (err1) {
+    try {
+      return await authedGet(`/pick/${cleanId}`);
+    } catch (err2) {
+      try {
+        const res = await authedGet('/picks', { 'filters[pick_number]': cleanId, limit: 1 });
+        const first = Array.isArray(res?.data) ? res.data[0] : null;
+        if (first?.id) {
+          try { return await authedGet(`/picks/${first.id}`); } catch {}
+          try { return await authedGet(`/pick/${first.id}`); } catch {}
+          return first;
+        }
+      } catch {}
+      throw err1;
+    }
+  }
 }
 
 // ─── Inventory & storage (m³ per client) ─────────────────────────────────────
