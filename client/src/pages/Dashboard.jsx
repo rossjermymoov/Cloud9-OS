@@ -9,6 +9,7 @@ import api from '../api/client';
 import { listNotifications } from '../api/notifications';
 import { volumeTrend, volumeLeaderboard, volumeUnattributed } from '../api/volume';
 import { listCustomers } from '../api/customers';
+import MorningStandupBanner from '../components/standup/MorningStandupBanner';
 
 // ── palette + status config ──────────────────────────────────
 const STATUS_RAG = {
@@ -524,6 +525,9 @@ export default function Dashboard() {
           )}
         </div>
       )}
+
+      {/* 10-Minute Morning Standup Executive Banner */}
+      <MorningStandupBanner />
 
       <div className="c9-rows">
         {/* ROW 1 — stats */}

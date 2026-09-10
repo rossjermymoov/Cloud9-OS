@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import AppShell from './components/layout/AppShell';
 import Dashboard from './pages/Dashboard';
+import MorningStandupPage from './pages/standup/MorningStandupPage';
 import CustomerList from './pages/customers/CustomerList';
 import CustomerRecord from './pages/customers/CustomerRecord';
 import TrackingPage from './pages/tracking/TrackingPage';
@@ -41,6 +42,7 @@ function GatedApp() {
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="standup"         element={<MorningStandupPage />} />
         <Route path="status-board"    element={<StatusBoardPage />} />
         <Route path="statistics"      element={<StatisticsPage />} />
         <Route path="customers">

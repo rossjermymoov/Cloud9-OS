@@ -35,7 +35,8 @@ import queriesRouter        from './routes/queries.js';
 import emailRouter          from './routes/email.js';
 import gmailRouter          from './routes/gmail.js';
 import slaRulesRouter       from './routes/slaRules.js';
-import collectionsRouter    from './routes/collections.js';
+import standupRouter        from './routes/standup.js';
+import { runMorningPrecompute } from './services/standupService.js';
 import { configured as upsConfigured, syncCollectionsTracking } from './services/upsClient.js';
 
 dotenv.config();
@@ -62,6 +63,7 @@ app.use('/api/auth',          authRouter);
 app.use('/api/v1/webhooks',   webhooksRouter);
 app.use('/api/warehouse',     warehouseRouter);   // public, read-only TV board
 
+app.use('/api/standup',        requireAuth, standupRouter);
 app.use('/api/customers',     requireAuth, customersRouter);
 app.use('/api/tracking',      requireAuth, trackingRouter);
 app.use('/api/notifications', requireAuth, notificationsRouter);
@@ -176,10 +178,13 @@ async function start() {
     console.log('📦 Storage footprint sync scheduled for 03:00 UK');
   }
 
-  // New customers — pull fulfilment clients from Helm every morning at 06:00 UK
-  // (adds new customers + refreshes existing fields). Also run shortly after boot.
+  // Morning Standup & New Customers — pre-compute stats & pull fulfilment clients from Helm every morning at 06:00 UK
+  // (ensures the 08:30 management meeting has instant, 100% fresh numbers).
   if (helmConfigured()) {
-    setTimeout(() => syncCustomers().catch(e => console.warn('[customer-sync]', e.message)), 30 * 1000);
+    setTimeout(() => {
+      syncCustomers().catch(e => console.warn('[customer-sync]', e.message));
+      runMorningPrecompute().catch(e => console.warn('[standup-precompute]', e.message));
+    }, 30 * 1000);
     let lastCust = null;
     setInterval(() => {
       const uk = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/London' }));
@@ -187,9 +192,10 @@ async function start() {
       if (uk.getHours() === 6 && uk.getMinutes() === 0 && lastCust !== key) {
         lastCust = key;
         syncCustomers().catch(e => console.warn('[customer-sync]', e.message));
+        runMorningPrecompute().catch(e => console.warn('[standup-precompute]', e.message));
       }
     }, 60 * 1000);
-    console.log('👥 Customer sync scheduled for 06:00 UK');
+    console.log('🌅 Morning Standup 06:00 UK pre-compute & customer sync scheduled');
   }
 
   // UK bank holidays — refresh on boot and weekly (independent of Helm).
