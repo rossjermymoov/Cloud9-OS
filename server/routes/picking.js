@@ -16,7 +16,7 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured } from '../services/helmClient.js';
-import { syncPicks } from '../services/pickingService.js';
+import { syncPicks, getPickBreakdown } from '../services/pickingService.js';
 import { holidaySet, lastWorkingBefore } from '../services/bankHolidayService.js';
 
 const router = express.Router();
@@ -307,6 +307,14 @@ router.get('/picks', async (req, res, next) => {
       ...r,
       seconds: r.time_ms ? Math.round(Number(r.time_ms) / 1000) : null,
     })) });
+  } catch (err) { next(err); }
+});
+
+// Single pick breakdown — exploded list of orders and items for a specific wave
+router.get('/picks/:id/detail', async (req, res, next) => {
+  try {
+    const breakdown = await getPickBreakdown(req.params.id);
+    res.json(breakdown);
   } catch (err) { next(err); }
 });
 

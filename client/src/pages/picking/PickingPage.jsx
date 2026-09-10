@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal, Hand, Clock, Check, Bug } from 'lucide-react';
+import {
+  ScanBarcode, RefreshCw, Gauge, Boxes, Timer, ListChecks, Trophy, Medal,
+  Hand, Clock, Check, Bug, Plus, Minus, Package, ShoppingCart, MapPin, Loader2
+} from 'lucide-react';
 import {
   pickingSummary, pickingDaily, pickingLeaderboard, pickingPicks, pickingFreshness, triggerPickSync,
-  pickingSettings, savePickingDayWindow, pickingDebug,
+  pickingSettings, savePickingDayWindow, pickingDebug, pickingPickDetail,
 } from '../../api/picking';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB';
@@ -127,13 +130,186 @@ function Leaderboard({ rows }) {
   );
 }
 
+function PickDetailDrawer({ pickId, pickNumber, currentItemCount }) {
+  const qc = useQueryClient();
+  const [activeTab, setActiveTab] = useState('items'); // 'items' | 'orders'
+  const { data, isLoading, isError, error, refetch } = useQuery({
+    queryKey: ['picking', 'pick-detail', pickId],
+    queryFn: async () => {
+      const res = await pickingPickDetail(pickId);
+      if (currentItemCount === 0 && res?.total_items > 0) {
+        qc.invalidateQueries({ queryKey: ['picking', 'picks'] });
+        qc.invalidateQueries({ queryKey: ['picking', 'summary'] });
+        qc.invalidateQueries({ queryKey: ['picking', 'daily'] });
+        qc.invalidateQueries({ queryKey: ['picking', 'leaderboard'] });
+      }
+      return res;
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (isLoading) {
+    return (
+      <div style={{ padding: '14px 18px', background: '#F8FAFC', borderRadius: 8, margin: '4px 0 8px', display: 'flex', alignItems: 'center', gap: 10, color: MUTED, fontSize: 12.5 }}>
+        <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+        <span>Loading wave details from Despatch Cloud…</span>
+        <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div style={{ padding: '12px 18px', background: '#FEF2F2', border: '1px solid #FEE2E2', borderRadius: 8, margin: '4px 0 8px', fontSize: 12.5, color: '#DC2626', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span>Failed to load details: {error?.response?.data?.error || error?.message || 'API error'}</span>
+        <button onClick={() => refetch()} style={{ border: '1px solid #DC2626', background: '#fff', color: '#DC2626', padding: '3px 8px', borderRadius: 6, fontSize: 11.5, cursor: 'pointer', fontWeight: 600 }}>Retry</button>
+      </div>
+    );
+  }
+
+  const items = data?.items || [];
+  const orders = data?.orders || [];
+  const totalItems = data?.total_items ?? items.reduce((a, b) => a + (b.quantity_picked || b.quantity_to_pick || 0), 0);
+
+  return (
+    <div style={{ padding: '12px 16px', background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, margin: '4px 0 10px' }}>
+      {/* Header with Tabs and Summary */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, borderBottom: '1px solid #E2E8F0', paddingBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            onClick={() => setActiveTab('items')}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 6, border: 'none',
+              cursor: 'pointer', fontSize: 12, fontWeight: 700,
+              background: activeTab === 'items' ? '#fff' : 'transparent',
+              color: activeTab === 'items' ? ACCENT : MUTED,
+              boxShadow: activeTab === 'items' ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+            }}>
+            <Package size={13} />
+            <span>Items ({items.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('orders')}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 6, border: 'none',
+              cursor: 'pointer', fontSize: 12, fontWeight: 700,
+              background: activeTab === 'orders' ? '#fff' : 'transparent',
+              color: activeTab === 'orders' ? ACCENT : MUTED,
+              boxShadow: activeTab === 'orders' ? '0 1px 2px rgba(0,0,0,0.08)' : 'none',
+            }}>
+            <ShoppingCart size={13} />
+            <span>Orders ({orders.length})</span>
+          </button>
+        </div>
+
+        <div style={{ fontSize: 11.5, color: MUTED, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontWeight: 700, color: TITLE }}>{totalItems} total items</span>
+          <span>across</span>
+          <span style={{ fontWeight: 700, color: TITLE }}>{orders.length} orders</span>
+        </div>
+      </div>
+
+      {/* Items Tab */}
+      {activeTab === 'items' && (
+        items.length === 0 ? (
+          <div style={{ padding: '12px 0', fontSize: 12, color: MUTED, textAlign: 'center' }}>No item details found for this wave.</div>
+        ) : (
+          <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11, borderBottom: '1px solid #E2E8F0' }}>
+                  <th style={{ padding: '4px 6px' }}>SKU</th>
+                  <th style={{ padding: '4px 6px' }}>Product</th>
+                  <th style={{ padding: '4px 6px' }}>Location / Bin</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Target</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Picked</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it, idx) => (
+                  <tr key={it.id || idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}>
+                    <td style={{ padding: '6px 6px', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontWeight: 600, color: TITLE }}>
+                      {it.sku || '—'}
+                    </td>
+                    <td style={{ padding: '6px 6px', color: '#334155', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.product_name}>
+                      {it.product_name || '—'}
+                    </td>
+                    <td style={{ padding: '6px 6px', color: MUTED }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: '#F1F5F9', padding: '1px 6px', borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
+                        <MapPin size={10} /> {it.location || '—'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '6px 6px', textAlign: 'right', color: MUTED }}>
+                      {it.quantity_to_pick ?? '—'}
+                    </td>
+                    <td style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, color: GREEN }}>
+                      {it.quantity_picked ?? it.quantity_to_pick ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+
+      {/* Orders Tab */}
+      {activeTab === 'orders' && (
+        orders.length === 0 ? (
+          <div style={{ padding: '12px 0', fontSize: 12, color: MUTED, textAlign: 'center' }}>No orders found for this wave.</div>
+        ) : (
+          <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11, borderBottom: '1px solid #E2E8F0' }}>
+                  <th style={{ padding: '4px 6px' }}>Order Reference</th>
+                  <th style={{ padding: '4px 6px' }}>Customer</th>
+                  <th style={{ padding: '4px 6px' }}>Status</th>
+                  <th style={{ padding: '4px 6px', textAlign: 'right' }}>Items</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((o, idx) => (
+                  <tr key={o.order_id || idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}>
+                    <td style={{ padding: '6px 6px', fontWeight: 600, color: TITLE }}>
+                      {o.channel_order_id || o.order_id || '—'}
+                    </td>
+                    <td style={{ padding: '6px 6px', color: '#334155' }}>
+                      {o.customer_name || '—'}
+                    </td>
+                    <td style={{ padding: '6px 6px', color: MUTED }}>
+                      <span style={{ background: '#F1F5F9', padding: '1px 6px', borderRadius: 4, fontSize: 11 }}>
+                        {o.status || 'Dispatched'}
+                      </span>
+                    </td>
+                    <td style={{ padding: '6px 6px', textAlign: 'right', fontWeight: 700, color: '#334155' }}>
+                      {o.item_count ?? 1}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 function PicksTable({ rows }) {
+  const [expanded, setExpanded] = useState({});
+
+  const toggleExpand = (id) => {
+    setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
   if (!rows?.length) return <div style={{ fontSize: 12.5, color: '#94A3B8', padding: '24px 0', textAlign: 'center' }}>No completed waves in this period.</div>;
   return (
     <div style={{ maxHeight: 420, overflowY: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
-          <tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5, position: 'sticky', top: 0, background: '#fff' }}>
+          <tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5, position: 'sticky', top: 0, background: '#fff', zIndex: 10 }}>
+            <th style={{ padding: '8px 6px', width: 28 }}></th>
             <th style={{ padding: '8px 6px' }}>Completed</th>
             <th style={{ padding: '8px 6px' }}>Wave</th>
             <th style={{ padding: '8px 6px' }}>Picker</th>
@@ -142,25 +318,52 @@ function PicksTable({ rows }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map(r => (
-            <tr key={r.helm_pick_id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
-              <td style={{ padding: '9px 6px', color: MUTED, whiteSpace: 'nowrap' }}>
-                {r.completed_at ? new Date(r.completed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
-              </td>
-              <td style={{ padding: '9px 6px', color: '#334155', fontWeight: 600 }}>{r.pick_number || r.helm_pick_id}</td>
-              <td style={{ padding: '9px 6px', color: TITLE }}>
-                {r.picker_name || 'Unassigned'}
-                {r.contributor_count > 1 && (
-                  <span title={`${r.contributor_count} pickers worked this wave`}
-                    style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#7C3AED', background: '#F3E8FF', borderRadius: 5, padding: '1px 5px' }}>
-                    +{r.contributor_count - 1}
-                  </span>
+          {rows.map(r => {
+            const isExpanded = !!expanded[r.helm_pick_id];
+            return (
+              <Fragment key={r.helm_pick_id}>
+                <tr style={{ borderTop: '1px solid rgba(0,0,0,0.05)', background: isExpanded ? '#F8FAFC' : 'transparent' }}>
+                  <td style={{ padding: '9px 4px 9px 6px', width: 28 }}>
+                    <button
+                      onClick={() => toggleExpand(r.helm_pick_id)}
+                      title={isExpanded ? "Collapse wave details" : "Explode wave details (items and orders)"}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        width: 22, height: 22, borderRadius: 5, border: '1px solid #CBD5E1',
+                        background: isExpanded ? ACCENT : '#fff',
+                        color: isExpanded ? '#fff' : TITLE,
+                        cursor: 'pointer', padding: 0,
+                        transition: 'all .15s ease',
+                      }}>
+                      {isExpanded ? <Minus size={12} strokeWidth={2.5} /> : <Plus size={12} strokeWidth={2.5} />}
+                    </button>
+                  </td>
+                  <td style={{ padding: '9px 6px', color: MUTED, whiteSpace: 'nowrap' }}>
+                    {r.completed_at ? new Date(r.completed_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}
+                  </td>
+                  <td style={{ padding: '9px 6px', color: '#334155', fontWeight: 600 }}>{r.pick_number || r.helm_pick_id}</td>
+                  <td style={{ padding: '9px 6px', color: TITLE }}>
+                    {r.picker_name || 'Unassigned'}
+                    {r.contributor_count > 1 && (
+                      <span title={`${r.contributor_count} pickers worked this wave`}
+                        style={{ marginLeft: 6, fontSize: 10.5, fontWeight: 700, color: '#7C3AED', background: '#F3E8FF', borderRadius: 5, padding: '1px 5px' }}>
+                        +{r.contributor_count - 1}
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: '9px 6px', textAlign: 'right', color: '#334155' }}>{r.item_count}</td>
+                  <td style={{ padding: '9px 6px', textAlign: 'right', color: r.seconds == null ? '#CBD5E1' : MUTED }}>{fmtDuration(r.seconds)}</td>
+                </tr>
+                {isExpanded && (
+                  <tr>
+                    <td colSpan={6} style={{ padding: '4px 6px 12px 6px', background: '#F8FAFC' }}>
+                      <PickDetailDrawer pickId={r.helm_pick_id} pickNumber={r.pick_number} currentItemCount={r.item_count} />
+                    </td>
+                  </tr>
                 )}
-              </td>
-              <td style={{ padding: '9px 6px', textAlign: 'right', color: '#334155' }}>{r.item_count}</td>
-              <td style={{ padding: '9px 6px', textAlign: 'right', color: r.seconds == null ? '#CBD5E1' : MUTED }}>{fmtDuration(r.seconds)}</td>
-            </tr>
-          ))}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>
