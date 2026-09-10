@@ -10,7 +10,7 @@
  */
 
 import { query } from '../db/index.js';
-import { getPreviousWorkingDay, isWorkingDay } from './bankHolidayService.js';
+import { holidaySet, isWorkingDay, lastWorkingBefore } from './bankHolidayService.js';
 import { syncPicks } from './pickingService.js';
 import { syncRecentOrders, syncStatusBoard } from './slaService.js';
 
@@ -35,13 +35,16 @@ function isoDate(d) {
  */
 export async function getStandupSummary() {
   const now = new Date();
+  const hs = await holidaySet();
+  const todayStr = isoDate(now);
+
   // Get yesterday / last working day
-  const yesterdayDate = await getPreviousWorkingDay(now);
-  const yesterdayStr = isoDate(yesterdayDate);
+  const yesterdayStr = lastWorkingBefore(todayStr, hs);
+  const yesterdayDate = new Date(`${yesterdayStr}T00:00:00Z`);
 
   // Get day before yesterday (for comparison)
-  const priorDate = await getPreviousWorkingDay(yesterdayDate);
-  const priorStr = isoDate(priorDate);
+  const priorStr = lastWorkingBefore(yesterdayStr, hs);
+  const priorDate = new Date(`${priorStr}T00:00:00Z`);
 
   // ── 1. Yesterday Volume & Dispatches ──────────────────────────────────────
   let yesterdayVolume = { parcels: 0, items: 0, picks: 0 };
@@ -377,7 +380,7 @@ export async function getStandupSummary() {
     for (const r of t7Res.rows) {
       const dStr = r.snapshot_date instanceof Date ? isoDate(r.snapshot_date) : String(r.snapshot_date).slice(0, 10);
       const dObj = new Date(dStr);
-      if (isWorkingDay(dObj)) {
+      if (isWorkingDay(dStr, hs)) {
         trend7d.push({
           date: dStr,
           day: dObj.toLocaleDateString('en-GB', { weekday: 'short' }),
