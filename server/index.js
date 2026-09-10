@@ -35,6 +35,7 @@ import queriesRouter        from './routes/queries.js';
 import emailRouter          from './routes/email.js';
 import gmailRouter          from './routes/gmail.js';
 import slaRulesRouter       from './routes/slaRules.js';
+import collectionsRouter    from './routes/collections.js';
 import standupRouter        from './routes/standup.js';
 import { runMorningPrecompute } from './services/standupService.js';
 import { configured as upsConfigured, syncCollectionsTracking } from './services/upsClient.js';
