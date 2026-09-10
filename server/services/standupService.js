@@ -325,24 +325,58 @@ export async function getStandupSummary() {
   // ── 7. Red Flags & Commercial Anomalies ──────────────────────────────────
   const redFlags = [];
 
-  // A. Carrier Exceptions
+  // A. Priority Carrier Exceptions (On hold, Customs hold, Return to sender)
   try {
     const exRes = await query(
-      `SELECT COUNT(*)::int as exceptions
+      `SELECT status, COUNT(*)::int as count
        FROM parcels
-       WHERE status IN ('failed_delivery', 'exception', 'damaged', 'on_hold')`
+       WHERE status IN ('on_hold', 'customs_hold', 'returned')
+         AND (status <> 'returned' OR last_event_at >= NOW() - interval '7 days')
+         AND NOT (lower(COALESCE(courier_code,'')) IN ('royal_mail','royalmail') OR COALESCE(courier_name,'') ILIKE '%royal mail%')
+       GROUP BY status`
     );
-    const excCount = parseInt(exRes.rows[0]?.exceptions) || 0;
-    if (excCount > 0) {
+
+    const countsByStatus = {};
+    for (const r of exRes.rows) countsByStatus[r.status] = r.count;
+
+    // 1. On Hold
+    const onHold = countsByStatus['on_hold'] || 0;
+    if (onHold > 0) {
       redFlags.push({
-        type: 'carrier_exceptions',
-        severity: excCount > 20 ? 'red' : 'amber',
-        title: `${excCount} Carrier Delivery Exception${excCount === 1 ? '' : 's'}`,
-        description: 'Parcels currently encountering delivery failures, address issues or carrier damage.',
-        link: '/tracking?status=exception',
+        type: 'on_hold',
+        severity: onHold > 10 ? 'red' : 'amber',
+        title: `${onHold} Parcel${onHold === 1 ? '' : 's'} on Carrier Hold`,
+        description: 'Parcels currently held by carrier depot requiring address or contact intervention.',
+        link: '/tracking?status=on_hold',
       });
     }
-  } catch {}
+
+    // 2. Customs Hold
+    const customsHold = countsByStatus['customs_hold'] || 0;
+    if (customsHold > 0) {
+      redFlags.push({
+        type: 'customs_hold',
+        severity: customsHold > 5 ? 'red' : 'amber',
+        title: `${customsHold} Parcel${customsHold === 1 ? '' : 's'} on Customs Hold`,
+        description: 'International shipments currently held at border customs for documentation or duty inspection.',
+        link: '/tracking?status=customs_hold',
+      });
+    }
+
+    // 3. Return to Sender (RTS)
+    const returned = countsByStatus['returned'] || 0;
+    if (returned > 0) {
+      redFlags.push({
+        type: 'returned',
+        severity: returned > 10 ? 'red' : 'amber',
+        title: `${returned} Return to Sender (RTS) Parcel${returned === 1 ? '' : 's'}`,
+        description: 'Parcels returned by carrier in the last 7 days due to failed delivery attempts or refusal.',
+        link: '/tracking?status=returned',
+      });
+    }
+  } catch (e) {
+    console.warn('[standupService] exception flags error:', e.message);
+  }
 
   // B. Open Queries / SLA Breaches
   try {
