@@ -12,7 +12,7 @@
 import { query } from '../db/index.js';
 import { holidaySet, isWorkingDay, lastWorkingBefore } from './bankHolidayService.js';
 import { syncPicks } from './pickingService.js';
-import { syncRecentOrders, syncStatusBoard } from './slaService.js';
+import { syncRecentOrders, syncStatusBoard, evaluateOrders, todayLondonYmd } from './slaService.js';
 
 // Default standard courier cut-off times (Europe/London time)
 const DEFAULT_CUTOFFS = [
@@ -26,8 +26,9 @@ const DEFAULT_CUTOFFS = [
 ];
 
 function isoDate(d) {
+  if (typeof d === 'string') return d.slice(0, 10);
   const p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${d.getDate()}`;
 }
 
 /**
@@ -35,8 +36,8 @@ function isoDate(d) {
  */
 export async function getStandupSummary() {
   const now = new Date();
-  const hs = await holidaySet();
-  const todayStr = isoDate(now);
+  const hs = await holidaySet().catch(() => new Set());
+  const todayStr = todayLondonYmd();
 
   // Get yesterday / last working day
   const yesterdayStr = lastWorkingBefore(todayStr, hs);
@@ -51,17 +52,18 @@ export async function getStandupSummary() {
   let priorVolume = { parcels: 0, items: 0, picks: 0 };
 
   try {
+    // 1A. Customer volume snapshots (primary source of truth)
     const vRes = await query(
-      `SELECT snapshot_date,
-              SUM(parcels) as parcels,
-              SUM(items) as items
+      `SELECT snapshot_date::text AS d,
+              SUM(parcel_count)::int AS parcels,
+              SUM(item_count)::int AS items
        FROM customer_volume_snapshots
        WHERE snapshot_date IN ($1, $2)
        GROUP BY snapshot_date`,
       [yesterdayStr, priorStr]
     );
     for (const r of vRes.rows) {
-      const sDate = r.snapshot_date instanceof Date ? isoDate(r.snapshot_date) : String(r.snapshot_date).slice(0, 10);
+      const sDate = String(r.d).slice(0, 10);
       if (sDate === yesterdayStr) {
         yesterdayVolume.parcels = parseInt(r.parcels) || 0;
         yesterdayVolume.items = parseInt(r.items) || 0;
@@ -70,25 +72,54 @@ export async function getStandupSummary() {
         priorVolume.items = parseInt(r.items) || 0;
       }
     }
+
+    // 1B. Fallback: Shipments table
+    if (yesterdayVolume.parcels === 0) {
+      const shRes = await query(
+        `SELECT dispatched_at::text as d,
+                SUM(parcel_count)::int as parcels,
+                SUM(item_count)::int as items
+         FROM shipments
+         WHERE dispatched_at IN ($1, $2) AND cancelled = false
+         GROUP BY dispatched_at`,
+        [yesterdayStr, priorStr]
+      );
+      for (const r of shRes.rows) {
+        const sDate = String(r.d).slice(0, 10);
+        if (sDate === yesterdayStr && yesterdayVolume.parcels === 0) {
+          yesterdayVolume.parcels = parseInt(r.parcels) || 0;
+          yesterdayVolume.items = parseInt(r.items) || 0;
+        } else if (sDate === priorStr && priorVolume.parcels === 0) {
+          priorVolume.parcels = parseInt(r.parcels) || 0;
+          priorVolume.items = parseInt(r.items) || 0;
+        }
+      }
+    }
+
+    // 1C. Fallback: Orders table
+    if (yesterdayVolume.parcels === 0) {
+      const oRes = await query(
+        `SELECT (dispatched_at AT TIME ZONE 'Europe/London')::date::text as d,
+                COUNT(*)::int as parcels,
+                COALESCE(SUM(item_count), COUNT(*))::int as items
+         FROM orders
+         WHERE (dispatched_at AT TIME ZONE 'Europe/London')::date IN ($1, $2)
+         GROUP BY 1`,
+        [yesterdayStr, priorStr]
+      );
+      for (const r of oRes.rows) {
+        const sDate = String(r.d).slice(0, 10);
+        if (sDate === yesterdayStr && yesterdayVolume.parcels === 0) {
+          yesterdayVolume.parcels = parseInt(r.parcels) || 0;
+          yesterdayVolume.items = parseInt(r.items) || 0;
+        } else if (sDate === priorStr && priorVolume.parcels === 0) {
+          priorVolume.parcels = parseInt(r.parcels) || 0;
+          priorVolume.items = parseInt(r.items) || 0;
+        }
+      }
+    }
   } catch (e) {
     console.warn('[standupService] volume lookup error:', e.message);
-  }
-
-  // Fallback: Check orders table if customer_volume_snapshots has no data for yesterday
-  if (yesterdayVolume.parcels === 0) {
-    try {
-      const oRes = await query(
-        `SELECT COUNT(*) as parcels,
-                COALESCE(SUM(total_items), COUNT(*)) as items
-         FROM orders
-         WHERE DATE(dispatched_at AT TIME ZONE 'Europe/London') = $1`,
-        [yesterdayStr]
-      );
-      if (oRes.rows.length) {
-        yesterdayVolume.parcels = parseInt(oRes.rows[0].parcels) || 0;
-        yesterdayVolume.items = parseInt(oRes.rows[0].items) || 0;
-      }
-    } catch {}
   }
 
   // ── 2. Picking & Labor Productivity for Yesterday ────────────────────────
@@ -106,9 +137,9 @@ export async function getStandupSummary() {
     // Pick contributions for yesterday
     const cRes = await query(
       `SELECT picker_name, user_id,
-              SUM(items) as items,
-              SUM(handling_ms) as handling_ms,
-              COUNT(DISTINCT helm_pick_id) as picks
+              SUM(items)::int as items,
+              SUM(handling_ms)::bigint as handling_ms,
+              COUNT(DISTINCT helm_pick_id)::int as picks
        FROM pick_contributions
        WHERE pick_date = $1
        GROUP BY picker_name, user_id
@@ -140,13 +171,31 @@ export async function getStandupSummary() {
       });
     }
 
+    // Fallback: If no contributions, check picks table directly
+    if (totPicks === 0) {
+      const pRes = await query(
+        `SELECT COUNT(*)::int as count,
+                COALESCE(SUM(item_count), 0)::int as items,
+                COALESCE(SUM(handling_ms), 0)::bigint as handling_ms,
+                COUNT(DISTINCT picker_id)::int as pickers
+         FROM picks
+         WHERE status = 1 AND pick_date = $1`,
+        [yesterdayStr]
+      );
+      if (pRes.rows.length) {
+        totPicks = parseInt(pRes.rows[0].count) || 0;
+        totItems = parseInt(pRes.rows[0].items) || 0;
+        totMs = parseInt(pRes.rows[0].handling_ms) || 0;
+      }
+    }
+
     const totalHours = Math.round((totMs / 3600000) * 10) / 10;
     const overallRate = totalHours > 0.1 ? Math.round(totItems / totalHours) : null;
 
     pickingStats = {
       totalPicks: totPicks,
       totalItems: totItems,
-      activePickers: pickers.length,
+      activePickers: pickers.length || (totPicks > 0 ? 1 : 0),
       totalHours,
       avgItemsPerHour: overallRate,
       topPicker: pickers.length > 0 ? pickers[0] : null,
@@ -160,24 +209,23 @@ export async function getStandupSummary() {
   // ── 3. On-Time Dispatch SLA for Yesterday ────────────────────────────────
   let onTimeStats = { rate: null, breached: 0, total: 0 };
   try {
-    const slaRes = await query(
-      `SELECT
-         COUNT(*) as total,
-         COUNT(*) FILTER (WHERE on_time = true) as on_time_count,
-         COUNT(*) FILTER (WHERE on_time = false) as breach_count
-       FROM sla_order_performance
-       WHERE DATE(order_date) = $1`,
-      [yesterdayStr]
-    );
-    if (slaRes.rows.length && parseInt(slaRes.rows[0].total) > 0) {
-      const tot = parseInt(slaRes.rows[0].total);
-      const ot = parseInt(slaRes.rows[0].on_time_count) || 0;
-      const br = parseInt(slaRes.rows[0].breach_count) || 0;
+    const slaEval = await evaluateOrders({ fromYmd: yesterdayStr, toYmd: yesterdayStr });
+    if (slaEval && slaEval.resolved > 0) {
       onTimeStats = {
-        rate: Math.round((ot / tot) * 1000) / 10,
-        breached: br,
-        total: tot,
+        rate: slaEval.on_time_pct,
+        breached: slaEval.breaches,
+        total: slaEval.resolved,
       };
+    } else {
+      // Check 7d SLA if yesterday had no orders received
+      const sla7d = await evaluateOrders({ fromYmd: priorStr, toYmd: yesterdayStr });
+      if (sla7d && sla7d.resolved > 0) {
+        onTimeStats = {
+          rate: sla7d.on_time_pct,
+          breached: sla7d.breaches,
+          total: sla7d.resolved,
+        };
+      }
     }
   } catch (e) {
     console.warn('[standupService] SLA stats error:', e.message);
@@ -195,17 +243,18 @@ export async function getStandupSummary() {
 
   try {
     const sbRes = await query(
-      `SELECT status_name, order_count, updated_at
-       FROM status_board_snapshots
-       ORDER BY updated_at DESC`
-    );
+      `SELECT name as status_name, count as order_count, updated_at
+       FROM status_board_counts
+       ORDER BY count DESC`
+    ).catch(() => ({ rows: [] }));
+
     if (sbRes.rows.length) {
       liveQueue.lastUpdated = sbRes.rows[0].updated_at;
       for (const r of sbRes.rows) {
         const name = String(r.status_name || '').toLowerCase();
         const cnt = parseInt(r.order_count) || 0;
         liveQueue.totalOpen += cnt;
-        if (name.includes('unalloc') || name.includes('open') || name.includes('pending')) {
+        if (name.includes('unalloc') || name.includes('open') || name.includes('pending') || name.includes('import')) {
           liveQueue.unallocated += cnt;
         } else if (name.includes('pick')) {
           liveQueue.picking += cnt;
@@ -225,7 +274,7 @@ export async function getStandupSummary() {
   let totalPendingCollection = 0;
   try {
     const tRes = await query(
-      `SELECT courier_name, COUNT(*) as count
+      `SELECT courier_name, COUNT(*)::int as count
        FROM tracking_parcels
        WHERE status = 'booked'
        GROUP BY courier_name
@@ -281,8 +330,8 @@ export async function getStandupSummary() {
   let inboundPOs = { count: 0, pendingBoxes: 0, pendingUnits: 0 };
   try {
     const poRes = await query(
-      `SELECT COUNT(*) as count,
-              COALESCE(SUM(total_quantity), 0) as units
+      `SELECT COUNT(*)::int as count,
+              COALESCE(SUM(total_quantity), 0)::int as units
        FROM purchase_orders
        WHERE status_name NOT ILIKE '%complete%' AND status_name NOT ILIKE '%cancel%'`
     );
@@ -300,7 +349,7 @@ export async function getStandupSummary() {
   // A. Carrier Exceptions
   try {
     const exRes = await query(
-      `SELECT COUNT(*) as exceptions
+      `SELECT COUNT(*)::int as exceptions
        FROM tracking_parcels
        WHERE status IN ('failed_delivery', 'exception', 'damaged', 'on_hold')`
     );
@@ -319,8 +368,8 @@ export async function getStandupSummary() {
   // B. Open Queries / SLA Breaches
   try {
     const qRes = await query(
-      `SELECT COUNT(*) as open_count,
-              COUNT(*) FILTER (WHERE sla_status = 'breached') as breached_count
+      `SELECT COUNT(*)::int as open_count,
+              COUNT(*) FILTER (WHERE sla_status = 'breached')::int as breached_count
        FROM queries
        WHERE status NOT IN ('resolved', 'closed')`
     );
@@ -348,7 +397,7 @@ export async function getStandupSummary() {
   // C. Unattributed Parcels Warning
   try {
     const uRes = await query(
-      `SELECT COUNT(*) as total_parcels
+      `SELECT COUNT(*)::int as total_parcels
        FROM tracking_parcels
        WHERE (customer_id IS NULL OR client_id IS NULL)
          AND created_at >= NOW() - interval '14 days'`
@@ -369,21 +418,21 @@ export async function getStandupSummary() {
   const trend7d = [];
   try {
     const t7Res = await query(
-      `SELECT snapshot_date,
-              SUM(parcels) as parcels,
-              SUM(items) as items
+      `SELECT snapshot_date::text AS d,
+              SUM(parcel_count)::int as parcels,
+              SUM(item_count)::int as items
        FROM customer_volume_snapshots
-       WHERE snapshot_date >= CURRENT_DATE - interval '14 days'
+       WHERE snapshot_date >= CURRENT_DATE - interval '21 days'
        GROUP BY snapshot_date
        ORDER BY snapshot_date ASC`
     );
     for (const r of t7Res.rows) {
-      const dStr = r.snapshot_date instanceof Date ? isoDate(r.snapshot_date) : String(r.snapshot_date).slice(0, 10);
-      const dObj = new Date(dStr);
+      const dStr = String(r.d).slice(0, 10);
+      const dObj = new Date(`${dStr}T00:00:00Z`);
       if (isWorkingDay(dStr, hs)) {
         trend7d.push({
           date: dStr,
-          day: dObj.toLocaleDateString('en-GB', { weekday: 'short' }),
+          day: dObj.toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' }),
           parcels: parseInt(r.parcels) || 0,
           items: parseInt(r.items) || 0,
         });
@@ -402,7 +451,7 @@ export async function getStandupSummary() {
   return {
     yesterday: {
       dateStr: yesterdayStr,
-      dateFormatted: yesterdayDate.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' }),
+      dateFormatted: yesterdayDate.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' }),
       parcels: yesterdayVolume.parcels,
       items: yesterdayVolume.items,
       picks: yesterdayVolume.picks,

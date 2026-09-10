@@ -45,7 +45,7 @@ export default function MorningStandupBanner() {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 14.5, fontWeight: 800, letterSpacing: -0.3 }}>
-                Morning Standup Briefing
+                Morning standup
               </span>
               <span style={{
                 fontSize: 10.5, fontWeight: 700, background: 'rgba(16,185,129,0.2)',

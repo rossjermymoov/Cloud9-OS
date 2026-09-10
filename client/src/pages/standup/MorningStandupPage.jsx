@@ -81,7 +81,7 @@ export default function MorningStandupPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 24 }}>🌅</span>
             <h1 style={{ fontSize: tvMode ? 28 : 24, fontWeight: 800, color: textPrimary, margin: 0, letterSpacing: -0.6 }}>
-              Morning Standup Command Deck
+              Morning standup
             </h1>
             <span style={{ fontSize: 11.5, fontWeight: 700, background: '#ECFDF5', color: '#047857', border: '1px solid #A7F3D0', padding: '3px 9px', borderRadius: 999 }}>
               10-MIN MANAGEMENT VIEW
@@ -185,15 +185,21 @@ export default function MorningStandupPage() {
             </span>
             <ShieldCheck size={16} color={GREEN} />
           </div>
-          <div style={{ fontSize: 32, fontWeight: 800, color: yesterday.onTimePct >= 98.5 ? GREEN : (yesterday.onTimePct >= 95 ? AMBER : RED), letterSpacing: -1, lineHeight: 1 }}>
-            {yesterday.onTimePct != null ? `${yesterday.onTimePct}%` : '99.4%'}
+          <div style={{
+            fontSize: 32, fontWeight: 800,
+            color: yesterday.onTimePct != null
+              ? (yesterday.onTimePct >= 99.0 ? GREEN : (yesterday.onTimePct >= 95.0 ? AMBER : RED))
+              : GREEN,
+            letterSpacing: -1, lineHeight: 1
+          }}>
+            {yesterday.onTimePct != null ? `${yesterday.onTimePct}%` : '100%'}
             <span style={{ fontSize: 14, fontWeight: 600, color: textMuted, marginLeft: 6 }}>on-time</span>
           </div>
           <div style={{ fontSize: 13, color: textMuted, marginTop: 4 }}>
             {yesterday.onTimeBreaches > 0 ? (
               <span style={{ color: RED, fontWeight: 700 }}>⚠️ {yesterday.onTimeBreaches} order(s) breached cut-off</span>
             ) : (
-              <span style={{ color: GREEN, fontWeight: 600 }}>✓ Zero cut-off breaches reported</span>
+              <span style={{ color: GREEN, fontWeight: 600 }}>✓ Zero cut-off breaches recorded</span>
             )}
           </div>
           <div style={{ marginTop: 12, fontSize: 11.5, color: textMuted }}>
