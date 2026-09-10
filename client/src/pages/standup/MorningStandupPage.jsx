@@ -232,50 +232,67 @@ export default function MorningStandupPage() {
         </div>
       </div>
 
-      {/* ── Middle Grid: Cut-offs & Carrier Radar + Red Flags ─────────────── */}
+      {/* ── Middle Grid: Warehouse Pipeline & Courier Collections + Red Flags ─────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 16, marginBottom: 20 }}>
-        {/* CARRIER COLLECTION COUNTDOWN RADAR */}
+        {/* COURIER COLLECTIONS & WAREHOUSE PIPELINE */}
         <div style={{ background: cardBg, border: cardBorder, borderRadius: 14, padding: 20, boxShadow: SHADOW }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Truck size={17} color={ACCENT} />
-              <span style={{ fontSize: 14.5, fontWeight: 700, color: textPrimary }}>Carrier Cut-Off Deadlines &amp; Collections</span>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: textPrimary }}>Couriers Awaiting Collection Today</span>
             </div>
-            <span style={{ fontSize: 11.5, color: textMuted }}>Live for today</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: TITLE }}>
+              {(todayLive.totalPendingParcels || 0).toLocaleString()} <span style={{ fontWeight: 500, color: textMuted, fontSize: 11 }}>parcels booked</span>
+            </span>
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {cutoffs.map((c, i) => {
-              const isUrgent = !c.isPast && c.diffMins <= 90;
-              return (
+          {(!todayLive.courierCollections || todayLive.courierCollections.length === 0) ? (
+            <div style={{ padding: '24px 0', textAlign: 'center', fontSize: 12.5, color: textMuted }}>
+              No parcels currently awaiting courier collection scan.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              {todayLive.courierCollections.slice(0, 6).map((c, i) => (
                 <div key={i} style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '10px 12px', borderRadius: 9, background: statBg,
-                  border: isUrgent ? '1px solid #FCD34D' : '1px solid rgba(0,0,0,0.03)'
+                  padding: '9px 12px', borderRadius: 8, background: statBg,
+                  border: '1px solid rgba(0,0,0,0.03)'
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{
-                      width: 8, height: 8, borderRadius: '50%',
-                      background: c.isPast ? '#94A3B8' : (isUrgent ? AMBER : GREEN)
-                    }} />
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: textPrimary }}>{c.courier}</div>
-                      <div style={{ fontSize: 11, color: textMuted }}>Cut-off: <strong>{c.cutoff}</strong></div>
-                    </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: ACCENT }} />
+                    <span style={{ fontSize: 13, fontWeight: 600, color: textPrimary }}>{c.courier}</span>
                   </div>
-
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: textPrimary }}>
-                      {c.pending} <span style={{ fontSize: 11, fontWeight: 500, color: textMuted }}>parcels</span>
-                    </div>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: c.isPast ? '#94A3B8' : (isUrgent ? AMBER : GREEN) }}>
-                      {c.remainingLabel}
-                    </div>
-                  </div>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: textPrimary }}>
+                    {c.count.toLocaleString()} <span style={{ fontSize: 11, fontWeight: 500, color: textMuted }}>parcels</span>
+                  </span>
                 </div>
-              );
-            })}
-          </div>
+              ))}
+            </div>
+          )}
+
+          {/* Quick link to floor status board */}
+          {todayLive.livePipeline?.length > 0 && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: textMuted, textTransform: 'uppercase' }}>
+                  Live Helm Floor Pipeline
+                </span>
+                <span onClick={() => navigate('/status-board')} style={{ fontSize: 11.5, color: ACCENT, cursor: 'pointer', fontWeight: 600 }}>
+                  View status board →
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {todayLive.livePipeline.slice(0, 5).map((p, idx) => (
+                  <span key={idx} style={{
+                    fontSize: 11.5, fontWeight: 600, padding: '3px 8px', borderRadius: 6,
+                    background: statBg, color: textPrimary, border: '1px solid rgba(0,0,0,0.05)'
+                  }}>
+                    {p.name}: <strong>{p.count}</strong>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* MORNING ACTION ITEMS & RED FLAGS */}

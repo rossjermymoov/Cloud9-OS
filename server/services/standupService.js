@@ -5,7 +5,7 @@
  * morning management meeting:
  * 1. Yesterday's Output & Financial Volume (Parcels, Items, On-Time %)
  * 2. Warehouse Labor Health (Items/Hr, Active Pickers, Top Performer)
- * 3. Live Floor Queue & Carrier Cut-off Deadlines (Royal Mail, DPD, DHL, etc.)
+ * 3. Live Floor Queue & Pending Courier Collections
  * 4. Executive Red Flags & Commercial Anomalies (Surging queries, volume drops, carrier exceptions)
  */
 
@@ -14,21 +14,32 @@ import { holidaySet, isWorkingDay, lastWorkingBefore } from './bankHolidayServic
 import { syncPicks } from './pickingService.js';
 import { syncRecentOrders, syncStatusBoard, evaluateOrders, todayLondonYmd } from './slaService.js';
 
-// Default standard courier cut-off times (Europe/London time)
-const DEFAULT_CUTOFFS = [
-  { courier: 'Royal Mail', code: 'royalmail', cutoff: '15:30' },
-  { courier: 'DPD', code: 'dpd', cutoff: '16:30' },
-  { courier: 'DHL', code: 'dhl', cutoff: '17:00' },
-  { courier: 'Evri', code: 'evri', cutoff: '16:00' },
-  { courier: 'UPS', code: 'ups', cutoff: '17:30' },
-  { courier: 'FedEx', code: 'fedex', cutoff: '16:30' },
-  { courier: 'Yodel', code: 'yodel', cutoff: '16:00' },
-];
-
 function isoDate(d) {
   if (typeof d === 'string') return d.slice(0, 10);
   const p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${d.getDate()}`;
+}
+
+function safeItemsPerHour({ timedPicks, timedItems, totalMs }) {
+  if (!timedPicks || Number(totalMs) <= 0) return null;
+  const hours = Number(totalMs) / 3600000;
+  if (hours <= 0) return null;
+  const rate = Math.round(Number(timedItems) / hours);
+  return rate > 0 && rate < 100000 ? rate : null;
+}
+
+function prettyCourier(name) {
+  const n = (name || '').toLowerCase().replace(/[^a-z]/g, '');
+  if (n.includes('royalmail')) return 'Royal Mail';
+  if (n.includes('dpd')) return 'DPD';
+  if (n.includes('dhl')) return 'DHL';
+  if (n.includes('yodel')) return 'Yodel';
+  if (n.includes('evri') || n.includes('hermes')) return 'Evri';
+  if (n.includes('parcelforce')) return 'Parcelforce';
+  if (n.includes('ups')) return 'UPS';
+  if (n.includes('fedex')) return 'FedEx';
+  if (n.includes('amazon')) return 'Amazon';
+  return name || 'Other Couriers';
 }
 
 /**
@@ -134,42 +145,55 @@ export async function getStandupSummary() {
   };
 
   try {
-    // Pick contributions for yesterday
+    // Exact same query as picking leaderboard
     const cRes = await query(
-      `SELECT picker_name, user_id,
-              SUM(items)::int as items,
-              SUM(handling_ms)::bigint as handling_ms,
-              COUNT(DISTINCT helm_pick_id)::int as picks
-       FROM pick_contributions
-       WHERE pick_date = $1
-       GROUP BY picker_name, user_id
-       ORDER BY items DESC`,
+      `SELECT
+        user_id,
+        COALESCE(MAX(picker_name), 'Unknown')                         AS picker_name,
+        COUNT(DISTINCT helm_pick_id)::int                             AS picks,
+        COALESCE(SUM(items),0)::int                                   AS items,
+        COALESCE(SUM(handling_ms),0)::bigint                          AS total_ms,
+        COUNT(DISTINCT helm_pick_id) FILTER (WHERE handling_ms > 0)::int  AS timed_picks,
+        COALESCE(SUM(items) FILTER (WHERE handling_ms > 0),0)::int    AS timed_items,
+        COALESCE(SUM(item_scan_ms),0)::bigint                         AS item_scan_ms,
+        COALESCE(SUM(item_scan_count),0)::int                         AS item_scan_count
+      FROM pick_contributions
+      WHERE pick_date = $1
+      GROUP BY user_id
+      ORDER BY items DESC`,
       [yesterdayStr]
     );
 
     let totItems = 0;
     let totMs = 0;
     let totPicks = 0;
-    const pickers = [];
+    let totTimedPicks = 0;
+    let totTimedItems = 0;
 
-    for (const r of cRes.rows) {
+    const pickers = cRes.rows.map(r => {
       const items = parseInt(r.items) || 0;
-      const ms = parseInt(r.handling_ms) || 0;
+      const ms = parseInt(r.total_ms) || 0;
       const pCount = parseInt(r.picks) || 0;
+      const tPicks = parseInt(r.timed_picks) || 0;
+      const tItems = parseInt(r.timed_items) || 0;
+
       totItems += items;
       totMs += ms;
       totPicks += pCount;
+      totTimedPicks += tPicks;
+      totTimedItems += tItems;
 
-      const hrs = ms / 3600000;
-      const rate = hrs > 0.05 ? Math.round(items / hrs) : null;
-      pickers.push({
+      const rate = safeItemsPerHour({ timedPicks: tPicks, timedItems: tItems, totalMs: ms });
+      const hours = +(ms / 3600000).toFixed(1);
+
+      return {
         name: r.picker_name || `User ${r.user_id}`,
         items,
         picks: pCount,
         rate,
-        hours: Math.round(hrs * 10) / 10,
-      });
-    }
+        hours,
+      };
+    });
 
     // Fallback: If no contributions, check picks table directly
     if (totPicks === 0) {
@@ -177,7 +201,8 @@ export async function getStandupSummary() {
         `SELECT COUNT(*)::int as count,
                 COALESCE(SUM(item_count), 0)::int as items,
                 COALESCE(SUM(handling_ms), 0)::bigint as handling_ms,
-                COUNT(DISTINCT picker_id)::int as pickers
+                COUNT(*) FILTER (WHERE handling_ms > 0)::int as timed_picks,
+                COALESCE(SUM(item_count) FILTER (WHERE handling_ms > 0), 0)::int as timed_items
          FROM picks
          WHERE status = 1 AND pick_date = $1`,
         [yesterdayStr]
@@ -186,11 +211,13 @@ export async function getStandupSummary() {
         totPicks = parseInt(pRes.rows[0].count) || 0;
         totItems = parseInt(pRes.rows[0].items) || 0;
         totMs = parseInt(pRes.rows[0].handling_ms) || 0;
+        totTimedPicks = parseInt(pRes.rows[0].timed_picks) || 0;
+        totTimedItems = parseInt(pRes.rows[0].timed_items) || 0;
       }
     }
 
     const totalHours = Math.round((totMs / 3600000) * 10) / 10;
-    const overallRate = totalHours > 0.1 ? Math.round(totItems / totalHours) : null;
+    const overallRate = safeItemsPerHour({ timedPicks: totTimedPicks, timedItems: totTimedItems, totalMs: totMs });
 
     pickingStats = {
       totalPicks: totPicks,
@@ -199,7 +226,7 @@ export async function getStandupSummary() {
       totalHours,
       avgItemsPerHour: overallRate,
       topPicker: pickers.length > 0 ? pickers[0] : null,
-      leaderboard: pickers.slice(0, 5),
+      leaderboard: pickers.slice(0, 6),
     };
     yesterdayVolume.picks = totPicks;
   } catch (e) {
@@ -231,47 +258,32 @@ export async function getStandupSummary() {
     console.warn('[standupService] SLA stats error:', e.message);
   }
 
-  // ── 4. Today's Live Floor Queue & Status Board ───────────────────────────
-  let liveQueue = {
-    unallocated: 0,
-    picking: 0,
-    packing: 0,
-    readyToShip: 0,
-    totalOpen: 0,
-    lastUpdated: null,
-  };
-
+  // ── 4. Today's Live Floor Queue & Status Pipeline ─────────────────────────
+  let livePipeline = [];
+  let totalOpenOrders = 0;
   try {
     const sbRes = await query(
-      `SELECT name as status_name, count as order_count, updated_at
+      `SELECT status_id, name as status_name, count::int as order_count
        FROM status_board_counts
+       WHERE count > 0
        ORDER BY count DESC`
     ).catch(() => ({ rows: [] }));
 
     if (sbRes.rows.length) {
-      liveQueue.lastUpdated = sbRes.rows[0].updated_at;
-      for (const r of sbRes.rows) {
-        const name = String(r.status_name || '').toLowerCase();
-        const cnt = parseInt(r.order_count) || 0;
-        liveQueue.totalOpen += cnt;
-        if (name.includes('unalloc') || name.includes('open') || name.includes('pending') || name.includes('import')) {
-          liveQueue.unallocated += cnt;
-        } else if (name.includes('pick')) {
-          liveQueue.picking += cnt;
-        } else if (name.includes('pack')) {
-          liveQueue.packing += cnt;
-        } else if (name.includes('ready') || name.includes('booked')) {
-          liveQueue.readyToShip += cnt;
-        }
-      }
+      livePipeline = sbRes.rows.map(r => ({
+        statusId: r.status_id,
+        name: r.status_name,
+        count: r.order_count,
+      }));
+      totalOpenOrders = livePipeline.reduce((a, b) => a + b.count, 0);
     }
   } catch (e) {
-    console.warn('[standupService] live queue error:', e.message);
+    console.warn('[standupService] live pipeline error:', e.message);
   }
 
-  // ── 5. Pending Carrier Collections & Cut-off Deadlines ───────────────────
-  let carrierPending = [];
-  let totalPendingCollection = 0;
+  // ── 5. Couriers Awaiting Collection Today ─────────────────────────────────
+  let courierCollections = [];
+  let totalPendingParcels = 0;
   try {
     const tRes = await query(
       `SELECT courier_name, COUNT(*)::int as count
@@ -280,50 +292,16 @@ export async function getStandupSummary() {
        GROUP BY courier_name
        ORDER BY count DESC`
     );
-    const countMap = new Map();
     for (const r of tRes.rows) {
       const c = parseInt(r.count) || 0;
-      totalPendingCollection += c;
-      const key = String(r.courier_name || '').toLowerCase().replace(/[^a-z]/g, '');
-      countMap.set(key, c);
+      totalPendingParcels += c;
+      courierCollections.push({
+        courier: prettyCourier(r.courier_name),
+        count: c,
+      });
     }
-
-    // Compute cutoff countdowns
-    const ukTimeStr = now.toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit', hour12: false });
-    const [curH, curM] = ukTimeStr.split(':').map(Number);
-    const curMinutes = curH * 60 + curM;
-
-    carrierPending = DEFAULT_CUTOFFS.map(c => {
-      const [coH, coM] = c.cutoff.split(':').map(Number);
-      const coMinutes = coH * 60 + coM;
-      const diffMins = coMinutes - curMinutes;
-      const isPast = diffMins <= 0;
-
-      let matchedCount = 0;
-      for (const [k, v] of countMap.entries()) {
-        if (k.includes(c.code)) matchedCount += v;
-      }
-
-      let remainingLabel = '';
-      if (isPast) {
-        remainingLabel = 'Cutoff passed';
-      } else {
-        const hrs = Math.floor(diffMins / 60);
-        const mins = diffMins % 60;
-        remainingLabel = hrs > 0 ? `${hrs}h ${mins}m left` : `${mins}m left`;
-      }
-
-      return {
-        courier: c.courier,
-        cutoff: c.cutoff,
-        pending: matchedCount,
-        isPast,
-        remainingLabel,
-        diffMins,
-      };
-    }).sort((a, b) => a.diffMins - b.diffMins);
   } catch (e) {
-    console.warn('[standupService] carrier pending error:', e.message);
+    console.warn('[standupService] courier collections error:', e.message);
   }
 
   // ── 6. Expected Inbound Purchase Orders ──────────────────────────────────
@@ -464,9 +442,10 @@ export async function getStandupSummary() {
       pickingStats,
     },
     todayLive: {
-      totalPendingCollection,
-      carrierCutoffs: carrierPending,
-      liveQueue,
+      totalPendingParcels,
+      courierCollections,
+      livePipeline,
+      totalOpenOrders,
       inboundPOs,
       currentTimeUk: now.toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }),
     },
