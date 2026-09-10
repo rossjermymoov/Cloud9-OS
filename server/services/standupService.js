@@ -281,22 +281,23 @@ export async function getStandupSummary() {
     console.warn('[standupService] live pipeline error:', e.message);
   }
 
-  // ── 5. Couriers Awaiting Collection Today ─────────────────────────────────
+  // ── 5. Couriers Awaiting Collection Today (Excludes Royal Mail) ───────────
   let courierCollections = [];
   let totalPendingParcels = 0;
   try {
     const tRes = await query(
-      `SELECT courier_name, COUNT(*)::int as count
-       FROM tracking_parcels
+      `SELECT courier_name, courier_code, COUNT(*)::int as count
+       FROM parcels
        WHERE status = 'booked'
-       GROUP BY courier_name
+         AND NOT (lower(COALESCE(courier_code,'')) IN ('royal_mail','royalmail') OR COALESCE(courier_name,'') ILIKE '%royal mail%')
+       GROUP BY courier_name, courier_code
        ORDER BY count DESC`
     );
     for (const r of tRes.rows) {
       const c = parseInt(r.count) || 0;
       totalPendingParcels += c;
       courierCollections.push({
-        courier: prettyCourier(r.courier_name),
+        courier: prettyCourier(r.courier_name || r.courier_code),
         count: c,
       });
     }
@@ -328,7 +329,7 @@ export async function getStandupSummary() {
   try {
     const exRes = await query(
       `SELECT COUNT(*)::int as exceptions
-       FROM tracking_parcels
+       FROM parcels
        WHERE status IN ('failed_delivery', 'exception', 'damaged', 'on_hold')`
     );
     const excCount = parseInt(exRes.rows[0]?.exceptions) || 0;
@@ -376,7 +377,7 @@ export async function getStandupSummary() {
   try {
     const uRes = await query(
       `SELECT COUNT(*)::int as total_parcels
-       FROM tracking_parcels
+       FROM parcels
        WHERE (customer_id IS NULL OR client_id IS NULL)
          AND created_at >= NOW() - interval '14 days'`
     );

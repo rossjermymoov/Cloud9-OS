@@ -220,7 +220,7 @@ export default function MorningStandupPage() {
             <span style={{ fontSize: 14, fontWeight: 600, color: textMuted, marginLeft: 6 }}>orders active</span>
           </div>
           <div style={{ fontSize: 13, color: textMuted, marginTop: 4 }}>
-            <strong>{todayLive.totalPendingCollection || 0}</strong> parcels booked awaiting carrier collection
+            <strong>{todayLive.totalPendingParcels || 0}</strong> parcels booked awaiting courier pickup scan (excl. Royal Mail)
           </div>
           <div style={{ marginTop: 12, fontSize: 11.5, color: textMuted }}>
             {todayLive.inboundPOs?.count > 0 ? (
@@ -239,10 +239,10 @@ export default function MorningStandupPage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Truck size={17} color={ACCENT} />
-              <span style={{ fontSize: 14.5, fontWeight: 700, color: textPrimary }}>Couriers Awaiting Collection Today</span>
+              <span style={{ fontSize: 14.5, fontWeight: 700, color: textPrimary }}>Couriers Awaiting Collection Scan Today</span>
             </div>
-            <span style={{ fontSize: 12, fontWeight: 700, color: TITLE }}>
-              {(todayLive.totalPendingParcels || 0).toLocaleString()} <span style={{ fontWeight: 500, color: textMuted, fontSize: 11 }}>parcels booked</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: textPrimary }}>
+              {(todayLive.totalPendingParcels || 0).toLocaleString()} <span style={{ fontWeight: 500, color: textMuted, fontSize: 11 }}>parcels (excl. Royal Mail)</span>
             </span>
           </div>
 
