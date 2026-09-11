@@ -298,22 +298,31 @@ function summarisePick(detail, header) {
   // Helm `duration` is ACTIVE time on each action, in SECONDS (decimals). Each
   // action also carries the user_id who performed it, and ITEM_SCAN actions carry
   // the quantity confirmed — so we split BOTH time and items per user.
-  const tt = Array.isArray(d.time_tracking_data) ? d.time_tracking_data : [];
+  const tt = Array.isArray(d.time_tracking_data) ? d.time_tracking_data
+    : (Array.isArray(d.time_tracking) ? d.time_tracking
+    : (Array.isArray(d.pick?.time_tracking_data) ? d.pick.time_tracking_data
+    : (Array.isArray(d.timetracking) ? d.timetracking
+    : (Array.isArray(d.time_trackings) ? d.time_trackings : []))));
   let handlingSec = 0, itemScanSec = 0, itemScanCount = 0;
   const byUser = {};   // user_id -> { sec, items, scans, itemSec, itemScans, name }
   for (const t of tt) {
-    const durVal = parseFloat(t.duration); const dur = isNaN(durVal) ? 0 : durVal;
+    const durVal = parseFloat(t.duration || t.time_spent || t.seconds || t.elapsed);
+    const dur = isNaN(durVal) ? 0 : durVal;
     handlingSec += dur;
-    const isItemScan = String(t.type || '').toUpperCase() === 'ITEM_SCAN';
+    const isItemScan = String(t.type || t.action || '').toUpperCase().includes('ITEM')
+      || String(t.type || t.action || '').toUpperCase().includes('SCAN')
+      || Boolean(t.quantity);
     if (isItemScan) { itemScanSec += dur; itemScanCount += 1; }
-    const uid = t.user_id != null ? String(t.user_id) : (t.user?.id != null ? String(t.user.id) : null);
+    const uid = t.user_id != null ? String(t.user_id)
+      : (t.user?.id != null ? String(t.user.id)
+      : (t.picked_by != null ? String(t.picked_by) : null));
     if (!uid) continue;
     const uName = t.user_name || t.user?.name || [t.user?.first_name, t.user?.last_name].filter(Boolean).join(' ').trim() || null;
     const b = (byUser[uid] ||= { sec: 0, items: 0, scans: 0, itemSec: 0, itemScans: 0, name: uName });
     if (!b.name && uName) b.name = uName;
     b.sec += dur; b.scans += 1;
     if (isItemScan) { b.itemSec += dur; b.itemScans += 1; }
-    const q = parseInt(t.quantity);
+    const q = parseInt(t.quantity || t.qty || t.items_count);
     if (!isNaN(q) && q > 0) b.items += q;
   }
   const handlingMs    = Math.round(handlingSec * 1000);
