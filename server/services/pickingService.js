@@ -62,23 +62,39 @@ function num(v) { const n = parseInt(v); return isNaN(n) ? 0 : n; }
 
 /** Refresh the warehouse-user name map. Returns Map<helm_user_id, name>. */
 export async function syncUsers() {
-  const users = await fetchUsers();
   const map = new Map();
-  for (const u of users) {
-    const id = u.id != null ? String(u.id) : null;
-    if (!id) continue;
-    const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
-      || u.name || u.full_name || u.username || u.email || `User ${id}`;
-    map.set(id, name);
-    await query(`
-      INSERT INTO helm_users (helm_user_id, name, email, role, active, raw_payload)
-      VALUES ($1,$2,$3,$4,$5,$6)
-      ON CONFLICT (helm_user_id) DO UPDATE SET
-        name = EXCLUDED.name, email = EXCLUDED.email, role = EXCLUDED.role,
-        active = EXCLUDED.active, raw_payload = EXCLUDED.raw_payload, updated_at = NOW()
-    `, [id, name, u.email || null, u.role || u.role_name || null,
-        u.status == null ? true : (u.status === 1 || u.status === true || u.active === true),
-        JSON.stringify(u).slice(0, 50000)]);
+  // Preload all known users from local DB first so we always have name mappings
+  try {
+    const existing = await query(`SELECT helm_user_id, name FROM helm_users WHERE name IS NOT NULL AND name NOT LIKE 'User %'`);
+    for (const row of existing.rows) {
+      if (row.helm_user_id && row.name) {
+        map.set(String(row.helm_user_id), row.name);
+      }
+    }
+  } catch (e) {
+    console.warn('[picking-sync] preload users error:', e.message);
+  }
+
+  try {
+    const users = await fetchUsers();
+    for (const u of (Array.isArray(users) ? users : [])) {
+      const id = u.id != null ? String(u.id) : null;
+      if (!id) continue;
+      const name = [u.first_name, u.last_name].filter(Boolean).join(' ').trim()
+        || u.name || u.full_name || u.username || u.email || map.get(id) || `User ${id}`;
+      map.set(id, name);
+      await query(`
+        INSERT INTO helm_users (helm_user_id, name, email, role, active, raw_payload)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (helm_user_id) DO UPDATE SET
+          name = EXCLUDED.name, email = EXCLUDED.email, role = EXCLUDED.role,
+          active = EXCLUDED.active, raw_payload = EXCLUDED.raw_payload, updated_at = NOW()
+      `, [id, name, u.email || null, u.role || u.role_name || null,
+          u.status == null ? true : (u.status === 1 || u.status === true || u.active === true),
+          JSON.stringify(u).slice(0, 50000)]);
+    }
+  } catch (err) {
+    console.warn('[picking-sync] fetchUsers failed, using cached users:', err.message);
   }
   return map;
 }
@@ -284,15 +300,17 @@ function summarisePick(detail, header) {
   // the quantity confirmed — so we split BOTH time and items per user.
   const tt = Array.isArray(d.time_tracking_data) ? d.time_tracking_data : [];
   let handlingSec = 0, itemScanSec = 0, itemScanCount = 0;
-  const byUser = {};   // user_id -> { sec, items, scans, itemSec, itemScans }
+  const byUser = {};   // user_id -> { sec, items, scans, itemSec, itemScans, name }
   for (const t of tt) {
     const durVal = parseFloat(t.duration); const dur = isNaN(durVal) ? 0 : durVal;
     handlingSec += dur;
     const isItemScan = String(t.type || '').toUpperCase() === 'ITEM_SCAN';
     if (isItemScan) { itemScanSec += dur; itemScanCount += 1; }
-    const uid = t.user_id != null ? String(t.user_id) : null;
+    const uid = t.user_id != null ? String(t.user_id) : (t.user?.id != null ? String(t.user.id) : null);
     if (!uid) continue;
-    const b = (byUser[uid] ||= { sec: 0, items: 0, scans: 0, itemSec: 0, itemScans: 0 });
+    const uName = t.user_name || t.user?.name || [t.user?.first_name, t.user?.last_name].filter(Boolean).join(' ').trim() || null;
+    const b = (byUser[uid] ||= { sec: 0, items: 0, scans: 0, itemSec: 0, itemScans: 0, name: uName });
+    if (!b.name && uName) b.name = uName;
     b.sec += dur; b.scans += 1;
     if (isItemScan) { b.itemSec += dur; b.itemScans += 1; }
     const q = parseInt(t.quantity);
@@ -306,6 +324,7 @@ function summarisePick(detail, header) {
   const contributions = Object.entries(byUser).map(([user_id, b]) => ({
     user_id, items: b.items, handlingMs: Math.round(b.sec * 1000), scans: b.scans,
     itemScanMs: Math.round(b.itemSec * 1000), itemScanCount: b.itemScans,
+    picker_name: b.name || null,
   }));
   const scannedItems = contributions.reduce((a, c) => a + c.items, 0);
   if (items > scannedItems && contributions.length) {
@@ -315,8 +334,11 @@ function summarisePick(detail, header) {
 
   // Primary picker = most items, then most time. Falls back to assigned / created / line user.
   let pickerId = null;
+  let headerPickerName = header?.picker_name || header?.assigned_to_name || header?.user_name || d.picker_name || d.assigned_to_name || null;
   if (contributions.length) {
-    pickerId = [...contributions].sort((a, b) => (b.items - a.items) || (b.handlingMs - a.handlingMs))[0].user_id;
+    const primary = [...contributions].sort((a, b) => (b.items - a.items) || (b.handlingMs - a.handlingMs))[0];
+    pickerId = primary.user_id;
+    if (!headerPickerName && primary.picker_name) headerPickerName = primary.picker_name;
   } else {
     const assigned = header?.assigned_to ?? d.assigned_to
       ?? header?.picker_id ?? d.picker_id
@@ -349,7 +371,7 @@ function summarisePick(detail, header) {
       // Fallback: estimate 30s per item picked if elapsed is huge (e.g. wave open for days) or missing
       fallbackMs = Math.min(items * 30 * 1000, 45 * 60 * 1000);
     }
-    contributions.push({ user_id: pickerId, items, handlingMs: fallbackMs, scans: items, itemScanMs: fallbackMs, itemScanCount: items });
+    contributions.push({ user_id: pickerId, items, handlingMs: fallbackMs, scans: items, itemScanMs: fallbackMs, itemScanCount: items, picker_name: headerPickerName });
     if (handlingMs === 0) handlingMs = fallbackMs;
   } else if (contributions.length > 0 && handlingMs === 0 && items > 0) {
     // If contributions exist but had 0 duration logged
@@ -369,7 +391,7 @@ function summarisePick(detail, header) {
 
   return { items, lineCount: extractedItems.length || extractedOrders.length || 1, orderCount: orderIds.length || extractedOrders.length || 1, handlingMs, elapsedMs,
            itemScanMs, itemScanCount,
-           pickerId, contributions, created, completed, orderIds };
+           pickerId, pickerName: headerPickerName, contributions, created, completed, orderIds };
 }
 
 /**
@@ -449,7 +471,7 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
         s.items = num(h.total_inventory_quantity) || num(h.total_items) || num(h.item_count) || num(h.quantity) || num(h.total_quantity) || 0;
       }
 
-      const pickerName = s.pickerId ? (userMap.get(s.pickerId) || `User ${s.pickerId}`) : null;
+      const pickerName = s.pickerName || (s.pickerId ? userMap.get(s.pickerId) : null);
       const pickDate = (s.completed || s.created || null);
       const pickDateStr = pickDate ? toLondonYmd(pickDate) : null;
 
@@ -477,7 +499,9 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
             pick_number=EXCLUDED.pick_number, pick_type=EXCLUDED.pick_type, pick_type_name=EXCLUDED.pick_type_name,
             pick_option=EXCLUDED.pick_option, pick_option_name=EXCLUDED.pick_option_name,
             status=EXCLUDED.status, status_name=EXCLUDED.status_name, warehouse_id=EXCLUDED.warehouse_id,
-            created_by=EXCLUDED.created_by, picker_id=EXCLUDED.picker_id, picker_name=EXCLUDED.picker_name,
+            created_by=EXCLUDED.created_by,
+            picker_id = CASE WHEN EXCLUDED.picker_id IS NOT NULL THEN EXCLUDED.picker_id ELSE picks.picker_id END,
+            picker_name = CASE WHEN EXCLUDED.picker_name IS NOT NULL AND EXCLUDED.picker_name NOT LIKE 'User %' THEN EXCLUDED.picker_name ELSE COALESCE(picks.picker_name, EXCLUDED.picker_name) END,
             item_count = CASE WHEN EXCLUDED.item_count > 0 THEN EXCLUDED.item_count ELSE picks.item_count END,
             line_count = CASE WHEN EXCLUDED.line_count > 0 THEN EXCLUDED.line_count ELSE picks.line_count END,
             order_count = CASE WHEN EXCLUDED.order_count > 0 THEN EXCLUDED.order_count ELSE picks.order_count END,
@@ -507,12 +531,15 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
         // Replace this pick's per-user contributions (split time + items by picker).
         await query(`DELETE FROM pick_contributions WHERE helm_pick_id = $1`, [pickId]);
         for (const c of s.contributions) {
-          const cName = userMap.get(c.user_id) || `User ${c.user_id}`;
+          const cName = (c.picker_name && !c.picker_name.startsWith('User '))
+            ? c.picker_name
+            : (userMap.get(c.user_id) || `User ${c.user_id}`);
           await query(`
             INSERT INTO pick_contributions (helm_pick_id, user_id, picker_name, items, handling_ms, scans, pick_date, warehouse_id, item_scan_ms, item_scan_count)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             ON CONFLICT (helm_pick_id, user_id) DO UPDATE SET
-              picker_name=EXCLUDED.picker_name, items=EXCLUDED.items,
+              picker_name = CASE WHEN EXCLUDED.picker_name IS NOT NULL AND EXCLUDED.picker_name NOT LIKE 'User %' THEN EXCLUDED.picker_name ELSE COALESCE(pick_contributions.picker_name, EXCLUDED.picker_name) END,
+              items=EXCLUDED.items,
               handling_ms = CASE WHEN COALESCE(EXCLUDED.handling_ms,0) > 0 THEN EXCLUDED.handling_ms ELSE pick_contributions.handling_ms END,
               scans=EXCLUDED.scans, pick_date=EXCLUDED.pick_date, warehouse_id=EXCLUDED.warehouse_id,
               item_scan_ms=EXCLUDED.item_scan_ms, item_scan_count=EXCLUDED.item_scan_count, updated_at=NOW()

@@ -145,21 +145,27 @@ export async function getStandupSummary() {
   };
 
   try {
-    // Exact same query as picking leaderboard
+    // Exact same query as picking leaderboard, joined with helm_users for robust human names
     const cRes = await query(
       `SELECT
-        user_id,
-        COALESCE(MAX(picker_name), 'Unknown')                         AS picker_name,
-        COUNT(DISTINCT helm_pick_id)::int                             AS picks,
-        COALESCE(SUM(items),0)::int                                   AS items,
-        COALESCE(SUM(handling_ms),0)::bigint                          AS total_ms,
-        COUNT(DISTINCT helm_pick_id) FILTER (WHERE handling_ms > 0)::int  AS timed_picks,
-        COALESCE(SUM(items) FILTER (WHERE handling_ms > 0),0)::int    AS timed_items,
-        COALESCE(SUM(item_scan_ms),0)::bigint                         AS item_scan_ms,
-        COALESCE(SUM(item_scan_count),0)::int                         AS item_scan_count
-      FROM pick_contributions
-      WHERE pick_date = $1
-      GROUP BY user_id
+        c.user_id,
+        COALESCE(
+          NULLIF(u.name, ''),
+          NULLIF(MAX(c.picker_name) FILTER (WHERE c.picker_name NOT LIKE 'User %'), ''),
+          MAX(c.picker_name),
+          'Unknown'
+        )                                                             AS picker_name,
+        COUNT(DISTINCT c.helm_pick_id)::int                           AS picks,
+        COALESCE(SUM(c.items),0)::int                                 AS items,
+        COALESCE(SUM(c.handling_ms),0)::bigint                        AS total_ms,
+        COUNT(DISTINCT c.helm_pick_id) FILTER (WHERE c.handling_ms > 0)::int  AS timed_picks,
+        COALESCE(SUM(c.items) FILTER (WHERE c.handling_ms > 0),0)::int        AS timed_items,
+        COALESCE(SUM(c.item_scan_ms),0)::bigint                       AS item_scan_ms,
+        COALESCE(SUM(c.item_scan_count),0)::int                       AS item_scan_count
+      FROM pick_contributions c
+      LEFT JOIN helm_users u ON u.helm_user_id = c.user_id
+      WHERE c.pick_date = $1
+      GROUP BY c.user_id, u.name
       ORDER BY items DESC`,
       [yesterdayStr]
     );
