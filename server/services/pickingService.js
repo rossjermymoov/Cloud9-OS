@@ -54,6 +54,10 @@ function toDate(v) {
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
 }
+function toLondonYmd(d) {
+  if (!d || !(d instanceof Date) || isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+}
 function num(v) { const n = parseInt(v); return isNaN(n) ? 0 : n; }
 
 /** Refresh the warehouse-user name map. Returns Map<helm_user_id, name>. */
@@ -309,20 +313,30 @@ function summarisePick(detail, header) {
     top.items += (items - scannedItems);
   }
 
-  // Primary picker = most items, then most time. Falls back to the assigned user
-  // (or the per-line picked_by) when there's no time-tracking at all.
+  // Primary picker = most items, then most time. Falls back to assigned / created / line user.
   let pickerId = null;
   if (contributions.length) {
     pickerId = [...contributions].sort((a, b) => (b.items - a.items) || (b.handlingMs - a.handlingMs))[0].user_id;
   } else {
     const assigned = header?.assigned_to ?? d.assigned_to
-      ?? invs.find(pi => pi.picked_by != null)?.picked_by;
+      ?? header?.picker_id ?? d.picker_id
+      ?? invs.find(pi => pi.picked_by != null)?.picked_by
+      ?? header?.created_by ?? d.created_by
+      ?? header?.user_id ?? d.user_id;
     pickerId = assigned != null ? String(assigned) : null;
   }
 
   const created   = toDate(d.created_at || header?.created_at);
   const completed = toDate(d.completed_at || header?.completed_at);
   const elapsedMs = (created && completed) ? Math.max(0, completed.getTime() - created.getTime()) : 0;
+
+  // If contributions exist from time tracking or scans but recorded 0 items (or items were short),
+  // make sure all wave items are allocated to the active pickers
+  const contribTotalItems = contributions.reduce((acc, c) => acc + c.items, 0);
+  if (contributions.length > 0 && items > contribTotalItems) {
+    const diff = items - contribTotalItems;
+    contributions[0].items += diff;
+  }
 
   // If a completed pick has NO per-scan timing, credit its picker with elapsed time
   // (capped to realistic maximum 45m or 30s/item) so pickers who pick in bulk/manual
@@ -437,7 +451,7 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
 
       const pickerName = s.pickerId ? (userMap.get(s.pickerId) || `User ${s.pickerId}`) : null;
       const pickDate = (s.completed || s.created || null);
-      const pickDateStr = pickDate ? pickDate.toISOString().slice(0, 10) : null;
+      const pickDateStr = pickDate ? toLondonYmd(pickDate) : null;
 
       // label_at = when this pick's last order was dispatched (shipment label made).
       // Used to time bulk picks that have no scan timing (see gap pass below).
