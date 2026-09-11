@@ -17,7 +17,7 @@ import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured } from '../services/helmClient.js';
 import { syncPicks, getPickBreakdown } from '../services/pickingService.js';
-import { holidaySet, lastWorkingBefore } from '../services/bankHolidayService.js';
+import { holidaySet, lastWorkingBefore, addDaysStr } from '../services/bankHolidayService.js';
 
 const router = express.Router();
 
@@ -59,16 +59,20 @@ function rangeFor(periodRaw, dateRaw, hs = null) {
   const custom = parseCustomDate(dateRaw);
   if (custom) return { period: 'custom', from: isoDay(custom), to: isoDay(custom) };
   const period = ['day', 'yesterday', 'week', 'month', 'quarter'].includes(periodRaw) ? periodRaw : 'week';
-  const today = new Date();
-  // 'yesterday' = the last WORKING day (skips weekends + UK bank holidays), so on
-  // a Monday it lands on Friday. Falls back to calendar yesterday without holidays.
+  const todayLondon = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  
+  // 'yesterday' = the last WORKING day (skips weekends + UK bank holidays)
   if (period === 'yesterday') {
-    const lw = hs ? lastWorkingBefore(isoDay(today), hs) : isoDay(new Date(today.getTime() - 86400000));
+    const lw = hs ? lastWorkingBefore(todayLondon, hs) : addDaysStr(todayLondon, -1);
     return { period, from: lw, to: lw };
   }
+  if (period === 'day') {
+    return { period, from: todayLondon, to: todayLondon };
+  }
+  
+  const today = new Date(`${todayLondon}T12:00:00Z`);
   let from = new Date(today), to = new Date(today);
-  if (period === 'day')          { /* today only */ }
-  else if (period === 'week')    { from.setDate(today.getDate() - 6); }
+  if (period === 'week')    { from.setDate(today.getDate() - 6); }
   else if (period === 'month')   { from.setDate(today.getDate() - 29); }
   else if (period === 'quarter') { from.setDate(today.getDate() - 89); }
   return { period, from: isoDay(from), to: isoDay(to) };

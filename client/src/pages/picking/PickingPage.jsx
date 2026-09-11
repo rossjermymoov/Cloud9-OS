@@ -41,9 +41,10 @@ function Card({ children, style }) {
 }
 
 function fmtDuration(secs) {
-  if (secs == null) return '—';
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60), s = secs % 60;
+  if (secs == null || isNaN(secs)) return '—';
+  const total = Math.round(Number(secs));
+  if (total < 60) return `${total}s`;
+  const m = Math.floor(total / 60), s = total % 60;
   return s ? `${m}m ${s}s` : `${m}m`;
 }
 
