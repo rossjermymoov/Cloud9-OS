@@ -320,16 +320,38 @@ function summarisePick(detail, header) {
     pickerId = assigned != null ? String(assigned) : null;
   }
 
-  // If a completed pick has NO per-scan timing, still credit its picker for the
-  // items (with zero measured time) so they appear on the leaderboard — otherwise
-  // pickers whose flow doesn't log scan timing (e.g. Mark Lewis) vanish entirely.
-  if (contributions.length === 0 && pickerId) {
-    contributions.push({ user_id: pickerId, items, handlingMs: 0, scans: 0, itemScanMs: 0, itemScanCount: 0 });
-  }
-
   const created   = toDate(d.created_at || header?.created_at);
   const completed = toDate(d.completed_at || header?.completed_at);
   const elapsedMs = (created && completed) ? Math.max(0, completed.getTime() - created.getTime()) : 0;
+
+  // If a completed pick has NO per-scan timing, credit its picker with elapsed time
+  // (capped to realistic maximum 45m or 30s/item) so pickers who pick in bulk/manual
+  // still receive an accurate items-per-hour and leaderboard standing.
+  if (contributions.length === 0 && pickerId) {
+    let fallbackMs = 0;
+    if (elapsedMs > 0 && elapsedMs <= 45 * 60 * 1000) {
+      fallbackMs = elapsedMs;
+    } else if (items > 0) {
+      // Fallback: estimate 30s per item picked if elapsed is huge (e.g. wave open for days) or missing
+      fallbackMs = Math.min(items * 30 * 1000, 45 * 60 * 1000);
+    }
+    contributions.push({ user_id: pickerId, items, handlingMs: fallbackMs, scans: items, itemScanMs: fallbackMs, itemScanCount: items });
+    if (handlingMs === 0) handlingMs = fallbackMs;
+  } else if (contributions.length > 0 && handlingMs === 0 && items > 0) {
+    // If contributions exist but had 0 duration logged
+    let fallbackMs = 0;
+    if (elapsedMs > 0 && elapsedMs <= 45 * 60 * 1000) {
+      fallbackMs = elapsedMs;
+    } else {
+      fallbackMs = Math.min(items * 30 * 1000, 45 * 60 * 1000);
+    }
+    for (const c of contributions) {
+      if (c.handlingMs === 0) {
+        c.handlingMs = Math.round((c.items / items) * fallbackMs);
+      }
+    }
+    handlingMs = fallbackMs;
+  }
 
   return { items, lineCount: extractedItems.length || extractedOrders.length || 1, orderCount: orderIds.length || extractedOrders.length || 1, handlingMs, elapsedMs,
            itemScanMs, itemScanCount,
