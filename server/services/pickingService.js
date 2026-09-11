@@ -439,42 +439,40 @@ export async function syncPicks(days = 30, { pickDelayMs = 0 } = {}) {
                 pickerId: h.assigned_to != null ? String(h.assigned_to) : null, contributions: [], orderIds: [],
                 created: toDate(h.created_at), completed: toDate(h.completed_at) };
 
-      // Completed or force-completed picks carry meaningful items/time — fetch detail for those.
+      // Fetch detail for all picks to ensure full time-tracking and line-item attribution
       const isCompleted = status === 1 || String(h.status_name || '').toUpperCase() === 'COMPLETED'
-        || Boolean(h.completed_at) || Boolean(h.force_completed) || Boolean(h.is_batch);
+        || Boolean(h.completed_at) || Boolean(h.force_completed) || Boolean(h.is_batch) || status !== 0;
 
       let rawToStore = h;
-      if (isCompleted) {
-        try {
-          const detail = await fetchPickDetail(pickId);
-          s = summarisePick(detail, h);
-          detailed++;
-          // Keep the timing-relevant parts of the detail
-          const rawDetailPayload = detail?.data || detail || {};
-          rawToStore = {
-            header: h,
-            assigned_to: rawDetailPayload?.assigned_to,
-            created_at: rawDetailPayload?.created_at,
-            completed_at: rawDetailPayload?.completed_at,
-            time_tracking_data: rawDetailPayload?.time_tracking_data || null,
-            pick_inventories: Array.isArray(rawDetailPayload?.pick_inventories)
-              ? rawDetailPayload.pick_inventories.map(pi => ({
-                  quantity_to_pick: pi.quantity_to_pick, quantity_picked: pi.quantity_picked,
-                  picked_by: pi.picked_by, order_summary_id: pi.order_summary_id,
-                  inventory_id: pi.inventory_id, location_id: pi.location_id,
-                }))
-              : null,
-            orders_summary: Array.isArray(rawDetailPayload?.order_data)
-              ? rawDetailPayload.order_data.map(o => ({
-                  id: o.id, channel_order_id: o.channel_order_id || o.order_number,
-                  customer: o.customer_name || [o.customer?.first_name, o.customer?.last_name].filter(Boolean).join(' '),
-                  item_count: o.total_inventory_quantity || o.items_count,
-                }))
-              : null,
-          };
-          if (pickDelayMs) await sleep(pickDelayMs);
-        } catch (e) { errors++; console.warn(`[picking-sync] detail ${pickId}: ${e.message}`); }
-      }
+      try {
+        const detail = await fetchPickDetail(pickId);
+        s = summarisePick(detail, h);
+        detailed++;
+        // Keep the timing-relevant parts of the detail
+        const rawDetailPayload = detail?.data || detail || {};
+        rawToStore = {
+          header: h,
+          assigned_to: rawDetailPayload?.assigned_to || h.assigned_to,
+          created_at: rawDetailPayload?.created_at || h.created_at,
+          completed_at: rawDetailPayload?.completed_at || h.completed_at,
+          time_tracking_data: rawDetailPayload?.time_tracking_data || null,
+          pick_inventories: Array.isArray(rawDetailPayload?.pick_inventories)
+            ? rawDetailPayload.pick_inventories.map(pi => ({
+                quantity_to_pick: pi.quantity_to_pick, quantity_picked: pi.quantity_picked,
+                picked_by: pi.picked_by, order_summary_id: pi.order_summary_id,
+                inventory_id: pi.inventory_id, location_id: pi.location_id,
+              }))
+            : null,
+          orders_summary: Array.isArray(rawDetailPayload?.order_data)
+            ? rawDetailPayload.order_data.map(o => ({
+                id: o.id, channel_order_id: o.channel_order_id || o.order_number,
+                customer: o.customer_name || [o.customer?.first_name, o.customer?.last_name].filter(Boolean).join(' '),
+                item_count: o.total_inventory_quantity || o.items_count,
+              }))
+            : null,
+        };
+        if (pickDelayMs) await sleep(pickDelayMs);
+      } catch (e) { errors++; console.warn(`[picking-sync] detail ${pickId}: ${e.message}`); }
 
       if (s.items === 0) {
         s.items = num(h.total_inventory_quantity) || num(h.total_items) || num(h.item_count) || num(h.quantity) || num(h.total_quantity) || 0;
