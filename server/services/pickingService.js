@@ -50,13 +50,20 @@ export async function resolveInventory(invId) {
 
 function toDate(v) {
   if (!v) return null;
-  const s = String(v).replace(' ', 'T');
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  const s = String(v).trim();
+  if (!s) return null;
+  const iso = s.includes('T') ? (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s) ? s : `${s}Z`) : `${s.replace(' ', 'T')}Z`;
+  const d = new Date(iso);
+  if (!isNaN(d.getTime())) return d;
+  const fallback = new Date(s);
+  return isNaN(fallback.getTime()) ? null : fallback;
 }
 function toLondonYmd(d) {
-  if (!d || !(d instanceof Date) || isNaN(d.getTime())) return null;
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  if (!d) return null;
+  const dateObj = d instanceof Date ? d : toDate(d);
+  if (!dateObj || isNaN(dateObj.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).format(dateObj);
 }
 function num(v) { const n = parseInt(v); return isNaN(n) ? 0 : n; }
 
