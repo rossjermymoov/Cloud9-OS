@@ -52,7 +52,7 @@ async function token() {
 }
 
 // ─── Authenticated GET (auto re-login once on 401) ───────────────────────────
-async function authedGet(pathOrUrl, params = {}) {
+export async function authedGet(pathOrUrl, params = {}) {
   const url = pathOrUrl.startsWith('http')
     ? new URL(pathOrUrl)
     : new URL(`${BASE}${pathOrUrl}`);
@@ -76,7 +76,7 @@ async function authedGet(pathOrUrl, params = {}) {
 }
 
 // ─── Authenticated Mutation (PUT / PATCH / POST) ──────────────────────────────
-async function authedMutate(method, pathOrUrl, body = {}, params = {}) {
+export async function authedMutate(method, pathOrUrl, body = {}, params = {}) {
   const url = pathOrUrl.startsWith('http')
     ? new URL(pathOrUrl)
     : new URL(`${BASE}${pathOrUrl}`);
