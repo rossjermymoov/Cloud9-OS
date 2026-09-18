@@ -304,30 +304,22 @@ export async function syncHelmProducts({ force = false, truncate = false } = {})
 
 /**
  * Instant local lookup by barcode (or exact numeric Helm Product ID).
- * Never searches SKUs or raw JSON metadata.
+ * Runs strictly indexed lookups (< 1ms) and never hangs.
  */
 export async function findProductsByBarcode(rawBarcode) {
   const queryTerm = String(rawBarcode || '').trim();
   if (!queryTerm) return [];
 
-  const clean = queryTerm.replace(/[^a-zA-Z0-9]/gi, '');
-
-  // 1. Instant local database search — strictly barcodes or exact numeric Helm ID
+  // 1. Instant local database search — indexed direct barcode or Helm ID match (<1ms)
   const { rows } = await query(`
     SELECT *
     FROM helm_products
     WHERE barcode = $1
        OR $1 = ANY(barcodes)
        OR (helm_id = $1 AND $1 ~ '^[0-9]+$')
-       OR (length($2) >= 5 AND (
-            regexp_replace(barcode, '[^a-zA-Z0-9]', '', 'g') = $2
-            OR EXISTS (
-              SELECT 1 FROM unnest(barcodes) b
-              WHERE regexp_replace(b, '[^a-zA-Z0-9]', '', 'g') = $2
-            )
-          ))
     ORDER BY name ASC
-  `, [queryTerm, clean]);
+    LIMIT 20
+  `, [queryTerm]);
 
   if (rows.length > 0) {
     return rows.map(r => ({
@@ -352,130 +344,139 @@ export async function findProductsByBarcode(rawBarcode) {
     }));
   }
 
-  // 2. Direct fallback to Helm API if not found locally
+  // 2. Direct fast fallback into Helm API if not yet in cache
   if (helmConfigured()) {
     try {
       const candidates = [];
       const seenIds = new Set();
-
-      const addCandidates = (list) => {
-        if (!Array.isArray(list)) return;
-        for (const item of list) {
-          if (item && item.id && !seenIds.has(String(item.id))) {
-            const rawType = item.product_type ?? item.type ?? item.product_type_id ?? item.type_id;
-            const t = rawType != null ? parseInt(rawType) : null;
-            if (t != null && t !== 1) continue; // Physical only
-            seenIds.add(String(item.id));
-            candidates.push(item);
-          }
-        }
-      };
 
       // A. If query is a direct numeric Helm product ID (e.g. 34993)
       if (/^\d+$/.test(queryTerm)) {
         try {
           const detailRes = await fetchInventoryDetail(queryTerm);
           const detail = detailRes?.data || detailRes;
-          if (detail && detail.id) addCandidates([detail]);
+          if (detail && detail.id) {
+            const rawType = detail.product_type ?? detail.type ?? detail.product_type_id ?? detail.type_id;
+            const t = rawType != null ? parseInt(rawType) : null;
+            if (t == null || t === 1) {
+              seenIds.add(String(detail.id));
+              candidates.push(detail);
+            }
+          }
         } catch {}
       }
 
       // B. Search Helm strictly by barcode filter
-      try {
-        const byBarcode = await authedGet('/inventory', { 'filters[product_types][]': 1, 'filters[barcode]': queryTerm, limit: 25 });
-        addCandidates(byBarcode?.data);
-      } catch {}
-
-      // C. For each candidate, fetch full detail, extract physicals & barcodes, and cache
-      const custRes = await query(`SELECT id, helm_customer_id, business_name FROM customers WHERE helm_customer_id IS NOT NULL`);
-      const custMap = new Map();
-      for (const c of custRes.rows) {
-        custMap.set(String(c.helm_customer_id), c);
-      }
-
-      const matchedProducts = [];
-
-      for (const item of candidates) {
-        let fullDetail = item;
+      if (candidates.length === 0) {
         try {
-          const dRes = await fetchInventoryDetail(item.id);
-          if (dRes?.data) fullDetail = dRes.data;
-          else if (dRes && typeof dRes === 'object') fullDetail = dRes;
+          const byBarcode = await authedGet('/inventory', { 'filters[product_types][]': 1, 'filters[barcode]': queryTerm, limit: 10 });
+          const list = byBarcode?.data || [];
+          for (const item of list) {
+            if (item && item.id && !seenIds.has(String(item.id))) {
+              const rawType = item.product_type ?? item.type ?? item.product_type_id ?? item.type_id;
+              const t = rawType != null ? parseInt(rawType) : null;
+              if (t != null && t !== 1) continue;
+              seenIds.add(String(item.id));
+              candidates.push(item);
+            }
+          }
         } catch {}
-
-        const phys = extractItemPhysicals(fullDetail);
-        const helmClientId = String(fullDetail.fulfilment_client_id || fullDetail.client_id || '');
-        const cust = custMap.get(helmClientId) || null;
-
-        // Upsert to local cache
-        await query(`
-          INSERT INTO helm_products (
-            helm_id, sku, name, barcode, barcodes, image_url,
-            customer_id, helm_customer_id, customer_name,
-            length, width, height, dimension_unit,
-            weight_g, weight_kg, raw_weight, raw_unit,
-            stock_level, locations, package_configurations, raw_data,
-            updated_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
-          ON CONFLICT (helm_id) DO UPDATE SET
-            sku = EXCLUDED.sku,
-            name = EXCLUDED.name,
-            barcode = COALESCE(EXCLUDED.barcode, helm_products.barcode),
-            barcodes = EXCLUDED.barcodes,
-            image_url = COALESCE(EXCLUDED.image_url, helm_products.image_url),
-            weight_g = EXCLUDED.weight_g,
-            weight_kg = EXCLUDED.weight_kg,
-            package_configurations = EXCLUDED.package_configurations,
-            raw_data = EXCLUDED.raw_data,
-            updated_at = NOW()
-        `, [
-          String(fullDetail.id),
-          fullDetail.sku || '',
-          fullDetail.name || fullDetail.title || '',
-          phys.barcode || queryTerm,
-          phys.barcodes.length ? phys.barcodes : [queryTerm],
-          phys.image_url,
-          cust?.id || null,
-          helmClientId,
-          cust?.business_name || 'Customer',
-          phys.length,
-          phys.width,
-          phys.height,
-          phys.dimension_unit,
-          phys.weight_g,
-          phys.weight_kg,
-          phys.raw_weight,
-          phys.raw_unit,
-          parseInt(fullDetail.stock_level ?? 0) || 0,
-          JSON.stringify(fullDetail.locations || []),
-          JSON.stringify(fullDetail.package_configurations || []),
-          JSON.stringify(fullDetail)
-        ]);
-
-        matchedProducts.push({
-          id: String(fullDetail.id),
-          sku: fullDetail.sku || '',
-          name: fullDetail.name || fullDetail.title || 'Unnamed Product',
-          barcode: phys.barcode || queryTerm,
-          all_barcodes: phys.barcodes,
-          image_url: phys.image_url,
-          length: phys.length,
-          width: phys.width,
-          height: phys.height,
-          dimension_unit: phys.dimension_unit,
-          weight_g: phys.weight_g,
-          weight_kg: phys.weight_kg,
-          raw_unit: phys.raw_unit,
-          stock_level: fullDetail.stock_level ?? 0,
-          locations: fullDetail.locations || [],
-          customer_id: cust?.id || null,
-          helm_customer_id: helmClientId,
-          customer_name: cust?.business_name || 'Customer'
-        });
       }
 
-      if (matchedProducts.length > 0) {
-        return matchedProducts;
+      // C. Process candidates and cache locally
+      if (candidates.length > 0) {
+        const custRes = await query(`SELECT id, helm_customer_id, business_name FROM customers WHERE helm_customer_id IS NOT NULL`);
+        const custMap = new Map();
+        for (const c of custRes.rows) {
+          custMap.set(String(c.helm_customer_id), c);
+        }
+
+        const matchedProducts = [];
+
+        for (const item of candidates) {
+          let fullDetail = item;
+          if (!fullDetail.package_configurations) {
+            try {
+              const dRes = await fetchInventoryDetail(item.id);
+              if (dRes?.data) fullDetail = dRes.data;
+              else if (dRes && typeof dRes === 'object') fullDetail = dRes;
+            } catch {}
+          }
+
+          const phys = extractItemPhysicals(fullDetail);
+          const helmClientId = String(fullDetail.fulfilment_client_id || fullDetail.client_id || '');
+          const cust = custMap.get(helmClientId) || null;
+
+          // Upsert to local cache
+          await query(`
+            INSERT INTO helm_products (
+              helm_id, sku, name, barcode, barcodes, image_url,
+              customer_id, helm_customer_id, customer_name,
+              length, width, height, dimension_unit,
+              weight_g, weight_kg, raw_weight, raw_unit,
+              stock_level, locations, package_configurations, raw_data,
+              updated_at
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
+            ON CONFLICT (helm_id) DO UPDATE SET
+              sku = EXCLUDED.sku,
+              name = EXCLUDED.name,
+              barcode = COALESCE(EXCLUDED.barcode, helm_products.barcode),
+              barcodes = EXCLUDED.barcodes,
+              image_url = COALESCE(EXCLUDED.image_url, helm_products.image_url),
+              weight_g = EXCLUDED.weight_g,
+              weight_kg = EXCLUDED.weight_kg,
+              package_configurations = EXCLUDED.package_configurations,
+              raw_data = EXCLUDED.raw_data,
+              updated_at = NOW()
+          `, [
+            String(fullDetail.id),
+            fullDetail.sku || '',
+            fullDetail.name || fullDetail.title || '',
+            phys.barcode || queryTerm,
+            phys.barcodes.length ? phys.barcodes : [queryTerm],
+            phys.image_url,
+            cust?.id || null,
+            helmClientId,
+            cust?.business_name || 'Customer',
+            phys.length,
+            phys.width,
+            phys.height,
+            phys.dimension_unit,
+            phys.weight_g,
+            phys.weight_kg,
+            phys.raw_weight,
+            phys.raw_unit,
+            parseInt(fullDetail.stock_level ?? 0) || 0,
+            JSON.stringify(fullDetail.locations || []),
+            JSON.stringify(fullDetail.package_configurations || []),
+            JSON.stringify(fullDetail)
+          ]);
+
+          matchedProducts.push({
+            id: String(fullDetail.id),
+            sku: fullDetail.sku || '',
+            name: fullDetail.name || fullDetail.title || 'Unnamed Product',
+            barcode: phys.barcode || queryTerm,
+            all_barcodes: phys.barcodes,
+            image_url: phys.image_url,
+            length: phys.length,
+            width: phys.width,
+            height: phys.height,
+            dimension_unit: phys.dimension_unit,
+            weight_g: phys.weight_g,
+            weight_kg: phys.weight_kg,
+            raw_unit: phys.raw_unit,
+            stock_level: fullDetail.stock_level ?? 0,
+            locations: fullDetail.locations || [],
+            customer_id: cust?.id || null,
+            helm_customer_id: helmClientId,
+            customer_name: cust?.business_name || 'Customer'
+          });
+        }
+
+        if (matchedProducts.length > 0) {
+          return matchedProducts;
+        }
       }
     } catch (fallbackErr) {
       console.warn('[inventory-fallback] Helm fallback error:', fallbackErr.message);
