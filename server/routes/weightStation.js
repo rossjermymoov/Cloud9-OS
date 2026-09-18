@@ -48,11 +48,84 @@ function extractItemDims(it) {
   };
 }
 
+function collectItemBarcodes(it) {
+  const codes = new Set();
+  const add = (v) => {
+    if (v != null) {
+      const s = String(v).trim();
+      if (s) codes.add(s);
+    }
+  };
+  add(it.barcode);
+  add(it.product_barcode);
+  add(it.ean);
+  add(it.upc);
+  add(it.barcode_number);
+  if (Array.isArray(it.barcodes)) {
+    for (const b of it.barcodes) {
+      if (typeof b === 'string' || typeof b === 'number') add(b);
+      else if (b && typeof b === 'object') {
+        add(b.barcode);
+        add(b.code);
+        add(b.value);
+      }
+    }
+  }
+  if (Array.isArray(it.package_configurations)) {
+    for (const pkg of it.package_configurations) {
+      add(pkg.barcode);
+      add(pkg.product_barcode);
+    }
+  }
+  return Array.from(codes);
+}
+
+function collectItemSkus(it) {
+  const skus = new Set();
+  const add = (v) => {
+    if (v != null) {
+      const s = String(v).trim();
+      if (s) skus.add(s);
+    }
+  };
+  add(it.sku);
+  add(it.product_sku);
+  add(it.item_code);
+  add(it.code);
+  return Array.from(skus);
+}
+
+function isExactItemMatch(it, targetRaw) {
+  if (!it || !targetRaw) return false;
+  const target = String(targetRaw).trim().toLowerCase();
+  const targetClean = target.replace(/[^a-z0-9]/gi, '');
+
+  const barcodes = collectItemBarcodes(it);
+  for (const b of barcodes) {
+    const bLower = b.toLowerCase();
+    const bClean = bLower.replace(/[^a-z0-9]/gi, '');
+    if (bLower === target || (targetClean && bClean === targetClean)) {
+      return true;
+    }
+  }
+
+  const skus = collectItemSkus(it);
+  for (const s of skus) {
+    const sLower = s.toLowerCase();
+    const sClean = sLower.replace(/[^a-z0-9]/gi, '');
+    if (sLower === target || (targetClean && sClean === targetClean)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // ── Search Helm for products matching barcode or SKU ─────────────────────────
 router.get('/search', async (req, res, next) => {
   try {
     const rawQ = String(req.query.q || req.query.barcode || '').trim();
-    if (!rawQ) return res.json({ products: [] });
+    if (!rawQ) return res.json({ products: [], total: 0, query: '' });
 
     if (!helmConfigured()) {
       return res.status(503).json({ error: 'Helm API not configured' });
@@ -61,56 +134,73 @@ router.get('/search', async (req, res, next) => {
     // Load customer map from DB: helm_customer_id -> customer info
     const custRes = await query(`SELECT id, helm_customer_id, business_name, primary_email FROM customers WHERE helm_customer_id IS NOT NULL`);
     const custMap = new Map();
+    const activeClients = [];
     for (const c of custRes.rows) {
       custMap.set(String(c.helm_customer_id), c);
+      activeClients.push(c);
     }
 
-    const matchedItems = [];
-    const seenIds = new Set();
+    const matchedMap = new Map();
 
-    // 1. Try search by barcode
-    try {
-      const byBarcode = await authedGet('/inventory', { 'filters[barcode]': rawQ, limit: 50 });
-      if (Array.isArray(byBarcode?.data)) {
-        for (const it of byBarcode.data) {
-          if (!seenIds.has(it.id)) {
-            seenIds.add(it.id);
-            matchedItems.push(it);
-          }
+    const checkAndAdd = (candidates) => {
+      if (!Array.isArray(candidates)) return;
+      for (const it of candidates) {
+        if (!it || !it.id) continue;
+        if (isExactItemMatch(it, rawQ)) {
+          matchedMap.set(String(it.id), it);
         }
       }
-    } catch {}
+    };
 
-    // 2. Try search by SKU
+    // 1. Try search by barcode filter
     try {
-      const bySku = await authedGet('/inventory', { 'filters[sku]': rawQ, limit: 50 });
-      if (Array.isArray(bySku?.data)) {
-        for (const it of bySku.data) {
-          if (!seenIds.has(it.id)) {
-            seenIds.add(it.id);
-            matchedItems.push(it);
-          }
-        }
-      }
+      const byBarcode = await authedGet('/inventory', { 'filters[barcode]': rawQ, limit: 100 });
+      checkAndAdd(byBarcode?.data);
     } catch {}
 
-    // 3. Try general search filter
-    if (matchedItems.length === 0) {
+    // 2. Try search by SKU filter
+    if (matchedMap.size === 0) {
       try {
-        const bySearch = await authedGet('/inventory', { 'filters[search]': rawQ, limit: 50 });
-        if (Array.isArray(bySearch?.data)) {
-          for (const it of bySearch.data) {
-            if (!seenIds.has(it.id)) {
-              seenIds.add(it.id);
-              matchedItems.push(it);
-            }
-          }
-        }
+        const bySku = await authedGet('/inventory', { 'filters[sku]': rawQ, limit: 100 });
+        checkAndAdd(bySku?.data);
       } catch {}
     }
 
-    // Decorate each matched item with detail and customer mapping
-    const products = await Promise.all(matchedItems.map(async (it) => {
+    // 3. Try general search filter
+    if (matchedMap.size === 0) {
+      try {
+        const bySearch = await authedGet('/inventory', { 'filters[search]': rawQ, limit: 100 });
+        checkAndAdd(bySearch?.data);
+      } catch {}
+    }
+
+    // 4. Try root search query parameter
+    if (matchedMap.size === 0) {
+      try {
+        const byRootSearch = await authedGet('/inventory', { search: rawQ, limit: 100 });
+        checkAndAdd(byRootSearch?.data);
+      } catch {}
+    }
+
+    // 5. If still no matches, search per active customer in Helm
+    if (matchedMap.size === 0 && activeClients.length > 0) {
+      for (const client of activeClients) {
+        try {
+          const clientRes = await authedGet('/inventory', {
+            'filters[fulfilment_clients][]': client.helm_customer_id,
+            'filters[search]': rawQ,
+            limit: 50
+          });
+          checkAndAdd(clientRes?.data);
+          if (matchedMap.size > 0) break;
+        } catch {}
+      }
+    }
+
+    const matchedCandidates = Array.from(matchedMap.values());
+
+    // Decorate each matched item with full detail and customer mapping
+    const products = await Promise.all(matchedCandidates.map(async (it) => {
       let detail = it;
       try {
         const d = await fetchInventoryDetail(it.id);
@@ -121,12 +211,15 @@ router.get('/search', async (req, res, next) => {
       const dims = extractItemDims(detail);
       const helmClientId = String(detail.fulfilment_client_id || detail.client_id || detail.customer_id || '');
       const cust = custMap.get(helmClientId) || null;
+      const foundBarcodes = collectItemBarcodes(detail);
+      const primaryBarcode = foundBarcodes[0] || detail.barcode || detail.product_barcode || null;
 
       return {
         id: String(detail.id),
         sku: detail.sku || detail.product_sku || '',
         name: detail.name || detail.title || detail.product_name || 'Unnamed Product',
-        barcode: detail.barcode || detail.product_barcode || rawQ,
+        barcode: primaryBarcode,
+        all_barcodes: foundBarcodes,
         image_url: dims.image_url,
         length: dims.length,
         width: dims.width,
