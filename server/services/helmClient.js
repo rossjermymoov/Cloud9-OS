@@ -491,6 +491,19 @@ export async function updateInventoryItem(id, data) {
     product_height: h,
   };
 
+  // Required inventory metadata for Helm validation
+  const inventoryMeta = {};
+  if (current.name || current.title || data.name || data.product_name) {
+    inventoryMeta.name = current.name || current.title || data.name || data.product_name;
+  }
+  if (current.sku || data.sku) {
+    inventoryMeta.sku = current.sku || data.sku;
+  }
+  const clientId = current.fulfilment_client_id || current.client_id || (typeof current.fulfilment_client === 'object' ? current.fulfilment_client?.id : current.fulfilment_client);
+  if (clientId) {
+    inventoryMeta.fulfilment_client_id = parseInt(clientId) || clientId;
+  }
+
   // Clean package configurations without extraneous read-only properties
   const cleanPackageConfigs = updatedPkgs.map(p => {
     const obj = {
@@ -513,33 +526,13 @@ export async function updateInventoryItem(id, data) {
   let updateResult = null;
   let lastErr = null;
 
-  // Try updating root inventory with targeted payloads
-  const payloadVariations = [
-    { ...cleanFields, package_configurations: cleanPackageConfigs },
-    { ...cleanFields },
-    { weight: weightKg, length: l, width: w, height: h },
-    { product_weight: weightKg, product_length: l, product_width: w, product_height: h }
-  ];
-
-  for (const method of ['PUT', 'PATCH', 'POST']) {
-    for (const body of payloadVariations) {
-      try {
-        updateResult = await authedMutate(method, `/inventory/${cleanId}`, body);
-        if (updateResult) break;
-      } catch (err) {
-        lastErr = err;
-      }
-    }
-    if (updateResult) break;
-  }
-
-  // Also update package configuration endpoints if an ID exists
+  // 1. Try updating package configuration endpoints directly if an ID exists
   for (const pkg of cleanPackageConfigs) {
     if (pkg && pkg.id) {
       const pkgId = String(pkg.id);
-      for (const m of ['PUT', 'PATCH', 'POST']) {
+      for (const m of ['PUT', 'PATCH']) {
         try {
-          await authedMutate(m, `/package_configurations/${pkgId}`, {
+          const pkgRes = await authedMutate(m, `/package_configurations/${pkgId}`, {
             weight: weightKg,
             product_weight: weightKg,
             weight_unit: 'kg',
@@ -547,10 +540,42 @@ export async function updateInventoryItem(id, data) {
             width: w,
             height: h
           });
-          break;
-        } catch {}
+          if (pkgRes) {
+            updateResult = pkgRes;
+            lastErr = null;
+            break;
+          }
+        } catch (pkgErr) {
+          lastErr = pkgErr;
+        }
       }
     }
+  }
+
+  // 2. Try updating root inventory endpoint with full and minimal payloads
+  const payloadVariations = [
+    { ...inventoryMeta, ...cleanFields, package_configurations: cleanPackageConfigs },
+    { ...inventoryMeta, ...cleanFields },
+    { ...cleanFields, package_configurations: cleanPackageConfigs },
+    { ...cleanFields },
+    { weight: weightKg, length: l, width: w, height: h },
+    { product_weight: weightKg, product_length: l, product_width: w, product_height: h }
+  ];
+
+  for (const method of ['PUT', 'PATCH']) {
+    for (const body of payloadVariations) {
+      try {
+        const invRes = await authedMutate(method, `/inventory/${cleanId}`, body);
+        if (invRes) {
+          updateResult = invRes;
+          lastErr = null;
+          break;
+        }
+      } catch (err) {
+        if (!lastErr) lastErr = err;
+      }
+    }
+    if (updateResult) break;
   }
 
   // Re-fetch detail to verify persistency
