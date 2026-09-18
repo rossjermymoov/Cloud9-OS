@@ -174,11 +174,12 @@ router.post('/update', async (req, res, next) => {
 });
 
 // ── Cache Sync Trigger & Status ───────────────────────────────────────────────
-router.post('/sync', async (_req, res, next) => {
+router.post('/sync', async (req, res, next) => {
   try {
-    // Run sync in background and return immediate acknowledgement
-    syncHelmProducts({ force: true }).catch(err => console.error('Manual inventory sync failed:', err));
-    res.json({ ok: true, message: 'Inventory synchronization started in background' });
+    const truncate = req.body?.truncate !== false;
+    // Run clean physical inventory sync in background and return immediate acknowledgement
+    syncHelmProducts({ force: true, truncate }).catch(err => console.error('Inventory sync failed:', err));
+    res.json({ ok: true, message: 'Clean physical inventory synchronization started' });
   } catch (err) {
     next(err);
   }

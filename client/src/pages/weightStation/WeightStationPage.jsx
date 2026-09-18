@@ -251,20 +251,24 @@ export default function WeightStationPage() {
           }}>
             <Database size={14} color={ACCENT} />
             <span>
-              <strong>{syncStatus?.total_products ? syncStatus.total_products.toLocaleString() : '0'}</strong> products cached
+              <strong>{syncStatus?.total_products ? syncStatus.total_products.toLocaleString() : '0'}</strong> inventory items
             </span>
             <button
-              onClick={() => syncMutation.mutate()}
-              disabled={syncMutation.isPending}
+              onClick={() => {
+                if (window.confirm('This will wipe the current local cache and rebuild purely physical inventory (Type 1) from Helm. Proceed?')) {
+                  syncMutation.mutate();
+                }
+              }}
+              disabled={syncMutation.isPending || syncStatus?.in_progress}
               style={{
                 border: 'none', background: '#EFF6FF', color: ACCENT,
-                fontWeight: 700, fontSize: 11.5, padding: '3px 8px', borderRadius: 6,
-                cursor: syncMutation.isPending ? 'default' : 'pointer', display: 'flex',
+                fontWeight: 700, fontSize: 11.5, padding: '4px 9px', borderRadius: 6,
+                cursor: (syncMutation.isPending || syncStatus?.in_progress) ? 'default' : 'pointer', display: 'flex',
                 alignItems: 'center', gap: 4
               }}
             >
-              <RefreshCw size={11} className={syncMutation.isPending ? 'animate-spin' : ''} />
-              {syncMutation.isPending ? 'Syncing...' : 'Sync Now'}
+              <RefreshCw size={11} className={(syncMutation.isPending || syncStatus?.in_progress) ? 'animate-spin' : ''} />
+              {(syncMutation.isPending || syncStatus?.in_progress) ? 'Rebuilding Cache...' : 'Reset & Re-sync'}
             </button>
           </div>
 

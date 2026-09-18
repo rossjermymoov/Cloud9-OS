@@ -1,7 +1,7 @@
 /**
  * Cloud9 OS — Helm Inventory Cache & Synchronization Service
  *
- * Fast sub-millisecond barcode lookups and scheduled background inventory caching.
+ * Fast sub-millisecond barcode lookups and physical inventory (Type 1) sync.
  */
 
 import { query } from '../db/index.js';
@@ -110,9 +110,9 @@ export function getSyncProgress() {
 }
 
 /**
- * Bulk upsert items into helm_products in chunks of 100 for high database performance.
+ * Bulk upsert physical inventory (Type 1 only) into helm_products in chunks of 100.
  */
-async function bulkUpsertProducts(items, custMap) {
+async function bulkUpsertPhysicalProducts(items, custMap) {
   if (!items.length) return 0;
   const CHUNK_SIZE = 100;
   let count = 0;
@@ -124,6 +124,10 @@ async function bulkUpsertProducts(items, custMap) {
 
     chunk.forEach((it) => {
       if (!it || !it.id) return;
+      // Only include Type 1 (Physical Inventory) - ignore Groups (3), Components (2), Packaging (4, 5)
+      const t = parseInt(it.type ?? it.product_type ?? 1);
+      if (t !== 1 && it.type != null) return;
+
       const helmId = String(it.id);
       const phys = extractItemPhysicals(it);
       const sku = it.sku || it.product_sku || '';
@@ -209,9 +213,9 @@ async function bulkUpsertProducts(items, custMap) {
 }
 
 /**
- * Sync all inventory from Helm into local `helm_products` cache table.
+ * Reset database table and sync purely Physical Inventory (Type 1) from Helm.
  */
-export async function syncHelmProducts({ force = false } = {}) {
+export async function syncHelmProducts({ force = false, truncate = false } = {}) {
   if (syncState.inProgress && !force) {
     return { status: 'already_running', total: syncState.totalSaved };
   }
@@ -230,25 +234,34 @@ export async function syncHelmProducts({ force = false } = {}) {
   const startedTime = Date.now();
 
   try {
+    if (truncate) {
+      console.log('[inventory-sync] Truncating helm_products table for clean reset...');
+      await query(`TRUNCATE TABLE helm_products`);
+    }
+
     const custRes = await query(`SELECT id, helm_customer_id, business_name FROM customers WHERE helm_customer_id IS NOT NULL`);
     const custMap = new Map();
     for (const c of custRes.rows) {
       custMap.set(String(c.helm_customer_id), c);
     }
 
-    // ── Strategy 1: Global Paged Sweep across Helm (all types, all customers) ──
+    // ── Single Global Sweep: Physical Inventory Only (filters[product_types][]=1) ──
     let page = 1;
     let globalPages = 0;
-    const maxGlobalPages = 500;
+    const maxGlobalPages = 300;
 
     while (page <= maxGlobalPages) {
       try {
-        const res = await authedGet('/inventory', { page, per_page: 100 });
+        const res = await authedGet('/inventory', {
+          'filters[product_types][]': 1,
+          page,
+          per_page: 100
+        });
         const rows = res.data || [];
         if (rows.length === 0) break;
 
-        await bulkUpsertProducts(rows, custMap);
-        syncState.totalSaved += rows.length;
+        const inserted = await bulkUpsertPhysicalProducts(rows, custMap);
+        syncState.totalSaved += inserted;
         globalPages++;
 
         const lastPage = parseInt(res.last_page) || 1;
@@ -258,39 +271,9 @@ export async function syncHelmProducts({ force = false } = {}) {
 
         await sleep(50);
       } catch (pageErr) {
-        console.warn(`[inventory-sync] Global page ${page} warning:`, pageErr.message);
+        console.warn(`[inventory-sync] Page ${page} warning:`, pageErr.message);
         await sleep(1000);
         page++;
-      }
-    }
-
-    console.log(`[inventory-sync] Global pass completed: ${syncState.totalSaved} items in ${globalPages} pages.`);
-
-    // ── Strategy 2: Sweep each customer to ensure 100% full coverage ──
-    for (const cust of custRes.rows) {
-      try {
-        let custPage = 1;
-        while (custPage <= 100) {
-          const res = await authedGet('/inventory', {
-            'filters[fulfilment_clients][]': cust.helm_customer_id,
-            page: custPage,
-            per_page: 100
-          });
-          const rows = res.data || [];
-          if (rows.length === 0) break;
-
-          await bulkUpsertProducts(rows, custMap);
-          syncState.totalSaved += rows.length;
-
-          const lastPage = parseInt(res.last_page) || 1;
-          const curPage = parseInt(res.current_page) || custPage;
-          if (!res.next_page_url || curPage >= lastPage) break;
-          custPage++;
-
-          await sleep(50);
-        }
-      } catch (cErr) {
-        console.warn(`[inventory-sync] Client sweep for ${cust.business_name}:`, cErr.message);
       }
     }
 
@@ -301,7 +284,7 @@ export async function syncHelmProducts({ force = false } = {}) {
     syncState.completedAt = new Date().toISOString();
     syncState.totalSaved = totalInDb;
 
-    console.log(`[inventory-sync] Final total in helm_products: ${totalInDb} products in ${((Date.now() - startedTime) / 1000).toFixed(1)}s`);
+    console.log(`[inventory-sync] Completed. Total physical inventory in helm_products: ${totalInDb} products in ${((Date.now() - startedTime) / 1000).toFixed(1)}s`);
     return { ok: true, products_synced: totalInDb, duration_ms: Date.now() - startedTime };
   } catch (err) {
     console.error('[inventory-sync] Sync failed:', err.message);
@@ -383,17 +366,17 @@ export async function findProductsByBarcode(rawBarcode) {
 
       // B. Search Helm via search / barcode / sku filters
       try {
-        const bySearch = await authedGet('/inventory', { 'filters[search]': queryTerm, limit: 25 });
+        const bySearch = await authedGet('/inventory', { 'filters[product_types][]': 1, 'filters[search]': queryTerm, limit: 25 });
         addCandidates(bySearch?.data);
       } catch {}
 
       try {
-        const bySku = await authedGet('/inventory', { 'filters[sku]': queryTerm, limit: 25 });
+        const bySku = await authedGet('/inventory', { 'filters[product_types][]': 1, 'filters[sku]': queryTerm, limit: 25 });
         addCandidates(bySku?.data);
       } catch {}
 
       try {
-        const byRootSearch = await authedGet('/inventory', { search: queryTerm, limit: 25 });
+        const byRootSearch = await authedGet('/inventory', { 'filters[product_types][]': 1, search: queryTerm, limit: 25 });
         addCandidates(byRootSearch?.data);
       } catch {}
 
