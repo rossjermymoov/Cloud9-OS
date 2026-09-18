@@ -114,6 +114,38 @@ export function getSyncProgress() {
 }
 
 /**
+ * Determines whether a Helm inventory record is strictly Physical Inventory (Type 1).
+ * Rejects Components (2), Groups/Bundles (3), Packaging (4, 5), and deleted/archived items.
+ */
+export function isPhysicalInventory(it) {
+  if (!it || !it.id) return false;
+
+  // Check type fields (can be integer, string, or object)
+  let rawType = it.type ?? it.product_type ?? it.type_id ?? it.product_type_id;
+  if (rawType && typeof rawType === 'object') {
+    rawType = rawType.id ?? rawType.type ?? rawType.value;
+  }
+
+  if (typeof rawType === 'string' && isNaN(parseInt(rawType))) {
+    const s = rawType.toLowerCase();
+    if (s.includes('comp') || s.includes('group') || s.includes('bund') || s.includes('pack')) return false;
+    if (s.includes('inv') || s.includes('prod') || s.includes('phys')) return true;
+  }
+
+  const t = parseInt(rawType);
+  // In Helm: 1 = Inventory, 2 = Component, 3 = Group/Bundle, 4 = Packaging, 5 = Aux Packaging
+  if (!isNaN(t) && t !== 1) return false;
+
+  // Check boolean and group flags
+  if (it.is_bundle || it.is_group || it.is_component || it.is_packaging || it.is_auxiliary) return false;
+  if (it.group_id != null && it.is_group) return false;
+  if (it.parent_id != null && (it.is_component || it.is_child)) return false;
+  if (it.status === 'archived' || it.archived === true || it.is_active === false || it.deleted_at) return false;
+
+  return true;
+}
+
+/**
  * Bulk upsert physical inventory (Type 1 only) into helm_products in chunks of 100.
  */
 async function bulkUpsertPhysicalProducts(items, custMap) {
@@ -127,13 +159,7 @@ async function bulkUpsertPhysicalProducts(items, custMap) {
     const values = [];
 
     chunk.forEach((it) => {
-      if (!it || !it.id) return;
-      // Strictly Type 1 (Physical Inventory) - ignore Groups/Bundles (3), Components (2), Packaging (4, 5)
-      const rawType = it.product_type ?? it.type ?? it.product_type_id ?? it.type_id;
-      const t = rawType != null ? parseInt(rawType) : null;
-      if (t != null && t !== 1) return;
-      if (it.is_bundle || it.is_group || it.is_component || it.is_packaging) return;
-      if (it.status === 'archived' || it.archived === true || it.is_active === false || it.deleted_at) return;
+      if (!isPhysicalInventory(it)) return;
 
       const helmId = String(it.id);
       const phys = extractItemPhysicals(it);
@@ -262,8 +288,8 @@ export async function syncHelmProducts({ force = false, truncate = false } = {})
         const res = await authedGet('/inventory', {
           'filters[product_types][]': 1,
           'filters[product_type][]': 1,
-          page,
-          per_page: 100
+          limit: 100,
+          page
         });
         const rows = res.data || [];
         if (rows.length === 0) break;
