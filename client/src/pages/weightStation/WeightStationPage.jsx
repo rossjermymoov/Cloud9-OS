@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import {
   searchProducts, updateProductWeight, getWeightLogs,
-  triggerInventorySync, getInventorySyncStatus
+  triggerInventorySync, getInventorySyncStatus, getDebugSample
 } from '../../api/weightStation';
 import { useAuth } from '../../context/AuthContext';
 
@@ -23,6 +23,14 @@ export default function WeightStationPage() {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchError, setSearchError] = useState(null);
+  const [showDebugModal, setShowDebugModal] = useState(false);
+
+  // Debug samples query
+  const { data: debugData, refetch: refetchDebug } = useQuery({
+    queryKey: ['inventory-debug-samples'],
+    queryFn: getDebugSample,
+    enabled: showDebugModal
+  });
 
   // Sync status
   const { data: syncStatus, refetch: refetchSyncStatus } = useQuery({
@@ -276,6 +284,16 @@ export default function WeightStationPage() {
             >
               <RefreshCw size={11} className={(syncMutation.isPending || syncStatus?.in_progress) ? 'animate-spin' : ''} />
               {(syncMutation.isPending || syncStatus?.in_progress) ? 'Rebuilding Cache...' : 'Reset & Re-sync'}
+            </button>
+            <button
+              onClick={() => setShowDebugModal(true)}
+              style={{
+                border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#475569',
+                fontWeight: 700, fontSize: 11.5, padding: '4px 9px', borderRadius: 6,
+                cursor: 'pointer'
+              }}
+            >
+              Inspect Payloads
             </button>
           </div>
 
@@ -939,6 +957,66 @@ function AuditLogsView() {
             </div>
           )}
         </>
+      )}
+
+      {/* DEBUG PAYLOAD INSPECTOR MODAL */}
+      {showDebugModal && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 24
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 16, width: '100%', maxWidth: 900,
+            maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 40px rgba(0,0,0,0.2)'
+          }}>
+            <div style={{ padding: '20px 24px', borderBottom: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: TITLE }}>Helm Inventory Payload Inspector</h3>
+                <p style={{ margin: '3px 0 0', fontSize: 12, color: MUTED }}>
+                  Total raw records in Helm: <strong>{debugData?.helm_total || 'Loading...'}</strong>
+                </p>
+              </div>
+              <button onClick={() => setShowDebugModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ padding: 24, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <div style={{ fontSize: 13, color: '#334155' }}>
+                Below are sample raw records fetched directly from Helm. Look at the <code>type</code>, <code>product_type</code>, and <code>fulfilment_client_id</code> fields to identify unwanted record types to exclude:
+              </div>
+
+              <pre style={{
+                background: '#0F172A', color: '#F8FAFC', padding: 16, borderRadius: 10,
+                fontSize: 12, fontFamily: 'monospace', overflowX: 'auto', maxHeight: 500
+              }}>
+                {JSON.stringify(debugData || { loading: true }, null, 2)}
+              </pre>
+            </div>
+
+            <div style={{ padding: '14px 24px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                onClick={() => refetchDebug()}
+                style={{
+                  border: '1px solid #CBD5E1', background: '#F8FAFC', borderRadius: 8,
+                  padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer'
+                }}
+              >
+                Refresh Live Samples
+              </button>
+              <button
+                onClick={() => setShowDebugModal(false)}
+                style={{
+                  border: 'none', background: ACCENT, color: '#fff', borderRadius: 8,
+                  padding: '8px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer'
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

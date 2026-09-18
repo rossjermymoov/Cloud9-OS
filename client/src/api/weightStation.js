@@ -14,3 +14,6 @@ export const triggerInventorySync = () =>
 
 export const getInventorySyncStatus = () =>
   api.get('/weight-station/sync-status').then(r => r.data);
+
+export const getDebugSample = () =>
+  api.get('/weight-station/debug-sample').then(r => r.data);

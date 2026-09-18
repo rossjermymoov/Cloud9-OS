@@ -210,6 +210,58 @@ router.get('/sync-status', async (_req, res, next) => {
   }
 });
 
+// ── Debug Sample Inspector ───────────────────────────────────────────────────
+router.get('/debug-sample', async (_req, res, next) => {
+  try {
+    let helmSample = [];
+    let helmTotal = 0;
+    if (helmConfigured()) {
+      try {
+        const live = await authedGet('/inventory', { limit: 10 });
+        helmSample = live.data || [];
+        helmTotal = live.total || 0;
+      } catch (hErr) {
+        console.warn('Helm live debug fetch error:', hErr.message);
+      }
+    }
+
+    const { rows: dbSample } = await query(`
+      SELECT helm_id, sku, name, raw_data
+      FROM helm_products
+      LIMIT 10
+    `);
+
+    res.json({
+      helm_total: helmTotal,
+      helm_sample: helmSample.map(it => ({
+        id: it.id,
+        sku: it.sku,
+        name: it.name,
+        type: it.type,
+        product_type: it.product_type,
+        product_type_id: it.product_type_id,
+        fulfilment_client_id: it.fulfilment_client_id,
+        client_name: it.fulfilment_client?.name,
+        package_configurations: it.package_configurations,
+        raw_keys: Object.keys(it)
+      })),
+      db_sample: dbSample.map(r => ({
+        helm_id: r.helm_id,
+        sku: r.sku,
+        name: r.name,
+        type: r.raw_data?.type,
+        product_type: r.raw_data?.product_type,
+        product_type_id: r.raw_data?.product_type_id,
+        fulfilment_client_id: r.raw_data?.fulfilment_client_id,
+        client_name: r.raw_data?.fulfilment_client?.name,
+        raw_keys: r.raw_data ? Object.keys(r.raw_data) : []
+      }))
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── Fetch Audit History Logs ──────────────────────────────────────────────────
 router.get('/logs', async (req, res, next) => {
   try {
