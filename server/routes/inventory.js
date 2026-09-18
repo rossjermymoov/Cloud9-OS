@@ -18,6 +18,8 @@ import { getSetting, setSetting } from '../services/appSettings.js';
 
 const router = express.Router();
 const FIELDS_CACHE_KEY = 'inventory_fields';
+const ITEM_CAP = 100000;
+const ISSUE_CAP = 5000;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── field helpers ────────────────────────────────────────────────────────────
@@ -239,7 +241,7 @@ router.post('/validate', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-const ISSUE_CAP = 4000, ITEM_CAP = 25000;
+const activeValidationRuns = new Map(); // runId -> { customer_index, total_customers, current_customer, percent, items_checked, issues_found }
 
 async function runValidation(runId, scope, customerId, fields) {
   try {
@@ -249,6 +251,16 @@ async function runValidation(runId, scope, customerId, fields) {
        ORDER BY business_name`,
       scope === 'customer' ? [customerId] : []
     )).rows;
+
+    const totalCustomers = custRows.length;
+    activeValidationRuns.set(runId, {
+      customer_index: 0,
+      total_customers: totalCustomers,
+      current_customer: totalCustomers > 0 ? custRows[0].business_name : 'Starting...',
+      items_checked: 0,
+      issues_found: 0,
+      percent: 0,
+    });
 
     // Preload dismissed alerts
     const dismissedRows = (await query(`SELECT customer_id, sku, alert_type FROM inventory_dismissed_alerts`)).rows;
@@ -260,7 +272,19 @@ async function runValidation(runId, scope, customerId, fields) {
     const sanityAlerts = [];
     let itemsChecked = 0, issuesFound = 0, sanityAlertsFound = 0;
 
-    for (const c of custRows) {
+    for (let cIdx = 0; cIdx < custRows.length; cIdx++) {
+      const c = custRows[cIdx];
+      
+      // Update real-time progress state
+      activeValidationRuns.set(runId, {
+        customer_index: cIdx + 1,
+        total_customers: totalCustomers,
+        current_customer: c.business_name,
+        items_checked: itemsChecked,
+        issues_found: issuesFound + sanityAlertsFound,
+        percent: Math.min(99, Math.round((cIdx / totalCustomers) * 100)),
+      });
+
       const list = await fetchInventoryForClient({ helmClientId: c.helm_customer_id, perPage: 100, maxPages: 500, productTypes: [1] });
       const needDetail = list.length ? (() => { const lf = flatten(list[0]); return fields.some(f => !(f in lf)); })() : false;
       let custItems = 0, custIssues = 0, custMissingCells = 0, custSanityAlerts = 0;
@@ -293,7 +317,7 @@ async function runValidation(runId, scope, customerId, fields) {
         let merged = it;
         if (needDetail) {
           try { const d = await fetchInventoryDetail(it.id); merged = { ...it, ...(d?.data || d || {}) }; } catch { /* keep list-level */ }
-          await sleep(25);
+          await sleep(80); // gentle pacing to respect rate limits
         }
 
         // 1. Missing field checks
@@ -342,8 +366,21 @@ async function runValidation(runId, scope, customerId, fields) {
         sanity_alerts: custSanityAlerts,
         complete_pct: custItems ? Math.round(((custItems - custIssues) / custItems) * 100) : null,
       });
+
       await query('UPDATE inventory_validation_runs SET items_checked = $1, issues_found = $2 WHERE id = $3', [itemsChecked, issuesFound + sanityAlertsFound, runId]).catch(() => {});
+      
+      // Update progress with latest item counts
+      activeValidationRuns.set(runId, {
+        customer_index: cIdx + 1,
+        total_customers: totalCustomers,
+        current_customer: c.business_name,
+        items_checked: itemsChecked,
+        issues_found: issuesFound + sanityAlertsFound,
+        percent: Math.min(99, Math.round(((cIdx + 1) / totalCustomers) * 100)),
+      });
+
       if (itemsChecked >= ITEM_CAP) break;
+      await sleep(150); // polite inter-customer throttle
     }
 
     const result = {
@@ -352,12 +389,16 @@ async function runValidation(runId, scope, customerId, fields) {
       truncated_issues: issues.length >= ISSUE_CAP || sanityAlerts.length >= ISSUE_CAP,
       item_cap_hit: itemsChecked >= ITEM_CAP,
     };
+
+    activeValidationRuns.delete(runId);
+
     await query(
       `UPDATE inventory_validation_runs SET status='ok', items_checked=$1, issues_found=$2, result=$3, finished_at=NOW() WHERE id=$4`,
       [itemsChecked, issuesFound + sanityAlertsFound, JSON.stringify(result), runId]
     );
   } catch (err) {
     console.warn('[inv-validate] run failed:', err.message);
+    activeValidationRuns.delete(runId);
     await query('UPDATE inventory_validation_runs SET status=\'error\', error=$1, finished_at=NOW() WHERE id=$2', [err.message, runId]).catch(() => {});
   }
 }
@@ -369,7 +410,15 @@ router.get('/validate/:id', async (req, res, next) => {
        FROM inventory_validation_runs WHERE id = $1`, [req.params.id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Run not found' });
-    res.json(rows[0]);
+    const run = rows[0];
+    const live = activeValidationRuns.get(req.params.id);
+    res.json({
+      ...run,
+      current_customer: live?.current_customer || null,
+      customer_index: live?.customer_index || null,
+      total_customers: live?.total_customers || null,
+      percent: live ? live.percent : (run.status === 'ok' ? 100 : 0),
+    });
   } catch (err) { next(err); }
 });
 

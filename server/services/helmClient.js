@@ -47,11 +47,13 @@ async function login() {
   return cachedToken;
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 async function token() {
   return cachedToken || login();
 }
 
-// ─── Authenticated GET (auto re-login once on 401) ───────────────────────────
+// ─── Authenticated GET (auto re-login once on 401 & auto-backoff on 429) ──────
 export async function authedGet(pathOrUrl, params = {}) {
   const url = pathOrUrl.startsWith('http')
     ? new URL(pathOrUrl)
@@ -60,22 +62,40 @@ export async function authedGet(pathOrUrl, params = {}) {
     if (v != null) url.searchParams.set(k, v);
   }
 
-  let t = await token();
-  let res = await fetch(url, { headers: { Authorization: `Bearer ${t}`, Accept: 'application/json' } });
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let t = await token();
+    let res = await fetch(url, { headers: { Authorization: `Bearer ${t}`, Accept: 'application/json' } });
 
-  if (res.status === 401) {
-    cachedToken = null;
-    t = await login();
-    res = await fetch(url, { headers: { Authorization: `Bearer ${t}`, Accept: 'application/json' } });
+    if (res.status === 401) {
+      cachedToken = null;
+      t = await login();
+      res = await fetch(url, { headers: { Authorization: `Bearer ${t}`, Accept: 'application/json' } });
+    }
+
+    if (res.status === 429) {
+      const retryAfterHeader = res.headers.get('Retry-After');
+      const retryAfterSeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : null;
+      const backoffMs = retryAfterSeconds && !isNaN(retryAfterSeconds)
+        ? (retryAfterSeconds + 0.5) * 1000
+        : Math.min(2000 * Math.pow(1.6, attempt - 1), 12000);
+
+      console.warn(`[helmClient] Rate limited (429) on ${url.pathname}. Backing off for ${Math.round(backoffMs)}ms before retry (attempt ${attempt}/${maxAttempts})...`);
+      await sleep(backoffMs);
+      continue;
+    }
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Helm API ${res.status} on ${url.pathname}: ${body.slice(0, 200)}`);
+    }
+    return res.json();
   }
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Helm API ${res.status} on ${url.pathname}: ${body.slice(0, 200)}`);
-  }
-  return res.json();
+
+  throw new Error(`Helm API rate limit exceeded on ${url.pathname} after ${maxAttempts} retries`);
 }
 
-// ─── Authenticated Mutation (PUT / PATCH / POST) ──────────────────────────────
+// ─── Authenticated Mutation (PUT / PATCH / POST with 429 backoff) ─────────────
 export async function authedMutate(method, pathOrUrl, body = {}, params = {}) {
   const url = pathOrUrl.startsWith('http')
     ? new URL(pathOrUrl)
@@ -84,34 +104,51 @@ export async function authedMutate(method, pathOrUrl, body = {}, params = {}) {
     if (v != null) url.searchParams.set(k, v);
   }
 
-  let t = await token();
-  const headers = { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json', Accept: 'application/json' };
-  let res = await fetch(url, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (res.status === 401) {
-    cachedToken = null;
-    t = await login();
-    headers.Authorization = `Bearer ${t}`;
-    res = await fetch(url, {
+  const maxAttempts = 5;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let t = await token();
+    const headers = { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json', Accept: 'application/json' };
+    let res = await fetch(url, {
       method,
       headers,
       body: body ? JSON.stringify(body) : undefined,
     });
+
+    if (res.status === 401) {
+      cachedToken = null;
+      t = await login();
+      headers.Authorization = `Bearer ${t}`;
+      res = await fetch(url, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    }
+
+    if (res.status === 429) {
+      const retryAfterHeader = res.headers.get('Retry-After');
+      const retryAfterSeconds = retryAfterHeader ? parseInt(retryAfterHeader, 10) : null;
+      const backoffMs = retryAfterSeconds && !isNaN(retryAfterSeconds)
+        ? (retryAfterSeconds + 0.5) * 1000
+        : Math.min(2000 * Math.pow(1.6, attempt - 1), 12000);
+
+      console.warn(`[helmClient] Rate limited (429) on ${method} ${url.pathname}. Backing off for ${Math.round(backoffMs)}ms before retry (attempt ${attempt}/${maxAttempts})...`);
+      await sleep(backoffMs);
+      continue;
+    }
+
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(`Helm API ${res.status} on ${method} ${url.pathname}: ${text.slice(0, 300)}`);
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      return { ok: true, raw: text };
+    }
   }
 
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`Helm API ${res.status} on ${method} ${url.pathname}: ${text.slice(0, 300)}`);
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { ok: true, raw: text };
-  }
+  throw new Error(`Helm API rate limit exceeded on ${method} ${url.pathname} after ${maxAttempts} retries`);
 }
 
 // Walk Helm's pagination ({ data, current_page, last_page, next_page_url }).
@@ -125,6 +162,7 @@ async function fetchAllPages(path, { params = {}, max = 100 } = {}) {
     const lastPage = parseInt(res.last_page) || 1;
     if (!res.next_page_url || page >= lastPage || rows.length === 0) break;
     page++;
+    await sleep(80); // gentle pacing
   }
   return all;
 }
@@ -404,6 +442,7 @@ export async function fetchInventoryForClient({ helmClientId, perPage = 100, max
     const curPage = parseInt(res.current_page) || page;
     if (rows.length === 0 || curPage >= lastPage) break;
     page++;
+    await sleep(100);
   }
   return all;
 }

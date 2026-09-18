@@ -46,7 +46,7 @@ export default function InventoryValidator() {
     queryKey: ['inv-run', runId],
     queryFn: () => getInventoryValidation(runId),
     enabled: !!runId,
-    refetchInterval: (q) => (q.state.data?.status === 'running' ? 2500 : false),
+    refetchInterval: (q) => (q.state.data?.status === 'running' ? 1000 : false),
   });
 
   const isFav = (p) => favs.includes(p);
@@ -193,10 +193,59 @@ export default function InventoryValidator() {
               Select fields on the left and hit <b>Interrogate</b> to see which inventory items are missing data.
             </div>
           ) : running ? (
-            <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, padding: '40px 24px', textAlign: 'center' }}>
-              <RefreshCw size={22} style={{ animation: 'spin 1s linear infinite', color: ACCENT }} />
-              <div style={{ fontSize: 14, fontWeight: 700, color: TITLE, margin: '12px 0 4px' }}>Interrogating Helm…</div>
-              <div style={{ fontSize: 12.5, color: MUTED }}>{(run?.items_checked || 0).toLocaleString()} items checked · {(run?.issues_found || 0).toLocaleString()} with missing data{run?.scope === 'all' ? ' · sweeping all customers' : ''}</div>
+            <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, padding: '32px 24px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <RefreshCw size={22} style={{ animation: 'spin 1s linear infinite', color: ACCENT, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: TITLE }}>
+                      {run?.scope === 'all' && run?.total_customers
+                        ? `Interrogating Customers (${run.customer_index || 0} of ${run.total_customers})`
+                        : 'Interrogating Inventory…'}
+                    </div>
+                    <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
+                      {run?.current_customer ? `Current: ${run.current_customer}` : 'Connecting to Helm API…'}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#F0FDF4', border: '1px solid #BBF7D0', padding: '5px 11px', borderRadius: 20 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: GREEN, display: 'inline-block' }} />
+                  <span style={{ fontSize: 11.5, fontWeight: 700, color: '#166534' }}>Safe Rate-Limit Pacing Active</span>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, fontWeight: 600, color: MUTED, marginBottom: 6 }}>
+                  <span>Customer Sweep Progress</span>
+                  <span style={{ color: ACCENT, fontWeight: 800 }}>{run?.percent != null ? `${run.percent}%` : 'Starting…'}</span>
+                </div>
+                <div style={{ height: 10, background: '#F1F5F9', borderRadius: 6, overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${Math.max(run?.percent || 5, 5)}%`,
+                    height: '100%',
+                    background: `linear-gradient(90deg, ${ACCENT}, #3B82F6)`,
+                    transition: 'width 0.3s ease',
+                    borderRadius: 6,
+                  }} />
+                </div>
+              </div>
+
+              {/* Live Metric Counters */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+                <div style={{ background: '#F8FAFC', borderRadius: 10, padding: '12px 14px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }}>Physical Items Checked</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: TITLE, marginTop: 3 }}>
+                    {(run?.items_checked || 0).toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ background: '#F8FAFC', borderRadius: 10, padding: '12px 14px', border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }}>Discrepancies / Outliers</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: (run?.issues_found || 0) > 0 ? AMBER : TITLE, marginTop: 3 }}>
+                    {(run?.issues_found || 0).toLocaleString()}
+                  </div>
+                </div>
+              </div>
             </div>
           ) : run?.status === 'error' ? (
             <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, padding: 24, color: RED, fontSize: 13 }}>Interrogation failed: {run.error}</div>
