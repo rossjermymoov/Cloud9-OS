@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Scale, ScanBarcode, CheckCircle2, AlertCircle, History, Search,
-  RefreshCw, Box, Layers, X, ChevronRight, Database, Square
+  RefreshCw, Box, Layers, X, ChevronRight, Database, Square,
+  Calendar, Filter, User, Tag
 } from 'lucide-react';
 import {
   searchProducts, updateProductWeight, getWeightLogs,
-  triggerInventorySync, getInventorySyncStatus, cancelSync
+  triggerInventorySync, getInventorySyncStatus, cancelSync, deleteFailedLogs
 } from '../../api/weightStation';
 import { useAuth } from '../../context/AuthContext';
 
@@ -68,6 +69,41 @@ export default function WeightStationPage() {
   const barcodeInputRef = useRef(null);
   const weightInputRef = useRef(null);
 
+  // Reset station state
+  function resetStation() {
+    setSelectedProduct(null);
+    setSearchResults([]);
+    setSearchError(null);
+    setUpdateError(null);
+    setBarcodeInput('');
+    setEnteredWeight('');
+    setEnteredLength('');
+    setEnteredWidth('');
+    setEnteredHeight('');
+    setNotes('');
+    setStabilized(false);
+    setStabilizing(false);
+    setCountdown(0);
+    clearInterval(countdownIntervalRef.current);
+    clearTimeout(debounceTimerRef.current);
+
+    setTimeout(() => {
+      if (barcodeInputRef.current) {
+        barcodeInputRef.current.focus();
+      }
+    }, 50);
+  }
+
+  // Listen to sidebar click navigation to reset station to initial blank state
+  useEffect(() => {
+    function handleSidebarReset() {
+      setActiveTab('station');
+      resetStation();
+    }
+    window.addEventListener('reset-weight-station', handleSidebarReset);
+    return () => window.removeEventListener('reset-weight-station', handleSidebarReset);
+  }, []);
+
   // Keep barcode input focused on mount and whenever in station mode with no selected product
   useEffect(() => {
     if (activeTab === 'station' && !selectedProduct && barcodeInputRef.current) {
@@ -124,29 +160,6 @@ export default function WeightStationPage() {
         weightInputRef.current.focus();
       }
     }, 100);
-  }
-
-  function resetStation() {
-    setSelectedProduct(null);
-    setSearchResults([]);
-    setSearchError(null);
-    setUpdateError(null);
-    setEnteredWeight('');
-    setEnteredLength('');
-    setEnteredWidth('');
-    setEnteredHeight('');
-    setNotes('');
-    setStabilized(false);
-    setStabilizing(false);
-    setCountdown(0);
-    clearInterval(countdownIntervalRef.current);
-    clearTimeout(debounceTimerRef.current);
-
-    setTimeout(() => {
-      if (barcodeInputRef.current) {
-        barcodeInputRef.current.focus();
-      }
-    }, 50);
   }
 
   // Weight input handler with USB scale debounce stabilization
@@ -248,12 +261,9 @@ export default function WeightStationPage() {
       {/* Top Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 14 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: '0 0 4px', letterSpacing: -0.6, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: 0, letterSpacing: -0.6, display: 'flex', alignItems: 'center', gap: 10 }}>
             <Scale size={26} color={ACCENT} /> Weigh & Measure Station
           </h1>
-          <p style={{ fontSize: 13, color: MUTED, margin: 0 }}>
-            Scan barcodes, capture scale weights with stabilization, and push live corrections directly to Helm.
-          </p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -289,7 +299,7 @@ export default function WeightStationPage() {
             ) : (
               <button
                 onClick={() => {
-                  if (window.confirm('This will wipe the current local cache and rebuild purely physical inventory (Type 1, 11,374 items) from Helm. Proceed?')) {
+                  if (window.confirm('This will wipe the current local cache and rebuild purely physical inventory (Type 1, 11,374 items) for active customers. Proceed?')) {
                     syncMutation.mutate();
                   }
                 }}
@@ -820,42 +830,154 @@ export default function WeightStationPage() {
 // ── Audit History Logs View ──────────────────────────────────────────────────
 function AuditLogsView() {
   const [searchTerm, setSearchTerm] = useState('');
+  const [skuFilter, setSkuFilter] = useState('');
+  const [userFilter, setUserFilter] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [page, setPage] = useState(0);
   const limit = 25;
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['weight-station-logs', searchTerm, page],
-    queryFn: () => getWeightLogs({ q: searchTerm, limit, offset: page * limit })
+  // Auto-prune failed logs on mount
+  useEffect(() => {
+    deleteFailedLogs().catch(() => {});
+  }, []);
+
+  const { data, isLoading, refetch } = useQuery({
+    queryKey: ['weight-station-logs', searchTerm, skuFilter, userFilter, startDate, endDate, page],
+    queryFn: () => getWeightLogs({
+      q: searchTerm,
+      sku: skuFilter,
+      user: userFilter,
+      startDate,
+      endDate,
+      limit,
+      offset: page * limit
+    })
   });
 
   const logs = data?.logs || [];
   const total = data?.total || 0;
   const totalPages = Math.ceil(total / limit);
 
+  function resetFilters() {
+    setSearchTerm('');
+    setSkuFilter('');
+    setUserFilter('');
+    setStartDate('');
+    setEndDate('');
+    setPage(0);
+  }
+
+  const hasActiveFilters = Boolean(searchTerm || skuFilter || userFilter || startDate || endDate);
+
   return (
     <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: SHADOW }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
+      {/* Top Title */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 17, fontWeight: 800, color: TITLE, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: TITLE, display: 'flex', alignItems: 'center', gap: 8 }}>
             <History size={20} color={ACCENT} /> Physical Measurement Audit Trail
           </div>
           <div style={{ fontSize: 13, color: MUTED }}>
-            Full history of weight and dimensional corrections pushed to Helm WMS.
+            Full history of physical weight and dimensional corrections synced to Helm WMS.
           </div>
         </div>
 
-        {/* Search */}
-        <div style={{ position: 'relative', width: 280 }}>
-          <Search size={16} color={MUTED} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
+        {hasActiveFilters && (
+          <button
+            onClick={resetFilters}
+            style={{
+              border: '1px solid #CBD5E1', background: '#F8FAFC',
+              borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 700,
+              color: MUTED, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6
+            }}
+          >
+            <X size={14} /> Clear All Filters
+          </button>
+        )}
+      </div>
+
+      {/* Filter Toolbar */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: 12, marginBottom: 20, padding: 14,
+        background: '#F8FAFC', borderRadius: 12, border: '1px solid #E2E8F0'
+      }}>
+        {/* General Search */}
+        <div style={{ position: 'relative' }}>
+          <Search size={15} color={MUTED} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
           <input
             type="text"
-            placeholder="Search SKU, barcode, customer..."
+            placeholder="Search keyword..."
             value={searchTerm}
             onChange={(e) => { setSearchTerm(e.target.value); setPage(0); }}
             style={{
               width: '100%', boxSizing: 'border-box',
-              padding: '8px 12px 8px 36px', borderRadius: 8,
-              border: '1px solid #CBD5E1', fontSize: 13, fontFamily: 'inherit'
+              padding: '7px 10px 7px 32px', borderRadius: 8,
+              border: '1px solid #CBD5E1', fontSize: 12.5, fontFamily: 'inherit', background: '#fff'
+            }}
+          />
+        </div>
+
+        {/* SKU Filter */}
+        <div style={{ position: 'relative' }}>
+          <Tag size={15} color={MUTED} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
+          <input
+            type="text"
+            placeholder="Filter by SKU..."
+            value={skuFilter}
+            onChange={(e) => { setSkuFilter(e.target.value); setPage(0); }}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              padding: '7px 10px 7px 32px', borderRadius: 8,
+              border: '1px solid #CBD5E1', fontSize: 12.5, fontFamily: 'inherit', background: '#fff'
+            }}
+          />
+        </div>
+
+        {/* User / Operator Filter */}
+        <div style={{ position: 'relative' }}>
+          <User size={15} color={MUTED} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
+          <input
+            type="text"
+            placeholder="Filter by User / Operator..."
+            value={userFilter}
+            onChange={(e) => { setUserFilter(e.target.value); setPage(0); }}
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              padding: '7px 10px 7px 32px', borderRadius: 8,
+              border: '1px solid #CBD5E1', fontSize: 12.5, fontFamily: 'inherit', background: '#fff'
+            }}
+          />
+        </div>
+
+        {/* From Date */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: MUTED }}>From:</span>
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => { setStartDate(e.target.value); setPage(0); }}
+            style={{
+              flex: 1, boxSizing: 'border-box',
+              padding: '6px 8px', borderRadius: 8,
+              border: '1px solid #CBD5E1', fontSize: 12, fontFamily: 'inherit', background: '#fff'
+            }}
+          />
+        </div>
+
+        {/* To Date */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11.5, fontWeight: 700, color: MUTED }}>To:</span>
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => { setEndDate(e.target.value); setPage(0); }}
+            style={{
+              flex: 1, boxSizing: 'border-box',
+              padding: '6px 8px', borderRadius: 8,
+              border: '1px solid #CBD5E1', fontSize: 12, fontFamily: 'inherit', background: '#fff'
             }}
           />
         </div>
@@ -868,7 +990,7 @@ function AuditLogsView() {
         </div>
       ) : logs.length === 0 ? (
         <div style={{ padding: 40, textAlign: 'center', color: MUTED }}>
-          No measurement updates recorded yet.
+          No measurement records found {hasActiveFilters ? 'matching your filters.' : 'yet.'}
         </div>
       ) : (
         <>
@@ -889,7 +1011,7 @@ function AuditLogsView() {
               <tbody>
                 {logs.map((log) => {
                   const dateStr = new Date(log.created_at).toLocaleString('en-GB', {
-                    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+                    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
                   });
                   return (
                     <tr key={log.id} style={{ borderBottom: '1px solid #F1F5F9' }}>

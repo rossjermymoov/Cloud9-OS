@@ -260,26 +260,70 @@ router.get('/debug-sample', async (_req, res, next) => {
   }
 });
 
-// ── Fetch Audit History Logs ──────────────────────────────────────────────────
+// ── Fetch Audit History Logs with Advanced Filtering ───────────────────────────
 router.get('/logs', async (req, res, next) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const offset = parseInt(req.query.offset) || 0;
     const q = (req.query.q || '').trim();
+    const sku = (req.query.sku || '').trim();
+    const userName = (req.query.user || req.query.userName || '').trim();
+    const customer = (req.query.customer || '').trim();
+    const startDate = (req.query.startDate || req.query.from || '').trim();
+    const endDate = (req.query.endDate || req.query.to || '').trim();
+    const status = (req.query.status || '').trim();
 
-    let whereClause = '';
+    const conditions = [];
     const params = [];
+
+    // By default exclude failed logs unless explicitly requested
+    if (status) {
+      params.push(status);
+      conditions.push(`status = $${params.length}`);
+    } else {
+      conditions.push(`status != 'failed'`);
+    }
 
     if (q) {
       params.push(`%${q}%`);
-      whereClause = `WHERE (
-        sku ILIKE $1 OR
-        barcode ILIKE $1 OR
-        product_name ILIKE $1 OR
-        customer_name ILIKE $1 OR
-        user_name ILIKE $1
-      )`;
+      const idx = params.length;
+      conditions.push(`(
+        sku ILIKE $${idx} OR
+        barcode ILIKE $${idx} OR
+        product_name ILIKE $${idx} OR
+        customer_name ILIKE $${idx} OR
+        user_name ILIKE $${idx} OR
+        user_email ILIKE $${idx}
+      )`);
     }
+
+    if (sku) {
+      params.push(`%${sku}%`);
+      conditions.push(`sku ILIKE $${params.length}`);
+    }
+
+    if (userName) {
+      params.push(`%${userName}%`);
+      const idx = params.length;
+      conditions.push(`(user_name ILIKE $${idx} OR user_email ILIKE $${idx})`);
+    }
+
+    if (customer) {
+      params.push(`%${customer}%`);
+      conditions.push(`customer_name ILIKE $${params.length}`);
+    }
+
+    if (startDate) {
+      params.push(startDate);
+      conditions.push(`created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (endDate) {
+      params.push(`${endDate} 23:59:59.999Z`);
+      conditions.push(`created_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const countQuery = `SELECT COUNT(*)::int AS total FROM inventory_weight_logs ${whereClause}`;
     const { rows: countRows } = await query(countQuery, params);
@@ -298,6 +342,16 @@ router.get('/logs', async (req, res, next) => {
     const { rows: logs } = await query(dataQuery, [...params, limit, offset]);
 
     res.json({ logs, total, limit, offset });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Delete Failed Audit Logs ──────────────────────────────────────────────────
+router.delete('/logs/failed', async (_req, res, next) => {
+  try {
+    const { rowCount } = await query(`DELETE FROM inventory_weight_logs WHERE status = 'failed'`);
+    res.json({ ok: true, deleted: rowCount });
   } catch (err) {
     next(err);
   }

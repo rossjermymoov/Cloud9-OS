@@ -6,8 +6,20 @@ export const searchProducts = (barcode) =>
 export const updateProductWeight = (payload) =>
   api.post('/weight-station/update', payload).then(r => r.data);
 
-export const getWeightLogs = ({ q = '', limit = 50, offset = 0 } = {}) =>
-  api.get('/weight-station/logs', { params: { q: q || undefined, limit, offset } }).then(r => r.data);
+export const getWeightLogs = ({ q = '', sku = '', user = '', customer = '', startDate = '', endDate = '', status = '', limit = 50, offset = 0 } = {}) =>
+  api.get('/weight-station/logs', {
+    params: {
+      q: q || undefined,
+      sku: sku || undefined,
+      user: user || undefined,
+      customer: customer || undefined,
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      status: status || undefined,
+      limit,
+      offset
+    }
+  }).then(r => r.data);
 
 export const triggerInventorySync = () =>
   api.post('/weight-station/sync').then(r => r.data);
@@ -20,3 +32,6 @@ export const getDebugSample = () =>
 
 export const cancelSync = () =>
   api.post('/weight-station/cancel-sync').then(r => r.data);
+
+export const deleteFailedLogs = () =>
+  api.delete('/weight-station/logs/failed').then(r => r.data);

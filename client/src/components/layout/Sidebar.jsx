@@ -98,6 +98,11 @@ export default function Sidebar() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {sec.items.map(({ to, label, Icon, end, badge }) => (
                 <NavLink key={to} to={to} end={end}
+                  onClick={() => {
+                    if (to === '/weight-station') {
+                      window.dispatchEvent(new CustomEvent('reset-weight-station'));
+                    }
+                  }}
                   style={({ isActive }) => ({
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '7px 11px', borderRadius: 8,
