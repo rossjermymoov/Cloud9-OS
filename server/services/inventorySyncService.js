@@ -138,14 +138,15 @@ export function isPhysicalInventory(it) {
   }
 
   const t = parseInt(rawType);
-  // In Helm: 1 = Inventory, 2 = Component, 3 = Group/Bundle, 4 = Packaging, 5 = Aux Packaging
+  // In Helm: 1 = Physical Inventory, 2 = Component, 3 = Group/Bundle, 4 = Packaging, 5 = Aux Packaging
   if (!isNaN(t) && t !== 1) return false;
 
   // Check boolean and group flags
   if (it.is_bundle || it.is_group || it.is_component || it.is_packaging || it.is_auxiliary) return false;
   if (it.group_id != null && it.is_group) return false;
   if (it.parent_id != null && (it.is_component || it.is_child)) return false;
-  if (it.status === 'archived' || it.archived === true || it.is_active === false || it.deleted_at) return false;
+  if (it.status === 'archived' || it.status === 'inactive' || it.archived === true || it.is_active === false || it.deleted_at) return false;
+  if (it.fulfilment_client?.status === 'inactive' || it.fulfilment_client?.status === 'archived') return false;
 
   return true;
 }
@@ -166,13 +167,17 @@ async function bulkUpsertPhysicalProducts(items, custMap) {
     chunk.forEach((it) => {
       if (!isPhysicalInventory(it)) return;
 
+      const helmClientId = String(it.fulfilment_client_id || it.client_id || it.customer_id || '');
+      const cust = custMap.get(helmClientId);
+      
+      // Strict constraint: Only sync products belonging to active customers
+      if (!cust) return;
+
       const helmId = String(it.id);
       const phys = extractItemPhysicals(it);
       const sku = it.sku || it.product_sku || '';
       const name = it.name || it.title || it.product_name || 'Unnamed Product';
       const stock = parseInt(it.stock_level ?? it.quantity ?? 0) || 0;
-      const helmClientId = String(it.fulfilment_client_id || it.client_id || it.customer_id || '');
-      const cust = custMap.get(helmClientId) || null;
 
       const offset = values.length;
       valuePlaceholders.push(`(
@@ -191,9 +196,9 @@ async function bulkUpsertPhysicalProducts(items, custMap) {
         phys.barcode,
         phys.barcodes,
         phys.image_url,
-        cust ? cust.id : null,
-        helmClientId || (cust ? cust.helm_customer_id : null),
-        cust ? cust.business_name : (it.fulfilment_client?.name || `Customer #${helmClientId || 'Unknown'}`),
+        cust.id,
+        cust.helm_customer_id || helmClientId,
+        cust.business_name,
         phys.length,
         phys.width,
         phys.height,
@@ -226,9 +231,9 @@ async function bulkUpsertPhysicalProducts(items, custMap) {
           barcode = COALESCE(EXCLUDED.barcode, helm_products.barcode),
           barcodes = EXCLUDED.barcodes,
           image_url = COALESCE(EXCLUDED.image_url, helm_products.image_url),
-          customer_id = COALESCE(EXCLUDED.customer_id, helm_products.customer_id),
-          helm_customer_id = COALESCE(EXCLUDED.helm_customer_id, helm_products.helm_customer_id),
-          customer_name = COALESCE(EXCLUDED.customer_name, helm_products.customer_name),
+          customer_id = EXCLUDED.customer_id,
+          helm_customer_id = EXCLUDED.helm_customer_id,
+          customer_name = EXCLUDED.customer_name,
           length = EXCLUDED.length,
           width = EXCLUDED.width,
           height = EXCLUDED.height,
@@ -277,7 +282,13 @@ export async function syncHelmProducts({ force = false, truncate = false } = {})
       await query(`TRUNCATE TABLE helm_products`);
     }
 
-    const custRes = await query(`SELECT id, helm_customer_id, business_name FROM customers WHERE helm_customer_id IS NOT NULL`);
+    // Only load active customers
+    const custRes = await query(`
+      SELECT id, helm_customer_id, business_name 
+      FROM customers 
+      WHERE helm_customer_id IS NOT NULL 
+        AND (account_status IS NULL OR account_status = 'active')
+    `);
     const custMap = new Map();
     for (const c of custRes.rows) {
       custMap.set(String(c.helm_customer_id), c);
@@ -420,7 +431,12 @@ export async function findProductsByBarcode(rawBarcode) {
 
       // C. Process candidates and cache locally
       if (candidates.length > 0) {
-        const custRes = await query(`SELECT id, helm_customer_id, business_name FROM customers WHERE helm_customer_id IS NOT NULL`);
+        const custRes = await query(`
+          SELECT id, helm_customer_id, business_name 
+          FROM customers 
+          WHERE helm_customer_id IS NOT NULL 
+            AND (account_status IS NULL OR account_status = 'active')
+        `);
         const custMap = new Map();
         for (const c of custRes.rows) {
           custMap.set(String(c.helm_customer_id), c);
@@ -440,7 +456,8 @@ export async function findProductsByBarcode(rawBarcode) {
 
           const phys = extractItemPhysicals(fullDetail);
           const helmClientId = String(fullDetail.fulfilment_client_id || fullDetail.client_id || '');
-          const cust = custMap.get(helmClientId) || null;
+          const cust = custMap.get(helmClientId);
+          if (!cust) continue; // Skip if not an active customer
 
           // Upsert to local cache
           await query(`

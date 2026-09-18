@@ -1,12 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Scale, ScanBarcode, CheckCircle2, AlertCircle, History, Search,
-  ArrowRight, RefreshCw, Box, User, Clock, Layers, Sparkles, X, ChevronRight, Database
+  RefreshCw, Box, Layers, X, ChevronRight, Database, Square
 } from 'lucide-react';
 import {
   searchProducts, updateProductWeight, getWeightLogs,
-  triggerInventorySync, getInventorySyncStatus, getDebugSample
+  triggerInventorySync, getInventorySyncStatus, cancelSync
 } from '../../api/weightStation';
 import { useAuth } from '../../context/AuthContext';
 
@@ -23,26 +23,25 @@ export default function WeightStationPage() {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchError, setSearchError] = useState(null);
-  const [showDebugModal, setShowDebugModal] = useState(false);
 
-  // Debug samples query
-  const { data: debugData, refetch: refetchDebug } = useQuery({
-    queryKey: ['inventory-debug-samples'],
-    queryFn: getDebugSample,
-    enabled: showDebugModal
-  });
-
-  // Sync status
+  // Sync status polling
   const { data: syncStatus, refetch: refetchSyncStatus } = useQuery({
     queryKey: ['inventory-sync-status'],
     queryFn: getInventorySyncStatus,
-    refetchInterval: 10000
+    refetchInterval: 3000
   });
 
   const syncMutation = useMutation({
     mutationFn: triggerInventorySync,
     onSuccess: () => {
-      setTimeout(() => refetchSyncStatus(), 2000);
+      setTimeout(() => refetchSyncStatus(), 1000);
+    }
+  });
+
+  const stopSyncMutation = useMutation({
+    mutationFn: cancelSync,
+    onSuccess: () => {
+      refetchSyncStatus();
     }
   });
 
@@ -92,7 +91,7 @@ export default function WeightStationPage() {
       const items = data.products || [];
 
       if (items.length === 0) {
-        setSearchError(`No product found with barcode "${query}". If this is a new product, try clicking "Sync Inventory" above.`);
+        setSearchError(`No product found with barcode "${query}". If this is a newly added item, click "Reset & Re-sync" above.`);
       } else if (items.length === 1) {
         selectProduct(items[0]);
       } else {
@@ -198,7 +197,7 @@ export default function WeightStationPage() {
         newWeight: `${res.weight_g} g (${res.weight_kg} kg)`,
         customer: selectedProduct.customer_name
       });
-      setTimeout(() => setSuccessToast(null), 4000);
+      setTimeout(() => setSuccessToast(null), 4500);
       resetStation();
     },
     onError: (err) => {
@@ -247,7 +246,7 @@ export default function WeightStationPage() {
   return (
     <div style={{ width: '100%', maxWidth: 'none', minHeight: 'calc(100vh - 100px)' }}>
       {/* Top Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 14 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: '0 0 4px', letterSpacing: -0.6, display: 'flex', alignItems: 'center', gap: 10 }}>
             <Scale size={26} color={ACCENT} /> Weigh & Measure Station
@@ -257,7 +256,7 @@ export default function WeightStationPage() {
           </p>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           {/* Cache Sync Status & Trigger */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,
@@ -266,35 +265,46 @@ export default function WeightStationPage() {
           }}>
             <Database size={14} color={ACCENT} />
             <span>
-              <strong>{syncStatus?.total_products ? syncStatus.total_products.toLocaleString() : '0'}</strong> inventory items
+              <strong>{syncStatus?.total_products ? syncStatus.total_products.toLocaleString() : '0'}</strong> physical items
             </span>
-            <button
-              onClick={() => {
-                if (window.confirm('This will wipe the current local cache and rebuild purely physical inventory (Type 1) from Helm. Proceed?')) {
-                  syncMutation.mutate();
-                }
-              }}
-              disabled={syncMutation.isPending || syncStatus?.in_progress}
-              style={{
-                border: 'none', background: '#EFF6FF', color: ACCENT,
-                fontWeight: 700, fontSize: 11.5, padding: '4px 9px', borderRadius: 6,
-                cursor: (syncMutation.isPending || syncStatus?.in_progress) ? 'default' : 'pointer', display: 'flex',
-                alignItems: 'center', gap: 4
-              }}
-            >
-              <RefreshCw size={11} className={(syncMutation.isPending || syncStatus?.in_progress) ? 'animate-spin' : ''} />
-              {(syncMutation.isPending || syncStatus?.in_progress) ? 'Rebuilding Cache...' : 'Reset & Re-sync'}
-            </button>
-            <button
-              onClick={() => setShowDebugModal(true)}
-              style={{
-                border: '1px solid #E2E8F0', background: '#F8FAFC', color: '#475569',
-                fontWeight: 700, fontSize: 11.5, padding: '4px 9px', borderRadius: 6,
-                cursor: 'pointer'
-              }}
-            >
-              Inspect Payloads
-            </button>
+
+            {syncStatus?.in_progress ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 11.5, color: ACCENT, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <RefreshCw size={11} className="animate-spin" /> Rebuilding Cache...
+                </span>
+                <button
+                  onClick={() => stopSyncMutation.mutate()}
+                  disabled={stopSyncMutation.isPending}
+                  style={{
+                    border: 'none', background: '#FEF2F2', color: RED,
+                    fontWeight: 700, fontSize: 11, padding: '3px 7px', borderRadius: 5,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3
+                  }}
+                  title="Cancel background rebuild"
+                >
+                  <Square size={10} /> Stop
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  if (window.confirm('This will wipe the current local cache and rebuild purely physical inventory (Type 1, 11,374 items) from Helm. Proceed?')) {
+                    syncMutation.mutate();
+                  }
+                }}
+                disabled={syncMutation.isPending}
+                style={{
+                  border: 'none', background: '#EFF6FF', color: ACCENT,
+                  fontWeight: 700, fontSize: 11.5, padding: '4px 9px', borderRadius: 6,
+                  cursor: syncMutation.isPending ? 'default' : 'pointer', display: 'flex',
+                  alignItems: 'center', gap: 4
+                }}
+              >
+                <RefreshCw size={11} className={syncMutation.isPending ? 'animate-spin' : ''} />
+                Reset & Re-sync
+              </button>
+            )}
           </div>
 
           {/* Tab Switcher */}
@@ -305,7 +315,7 @@ export default function WeightStationPage() {
                 display: 'flex', alignItems: 'center', gap: 6, border: 'none',
                 background: activeTab === 'station' ? '#fff' : 'transparent',
                 color: activeTab === 'station' ? TITLE : MUTED,
-                fontWeight: 700, fontSize: 13, padding: '7px 14px', borderRadius: 8,
+                fontWeight: 700, fontSize: 13, padding: '7px 16px', borderRadius: 8,
                 cursor: 'pointer', boxShadow: activeTab === 'station' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
               }}
             >
@@ -317,7 +327,7 @@ export default function WeightStationPage() {
                 display: 'flex', alignItems: 'center', gap: 6, border: 'none',
                 background: activeTab === 'logs' ? '#fff' : 'transparent',
                 color: activeTab === 'logs' ? TITLE : MUTED,
-                fontWeight: 700, fontSize: 13, padding: '7px 14px', borderRadius: 8,
+                fontWeight: 700, fontSize: 13, padding: '7px 16px', borderRadius: 8,
                 cursor: 'pointer', boxShadow: activeTab === 'logs' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
               }}
             >
@@ -349,10 +359,10 @@ export default function WeightStationPage() {
         </div>
       )}
 
-      {/* MAIN STATION VIEW */}
+      {/* ── TAB 1: MAIN STATION VIEW ── */}
       {activeTab === 'station' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* ── 1. GIANT SCAN BARCODE INPUT ── */}
+          {/* 1. GIANT SCAN BARCODE INPUT */}
           <div style={{
             background: '#fff', borderRadius: 16, padding: '24px 28px',
             boxShadow: SHADOW, border: '2px solid',
@@ -363,13 +373,12 @@ export default function WeightStationPage() {
               <div style={{
                 position: 'absolute', top: 0, left: 0, right: 0, height: 4,
                 background: 'linear-gradient(90deg, #0056FB, #7B2FBE, #0056FB)',
-                backgroundSize: '200% 100%',
-                animation: 'scanGlow 2s linear infinite'
+                backgroundSize: '200% 100%'
               }} />
             )}
 
-            <form onSubmit={handleScanSubmit} style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-              <div style={{ position: 'relative', flex: 1 }}>
+            <form onSubmit={handleScanSubmit} style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: 260 }}>
                 <div style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: ACCENT }}>
                   <ScanBarcode size={28} />
                 </div>
@@ -435,7 +444,7 @@ export default function WeightStationPage() {
             )}
           </div>
 
-          {/* ── 2. MULTI-PRODUCT DISAMBIGUATION PICKER ── */}
+          {/* 2. MULTI-PRODUCT DISAMBIGUATION PICKER */}
           {searchResults.length > 1 && (
             <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: SHADOW }}>
               <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -510,7 +519,7 @@ export default function WeightStationPage() {
             </div>
           )}
 
-          {/* ── 3. PRODUCT SPOTLIGHT & SCALE WEIGHT CAPTURE STAGE ── */}
+          {/* 3. PRODUCT SPOTLIGHT & SCALE WEIGHT CAPTURE STAGE */}
           {selectedProduct && (
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) minmax(420px, 1.4fr)', gap: 24 }}>
               {/* Left Column: Product Spotlight Details */}
@@ -802,7 +811,7 @@ export default function WeightStationPage() {
         </div>
       )}
 
-      {/* AUDIT LOGS TAB */}
+      {/* ── TAB 2: AUDIT LOGS TAB ── */}
       {activeTab === 'logs' && <AuditLogsView />}
     </div>
   );
@@ -825,7 +834,7 @@ function AuditLogsView() {
 
   return (
     <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: SHADOW }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <div style={{ fontSize: 17, fontWeight: 800, color: TITLE, display: 'flex', alignItems: 'center', gap: 8 }}>
             <History size={20} color={ACCENT} /> Physical Measurement Audit Trail
@@ -957,66 +966,6 @@ function AuditLogsView() {
             </div>
           )}
         </>
-      )}
-
-      {/* DEBUG PAYLOAD INSPECTOR MODAL */}
-      {showDebugModal && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(4px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 24
-        }}>
-          <div style={{
-            background: '#fff', borderRadius: 16, width: '100%', maxWidth: 900,
-            maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 40px rgba(0,0,0,0.2)'
-          }}>
-            <div style={{ padding: '20px 24px', borderBottom: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h3 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: TITLE }}>Helm Inventory Payload Inspector</h3>
-                <p style={{ margin: '3px 0 0', fontSize: 12, color: MUTED }}>
-                  Total raw records in Helm: <strong>{debugData?.helm_total || 'Loading...'}</strong>
-                </p>
-              </div>
-              <button onClick={() => setShowDebugModal(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED }}>
-                <X size={20} />
-              </button>
-            </div>
-
-            <div style={{ padding: 24, overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div style={{ fontSize: 13, color: '#334155' }}>
-                Below are sample raw records fetched directly from Helm. Look at the <code>type</code>, <code>product_type</code>, and <code>fulfilment_client_id</code> fields to identify unwanted record types to exclude:
-              </div>
-
-              <pre style={{
-                background: '#0F172A', color: '#F8FAFC', padding: 16, borderRadius: 10,
-                fontSize: 12, fontFamily: 'monospace', overflowX: 'auto', maxHeight: 500
-              }}>
-                {JSON.stringify(debugData || { loading: true }, null, 2)}
-              </pre>
-            </div>
-
-            <div style={{ padding: '14px 24px', borderTop: '1px solid #E2E8F0', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-              <button
-                onClick={() => refetchDebug()}
-                style={{
-                  border: '1px solid #CBD5E1', background: '#F8FAFC', borderRadius: 8,
-                  padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: 'pointer'
-                }}
-              >
-                Refresh Live Samples
-              </button>
-              <button
-                onClick={() => setShowDebugModal(false)}
-                style={{
-                  border: 'none', background: ACCENT, color: '#fff', borderRadius: 8,
-                  padding: '8px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer'
-                }}
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
