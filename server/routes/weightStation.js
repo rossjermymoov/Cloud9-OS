@@ -15,6 +15,15 @@ import { findProductsByBarcode, syncHelmProducts, getSyncProgress, cancelInvento
 
 const router = express.Router();
 
+// Auto-clean any test barcodes accidentally stamped during previous fallback
+query(`
+  UPDATE helm_products
+  SET barcode = NULL,
+      barcodes = ARRAY[]::text[]
+  WHERE '8711600637139' = ANY(barcodes)
+     OR barcode = '8711600637139';
+`).catch(() => {});
+
 // ── Instant Barcode Search (< 2ms) ───────────────────────────────────────────
 router.get('/search', async (req, res, next) => {
   try {
@@ -23,7 +32,16 @@ router.get('/search', async (req, res, next) => {
       return res.json({ products: [], total: 0, query: '' });
     }
 
-    const products = await findProductsByBarcode(rawBarcode);
+    const rawList = await findProductsByBarcode(rawBarcode);
+    const q = rawBarcode.toLowerCase();
+
+    // Strict validation: every returned product MUST match the queried barcode or numeric Helm ID
+    const products = rawList.filter(p => {
+      const b = String(p.barcode || '').trim().toLowerCase();
+      const id = String(p.id || '').trim();
+      const inArray = Array.isArray(p.all_barcodes) && p.all_barcodes.some(code => String(code).trim().toLowerCase() === q);
+      return b === q || id === q || inArray;
+    });
 
     res.json({
       products,

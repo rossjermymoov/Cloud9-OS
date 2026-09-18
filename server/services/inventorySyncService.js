@@ -38,14 +38,16 @@ export function deepExtractBarcodes(obj, seen = new Set()) {
       const keyLower = k.toLowerCase();
       if (
         keyLower === 'barcode' ||
-        keyLower.endsWith('_barcode') ||
-        keyLower.startsWith('barcode_') ||
         keyLower === 'ean' ||
         keyLower === 'ean13' ||
         keyLower === 'ean8' ||
-        keyLower.includes('ean') ||
-        keyLower.includes('upc') ||
-        keyLower.includes('gtin')
+        keyLower === 'upc' ||
+        keyLower === 'gtin' ||
+        keyLower.endsWith('_barcode') ||
+        keyLower.startsWith('barcode_') ||
+        keyLower.endsWith('_ean') ||
+        keyLower.endsWith('_upc') ||
+        keyLower.endsWith('_gtin')
       ) {
         if (typeof v === 'string' || typeof v === 'number') {
           check(v);
