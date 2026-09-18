@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardCheck, Search, Play, RefreshCw, Star } from 'lucide-react';
+import { ClipboardCheck, Search, Play, RefreshCw, Star, Download } from 'lucide-react';
 import { listCustomers } from '../../api/customers';
 import { inventoryFields, startInventoryValidation, getInventoryValidation } from '../../api/inventory';
 import SearchableSelect from '../../components/SearchableSelect';
@@ -294,6 +294,73 @@ function Results({ run, result, scope }) {
     }
   }
 
+  function exportMissingCsv() {
+    const rows = result.issues || [];
+    if (!rows.length) return;
+    const esc = (v) => {
+      const s = String(v ?? '');
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const headers = ['Customer', 'SKU', 'Product Name', 'Helm Inventory ID', 'Missing Fields', 'Missing Count'];
+    const lines = [
+      headers.join(','),
+      ...rows.map(r => [
+        r.customer || '',
+        r.sku || '',
+        r.name || '',
+        r.inventory_id || '',
+        Array.isArray(r.missing) ? r.missing.join('; ') : '',
+        Array.isArray(r.missing) ? r.missing.length : 0,
+      ].map(esc).join(','))
+    ];
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const custTag = scope === 'customer' && rows[0]?.customer ? `-${rows[0].customer.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '-all-customers';
+    a.href = url;
+    a.download = `inventory-missing-data${custTag}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function exportSanityCsv() {
+    const rows = sanityList || [];
+    if (!rows.length) return;
+    const esc = (v) => {
+      const s = String(v ?? '');
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const headers = ['Customer', 'SKU', 'Product Name', 'Helm Inventory ID', 'Dimensions', 'Weight', 'Alert Title', 'Alert Description'];
+    const lines = [
+      headers.join(','),
+      ...rows.flatMap(r => {
+        const activeFlags = r.flags.filter(fl => !dismissedMap[`${r.sku}::${fl.type}`]);
+        return activeFlags.map(fl => [
+          r.customer || '',
+          r.sku || '',
+          r.name || '',
+          r.inventory_id || '',
+          r.dimensions || '',
+          r.weight || '',
+          fl.title || fl.type || '',
+          fl.desc || '',
+        ].map(esc).join(','));
+      })
+    ];
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const custTag = scope === 'customer' && rows[0]?.customer ? `-${rows[0].customer.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '-all-customers';
+    a.href = url;
+    a.download = `inventory-sanity-discrepancies${custTag}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* Overview Cards */}
@@ -318,64 +385,112 @@ function Results({ run, result, scope }) {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid #E2E8F0', paddingBottom: 8 }}>
-        <button
-          onClick={() => setActiveTab('sanity')}
-          style={{
-            border: 'none', background: activeTab === 'sanity' ? ACCENT : 'transparent',
-            color: activeTab === 'sanity' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
-            fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7,
-          }}>
-          <span>📐 Dimensional Sanity</span>
-          {sanityCount > 0 && (
-            <span style={{ background: activeTab === 'sanity' ? 'rgba(255,255,255,0.25)' : '#FEF3C7', color: activeTab === 'sanity' ? '#fff' : AMBER, borderRadius: 10, padding: '1px 6px', fontSize: 11 }}>
-              {sanityCount}
-            </span>
-          )}
-        </button>
-
-        <button
-          onClick={() => setActiveTab('missing')}
-          style={{
-            border: 'none', background: activeTab === 'missing' ? ACCENT : 'transparent',
-            color: activeTab === 'missing' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
-            fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7,
-          }}>
-          <span>📋 Missing Field Data</span>
-          {result.issues.length > 0 && (
-            <span style={{ background: activeTab === 'missing' ? 'rgba(255,255,255,0.25)' : '#FEE2E2', color: activeTab === 'missing' ? '#fff' : RED, borderRadius: 10, padding: '1px 6px', fontSize: 11 }}>
-              {result.issues.length}
-            </span>
-          )}
-        </button>
-
-        {scope === 'all' && (
+      {/* Tabs & Export Toolbar */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #E2E8F0', paddingBottom: 8, flexWrap: 'wrap', gap: 10 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           <button
-            onClick={() => setActiveTab('customers')}
+            onClick={() => setActiveTab('sanity')}
             style={{
-              border: 'none', background: activeTab === 'customers' ? ACCENT : 'transparent',
-              color: activeTab === 'customers' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
-              fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+              border: 'none', background: activeTab === 'sanity' ? ACCENT : 'transparent',
+              color: activeTab === 'sanity' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
+              fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7,
             }}>
-            🏢 Customers Breakdown
+            <span>📐 Dimensional Sanity</span>
+            {sanityCount > 0 && (
+              <span style={{ background: activeTab === 'sanity' ? 'rgba(255,255,255,0.25)' : '#FEF3C7', color: activeTab === 'sanity' ? '#fff' : AMBER, borderRadius: 10, padding: '1px 6px', fontSize: 11 }}>
+                {sanityCount}
+              </span>
+            )}
           </button>
-        )}
+
+          <button
+            onClick={() => setActiveTab('missing')}
+            style={{
+              border: 'none', background: activeTab === 'missing' ? ACCENT : 'transparent',
+              color: activeTab === 'missing' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
+              fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7,
+            }}>
+            <span>📋 Missing Field Data</span>
+            {result.issues.length > 0 && (
+              <span style={{ background: activeTab === 'missing' ? 'rgba(255,255,255,0.25)' : '#FEE2E2', color: activeTab === 'missing' ? '#fff' : RED, borderRadius: 10, padding: '1px 6px', fontSize: 11 }}>
+                {result.issues.length}
+              </span>
+            )}
+          </button>
+
+          {scope === 'all' && (
+            <button
+              onClick={() => setActiveTab('customers')}
+              style={{
+                border: 'none', background: activeTab === 'customers' ? ACCENT : 'transparent',
+                color: activeTab === 'customers' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
+                fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+              }}>
+              🏢 Customers Breakdown
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            onClick={exportMissingCsv}
+            disabled={result.issues.length === 0}
+            title="Download CSV report of all items with missing fields"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              border: '1px solid #CBD5E1', background: '#fff', borderRadius: 8,
+              padding: '6px 12px', fontSize: 12, fontWeight: 700,
+              color: result.issues.length ? TITLE : '#94A3B8',
+              cursor: result.issues.length ? 'pointer' : 'default',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+            }}>
+            <Download size={14} color={result.issues.length ? ACCENT : '#94A3B8'} />
+            Export Missing Data (CSV)
+          </button>
+          {sanityList.length > 0 && (
+            <button
+              onClick={exportSanityCsv}
+              title="Download CSV report of measurement discrepancies"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                border: '1px solid #CBD5E1', background: '#fff', borderRadius: 8,
+                padding: '6px 12px', fontSize: 12, fontWeight: 700,
+                color: TITLE, cursor: 'pointer',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+              }}>
+              <Download size={14} color={AMBER} />
+              Export Sanity Alerts (CSV)
+            </button>
+          )}
+        </div>
       </div>
 
       {/* ── TAB 1: DIMENSIONAL SANITY ── */}
       {activeTab === 'sanity' && (
         <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, overflow: 'hidden' }}>
-          <div style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, color: TITLE }}>Potential Measurement Discrepancies</div>
               <div style={{ fontSize: 12, color: MUTED }}>Automatic physical sanity checks (aspect ratio, density, zero dimensions, variant outliers). Dismiss any acceptable SKU permanently.</div>
             </div>
-            {Object.keys(dismissedMap).length > 0 && (
-              <span style={{ fontSize: 11.5, fontWeight: 600, color: GREEN, background: '#DCFCE7', padding: '3px 8px', borderRadius: 6 }}>
-                ✓ {Object.keys(dismissedMap).length} dismissed
-              </span>
-            )}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {sanityList.length > 0 && (
+                <button
+                  onClick={exportSanityCsv}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    border: '1px solid #E2E8F0', background: '#F8FAFC', borderRadius: 6,
+                    padding: '4px 10px', fontSize: 11.5, fontWeight: 600, color: AMBER, cursor: 'pointer'
+                  }}>
+                  <Download size={13} /> Download CSV
+                </button>
+              )}
+              {Object.keys(dismissedMap).length > 0 && (
+                <span style={{ fontSize: 11.5, fontWeight: 600, color: GREEN, background: '#DCFCE7', padding: '3px 8px', borderRadius: 6 }}>
+                  ✓ {Object.keys(dismissedMap).length} dismissed
+                </span>
+              )}
+            </div>
           </div>
 
           {sanityList.length === 0 ? (
@@ -477,8 +592,21 @@ function Results({ run, result, scope }) {
 
           {/* Missing items table */}
           <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, overflow: 'hidden' }}>
-            <div style={{ padding: '12px 16px', fontSize: 13.5, fontWeight: 700, color: TITLE }}>
-              Items with Missing Values {result.issues.length ? `(${result.issues.length}${result.truncated_issues ? '+' : ''})` : ''}
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: TITLE }}>
+                Items with Missing Values {result.issues.length ? `(${result.issues.length}${result.truncated_issues ? '+' : ''})` : ''}
+              </div>
+              {result.issues.length > 0 && (
+                <button
+                  onClick={exportMissingCsv}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 5,
+                    border: '1px solid #E2E8F0', background: '#F8FAFC', borderRadius: 6,
+                    padding: '4px 10px', fontSize: 11.5, fontWeight: 600, color: ACCENT, cursor: 'pointer'
+                  }}>
+                  <Download size={13} /> Download CSV
+                </button>
+              )}
             </div>
             {result.issues.length === 0 ? (
               <div style={{ padding: '24px 16px', color: GREEN, fontSize: 13, fontWeight: 600 }}>No missing data on the selected fields. ✓</div>
