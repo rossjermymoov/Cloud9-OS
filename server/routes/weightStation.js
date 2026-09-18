@@ -11,7 +11,7 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured, updateInventoryItem } from '../services/helmClient.js';
-import { findProductsByBarcode, syncHelmProducts, getSyncProgress } from '../services/inventorySyncService.js';
+import { findProductsByBarcode, syncHelmProducts, getSyncProgress, cancelInventorySync } from '../services/inventorySyncService.js';
 
 const router = express.Router();
 
@@ -210,51 +210,49 @@ router.get('/sync-status', async (_req, res, next) => {
   }
 });
 
+// ── Cancel Sync ─────────────────────────────────────────────────────────────
+router.post('/cancel-sync', async (_req, res) => {
+  cancelInventorySync();
+  res.json({ ok: true, message: 'Sync cancelled successfully' });
+});
+
 // ── Debug Sample Inspector ───────────────────────────────────────────────────
 router.get('/debug-sample', async (_req, res, next) => {
   try {
-    let helmSample = [];
-    let helmTotal = 0;
-    if (helmConfigured()) {
-      try {
-        const live = await authedGet('/inventory', { limit: 10 });
-        helmSample = live.data || [];
-        helmTotal = live.total || 0;
-      } catch (hErr) {
-        console.warn('Helm live debug fetch error:', hErr.message);
-      }
-    }
+    const { rows: breakdown } = await query(`
+      SELECT
+        COALESCE(raw_data->>'type', 'null') as type,
+        COALESCE(raw_data->>'product_type', 'null') as product_type,
+        COALESCE(raw_data->>'product_type_id', 'null') as product_type_id,
+        COALESCE(customer_name, 'Unknown Customer') as customer,
+        COUNT(*)::int as count
+      FROM helm_products
+      GROUP BY 1, 2, 3, 4
+      ORDER BY count DESC
+      LIMIT 25
+    `);
 
     const { rows: dbSample } = await query(`
-      SELECT helm_id, sku, name, raw_data
+      SELECT helm_id, sku, name, barcode, customer_name, raw_data
       FROM helm_products
-      LIMIT 10
+      ORDER BY id DESC
+      LIMIT 20
     `);
 
     res.json({
-      helm_total: helmTotal,
-      helm_sample: helmSample.map(it => ({
-        id: it.id,
-        sku: it.sku,
-        name: it.name,
-        type: it.type,
-        product_type: it.product_type,
-        product_type_id: it.product_type_id,
-        fulfilment_client_id: it.fulfilment_client_id,
-        client_name: it.fulfilment_client?.name,
-        package_configurations: it.package_configurations,
-        raw_keys: Object.keys(it)
-      })),
-      db_sample: dbSample.map(r => ({
+      total_cached: dbSample.length,
+      breakdown,
+      samples: dbSample.map(r => ({
         helm_id: r.helm_id,
         sku: r.sku,
         name: r.name,
+        barcode: r.barcode,
+        customer_name: r.customer_name,
         type: r.raw_data?.type,
         product_type: r.raw_data?.product_type,
         product_type_id: r.raw_data?.product_type_id,
         fulfilment_client_id: r.raw_data?.fulfilment_client_id,
-        client_name: r.raw_data?.fulfilment_client?.name,
-        raw_keys: r.raw_data ? Object.keys(r.raw_data) : []
+        package_configurations: r.raw_data?.package_configurations
       }))
     });
   } catch (err) {

@@ -113,6 +113,11 @@ export function getSyncProgress() {
   return syncState;
 }
 
+export function cancelInventorySync() {
+  syncState.inProgress = false;
+  syncState.completedAt = new Date().toISOString();
+}
+
 /**
  * Determines whether a Helm inventory record is strictly Physical Inventory (Type 1).
  * Rejects Components (2), Groups/Bundles (3), Packaging (4, 5), and deleted/archived items.
@@ -284,6 +289,10 @@ export async function syncHelmProducts({ force = false, truncate = false } = {})
     const maxGlobalPages = 300;
 
     while (page <= maxGlobalPages) {
+      if (!syncState.inProgress) {
+        console.log('[inventory-sync] Sync cancelled by user.');
+        break;
+      }
       try {
         const res = await authedGet('/inventory', {
           'filters[product_types][]': 1,
