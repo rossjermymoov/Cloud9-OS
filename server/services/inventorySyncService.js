@@ -7,6 +7,8 @@
 import { query } from '../db/index.js';
 import { helmConfigured, fetchInventoryForClient, fetchInventoryDetail, authedGet } from './helmClient.js';
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 export function extractItemPhysicals(it) {
   const pkg = Array.isArray(it.package_configurations) && it.package_configurations[0]
     ? it.package_configurations[0]
@@ -76,106 +78,218 @@ export function extractItemPhysicals(it) {
   };
 }
 
-let syncInProgress = false;
+let syncState = {
+  inProgress: false,
+  totalSaved: 0,
+  startedAt: null,
+  completedAt: null,
+  error: null
+};
+
+export function getSyncProgress() {
+  return syncState;
+}
+
+/**
+ * Bulk upsert items into helm_products in chunks of 100 for high database performance.
+ */
+async function bulkUpsertProducts(items, custMap) {
+  if (!items.length) return 0;
+  const CHUNK_SIZE = 100;
+  let count = 0;
+
+  for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+    const chunk = items.slice(i, i + CHUNK_SIZE);
+    const valuePlaceholders = [];
+    const values = [];
+
+    chunk.forEach((it, idx) => {
+      if (!it || !it.id) return;
+      const helmId = String(it.id);
+      const phys = extractItemPhysicals(it);
+      const sku = it.sku || it.product_sku || '';
+      const name = it.name || it.title || it.product_name || 'Unnamed Product';
+      const stock = parseInt(it.stock_level ?? it.quantity ?? 0) || 0;
+      const helmClientId = String(it.fulfilment_client_id || it.client_id || it.customer_id || '');
+      const cust = custMap.get(helmClientId) || null;
+
+      const offset = values.length;
+      valuePlaceholders.push(`(
+        $${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6},
+        $${offset + 7}, $${offset + 8}, $${offset + 9},
+        $${offset + 10}, $${offset + 11}, $${offset + 12}, $${offset + 13},
+        $${offset + 14}, $${offset + 15}, $${offset + 16}, $${offset + 17},
+        $${offset + 18}, $${offset + 19}, $${offset + 20}, $${offset + 21},
+        NOW()
+      )`);
+
+      values.push(
+        helmId,
+        sku,
+        name,
+        phys.barcode,
+        phys.barcodes,
+        phys.image_url,
+        cust ? cust.id : null,
+        helmClientId || (cust ? cust.helm_customer_id : null),
+        cust ? cust.business_name : (it.fulfilment_client?.name || `Customer #${helmClientId || 'Unknown'}`),
+        phys.length,
+        phys.width,
+        phys.height,
+        phys.dimension_unit,
+        phys.weight_g,
+        phys.weight_kg,
+        phys.raw_weight,
+        phys.raw_unit,
+        stock,
+        JSON.stringify(it.locations || []),
+        JSON.stringify(it.package_configurations || []),
+        JSON.stringify(it)
+      );
+      count++;
+    });
+
+    if (valuePlaceholders.length > 0) {
+      const sql = `
+        INSERT INTO helm_products (
+          helm_id, sku, name, barcode, barcodes, image_url,
+          customer_id, helm_customer_id, customer_name,
+          length, width, height, dimension_unit,
+          weight_g, weight_kg, raw_weight, raw_unit,
+          stock_level, locations, package_configurations, raw_data,
+          updated_at
+        ) VALUES ${valuePlaceholders.join(', ')}
+        ON CONFLICT (helm_id) DO UPDATE SET
+          sku = EXCLUDED.sku,
+          name = EXCLUDED.name,
+          barcode = COALESCE(EXCLUDED.barcode, helm_products.barcode),
+          barcodes = EXCLUDED.barcodes,
+          image_url = COALESCE(EXCLUDED.image_url, helm_products.image_url),
+          customer_id = COALESCE(EXCLUDED.customer_id, helm_products.customer_id),
+          helm_customer_id = COALESCE(EXCLUDED.helm_customer_id, helm_products.helm_customer_id),
+          customer_name = COALESCE(EXCLUDED.customer_name, helm_products.customer_name),
+          length = EXCLUDED.length,
+          width = EXCLUDED.width,
+          height = EXCLUDED.height,
+          dimension_unit = EXCLUDED.dimension_unit,
+          weight_g = EXCLUDED.weight_g,
+          weight_kg = EXCLUDED.weight_kg,
+          raw_weight = EXCLUDED.raw_weight,
+          raw_unit = EXCLUDED.raw_unit,
+          stock_level = EXCLUDED.stock_level,
+          locations = EXCLUDED.locations,
+          package_configurations = EXCLUDED.package_configurations,
+          raw_data = EXCLUDED.raw_data,
+          updated_at = NOW()
+      `;
+      await query(sql, values);
+    }
+  }
+
+  return count;
+}
 
 /**
  * Sync all inventory from Helm into local `helm_products` cache table.
  */
 export async function syncHelmProducts({ force = false } = {}) {
-  if (syncInProgress && !force) {
-    return { status: 'already_running' };
+  if (syncState.inProgress && !force) {
+    return { status: 'already_running', total: syncState.totalSaved };
   }
   if (!helmConfigured()) {
     return { error: 'Helm API not configured' };
   }
 
-  syncInProgress = true;
-  const startedAt = Date.now();
-  let totalSaved = 0;
-  let clientCount = 0;
+  syncState = {
+    inProgress: true,
+    totalSaved: 0,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    error: null
+  };
+
+  const startedTime = Date.now();
 
   try {
     const custRes = await query(`SELECT id, helm_customer_id, business_name FROM customers WHERE helm_customer_id IS NOT NULL`);
-    const customers = custRes.rows;
+    const custMap = new Map();
+    for (const c of custRes.rows) {
+      custMap.set(String(c.helm_customer_id), c);
+    }
 
-    for (const cust of customers) {
-      clientCount++;
+    // ── Strategy 1: Global Paged Sweep across Helm (all types, all customers) ──
+    let page = 1;
+    let globalPages = 0;
+    const maxGlobalPages = 500; // supports up to 50,000 items
+
+    while (page <= maxGlobalPages) {
       try {
-        const items = await fetchInventoryForClient({
-          helmClientId: cust.helm_customer_id,
-          perPage: 100,
-          maxPages: 50,
-          productTypes: [1, 4] // Inventory & Packaging
-        });
+        const res = await authedGet('/inventory', { page, per_page: 100 });
+        const rows = res.data || [];
+        if (rows.length === 0) break;
 
-        for (const it of items) {
-          if (!it || !it.id) continue;
-          const helmId = String(it.id);
-          const phys = extractItemPhysicals(it);
-          const sku = it.sku || it.product_sku || '';
-          const name = it.name || it.title || it.product_name || 'Unnamed Product';
-          const stock = parseInt(it.stock_level ?? it.quantity ?? 0) || 0;
+        await bulkUpsertProducts(rows, custMap);
+        syncState.totalSaved += rows.length;
+        globalPages++;
 
-          await query(`
-            INSERT INTO helm_products (
-              helm_id, sku, name, barcode, barcodes, image_url,
-              customer_id, helm_customer_id, customer_name,
-              length, width, height, dimension_unit,
-              weight_g, weight_kg, raw_weight, raw_unit,
-              stock_level, locations, package_configurations, raw_data,
-              updated_at
-            ) VALUES (
-              $1, $2, $3, $4, $5, $6,
-              $7, $8, $9,
-              $10, $11, $12, $13,
-              $14, $15, $16, $17,
-              $18, $19, $20, $21,
-              NOW()
-            )
-            ON CONFLICT (helm_id) DO UPDATE SET
-              sku = EXCLUDED.sku,
-              name = EXCLUDED.name,
-              barcode = COALESCE(EXCLUDED.barcode, helm_products.barcode),
-              barcodes = EXCLUDED.barcodes,
-              image_url = COALESCE(EXCLUDED.image_url, helm_products.image_url),
-              customer_id = EXCLUDED.customer_id,
-              helm_customer_id = EXCLUDED.helm_customer_id,
-              customer_name = EXCLUDED.customer_name,
-              length = EXCLUDED.length,
-              width = EXCLUDED.width,
-              height = EXCLUDED.height,
-              dimension_unit = EXCLUDED.dimension_unit,
-              weight_g = EXCLUDED.weight_g,
-              weight_kg = EXCLUDED.weight_kg,
-              raw_weight = EXCLUDED.raw_weight,
-              raw_unit = EXCLUDED.raw_unit,
-              stock_level = EXCLUDED.stock_level,
-              locations = EXCLUDED.locations,
-              package_configurations = EXCLUDED.package_configurations,
-              raw_data = EXCLUDED.raw_data,
-              updated_at = NOW()
-          `, [
-            helmId, sku, name, phys.barcode, phys.barcodes, phys.image_url,
-            cust.id, String(cust.helm_customer_id), cust.business_name,
-            phys.length, phys.width, phys.height, phys.dimension_unit,
-            phys.weight_g, phys.weight_kg, phys.raw_weight, phys.raw_unit,
-            stock, JSON.stringify(it.locations || []), JSON.stringify(it.package_configurations || []), JSON.stringify(it)
-          ]);
+        const lastPage = parseInt(res.last_page) || 1;
+        const curPage = parseInt(res.current_page) || page;
+        if (!res.next_page_url || curPage >= lastPage) break;
+        page++;
 
-          totalSaved++;
-        }
-      } catch (cErr) {
-        console.warn(`[inventory-sync] Failed syncing customer ${cust.business_name}:`, cErr.message);
+        await sleep(50); // safe pacing against rate limits
+      } catch (pageErr) {
+        console.warn(`[inventory-sync] Global page ${page} warning:`, pageErr.message);
+        await sleep(1000);
+        page++;
       }
     }
 
-    console.log(`[inventory-sync] Completed. Synced ${totalSaved} products across ${clientCount} customers in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
-    return { ok: true, products_synced: totalSaved, customers: clientCount, duration_ms: Date.now() - startedAt };
+    console.log(`[inventory-sync] Global pass completed: ${syncState.totalSaved} items in ${globalPages} pages.`);
+
+    // ── Strategy 2: Sweep each customer to ensure 100% full coverage ──
+    for (const cust of custRes.rows) {
+      try {
+        let custPage = 1;
+        while (custPage <= 100) {
+          const res = await authedGet('/inventory', {
+            'filters[fulfilment_clients][]': cust.helm_customer_id,
+            page: custPage,
+            per_page: 100
+          });
+          const rows = res.data || [];
+          if (rows.length === 0) break;
+
+          await bulkUpsertProducts(rows, custMap);
+          syncState.totalSaved += rows.length;
+
+          const lastPage = parseInt(res.last_page) || 1;
+          const curPage = parseInt(res.current_page) || custPage;
+          if (!res.next_page_url || curPage >= lastPage) break;
+          custPage++;
+
+          await sleep(50);
+        }
+      } catch (cErr) {
+        console.warn(`[inventory-sync] Client sweep for ${cust.business_name}:`, cErr.message);
+      }
+    }
+
+    // Get final count from database
+    const { rows: finalCount } = await query(`SELECT COUNT(*)::int as total FROM helm_products`);
+    const totalInDb = finalCount[0]?.total || syncState.totalSaved;
+
+    syncState.inProgress = false;
+    syncState.completedAt = new Date().toISOString();
+    syncState.totalSaved = totalInDb;
+
+    console.log(`[inventory-sync] Final total in helm_products: ${totalInDb} products in ${((Date.now() - startedTime) / 1000).toFixed(1)}s`);
+    return { ok: true, products_synced: totalInDb, duration_ms: Date.now() - startedTime };
   } catch (err) {
-    console.error('[inventory-sync] Critical error during sync:', err.message);
+    console.error('[inventory-sync] Sync failed:', err.message);
+    syncState.inProgress = false;
+    syncState.error = err.message;
     return { error: err.message };
-  } finally {
-    syncInProgress = false;
   }
 }
 

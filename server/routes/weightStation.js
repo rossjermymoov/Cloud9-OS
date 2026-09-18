@@ -11,7 +11,7 @@
 import express from 'express';
 import { query } from '../db/index.js';
 import { helmConfigured, updateInventoryItem } from '../services/helmClient.js';
-import { findProductsByBarcode, syncHelmProducts } from '../services/inventorySyncService.js';
+import { findProductsByBarcode, syncHelmProducts, getSyncProgress } from '../services/inventorySyncService.js';
 
 const router = express.Router();
 
@@ -187,9 +187,12 @@ router.post('/sync', async (_req, res, next) => {
 router.get('/sync-status', async (_req, res, next) => {
   try {
     const { rows: countRows } = await query(`SELECT COUNT(*)::int AS total, MAX(updated_at) as last_synced_at FROM helm_products`);
+    const progress = getSyncProgress();
     res.json({
       total_products: countRows[0]?.total || 0,
-      last_synced_at: countRows[0]?.last_synced_at || null
+      last_synced_at: countRows[0]?.last_synced_at || null,
+      in_progress: progress.inProgress,
+      progress_saved: progress.totalSaved
     });
   } catch (err) {
     next(err);
