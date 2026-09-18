@@ -430,24 +430,144 @@ export async function searchInventory({ query: searchTerm, barcode, sku, helmCli
 
 /**
  * Update inventory item weight and dimensions in Helm.
- * Tries PUT /inventory/:id, with fallback to PATCH /inventory/:id and POST /inventory/:id.
+ * Updates root properties and package_configurations, trying PUT, PATCH, and POST.
  */
 export async function updateInventoryItem(id, data) {
   if (!id) throw new Error('Inventory ID is required to update item in Helm');
   const cleanId = String(id).trim();
 
+  // 1. Fetch current item detail from Helm to ensure we have all required fields and package IDs
+  let current = {};
   try {
-    return await authedMutate('PUT', `/inventory/${cleanId}`, data);
-  } catch (err1) {
-    try {
-      return await authedMutate('PATCH', `/inventory/${cleanId}`, data);
-    } catch (err2) {
+    const curRes = await fetchInventoryDetail(cleanId);
+    current = curRes?.data || curRes || {};
+  } catch (fetchErr) {
+    console.warn(`[helm-update] Could not fetch current detail for item ${cleanId}:`, fetchErr.message);
+  }
+
+  const weightKg = parseFloat(data.weight ?? data.product_weight ?? 0) || 0;
+  const l = data.length != null ? parseFloat(data.length) : (current.length ?? current.product_length ?? 0);
+  const w = data.width != null ? parseFloat(data.width) : (current.width ?? current.product_width ?? 0);
+  const h = data.height != null ? parseFloat(data.height) : (current.height ?? current.product_height ?? 0);
+
+  // Prepare updated package configurations
+  const existingPkgs = Array.isArray(current.package_configurations) && current.package_configurations.length
+    ? current.package_configurations
+    : (current.package_configuration ? [current.package_configuration] : []);
+
+  const updatedPkgs = existingPkgs.length
+    ? existingPkgs.map(pkg => ({
+        ...pkg,
+        weight: weightKg,
+        product_weight: weightKg,
+        weight_unit: 'kg',
+        length: l,
+        product_length: l,
+        width: w,
+        product_width: w,
+        height: h,
+        product_height: h
+      }))
+    : [{
+        weight: weightKg,
+        product_weight: weightKg,
+        weight_unit: 'kg',
+        length: l,
+        width: w,
+        height: h,
+        quantity: 1
+      }];
+
+  // Clean minimal payloads targeting weight and dimensions
+  const cleanFields = {
+    weight: weightKg,
+    product_weight: weightKg,
+    weight_unit: 'kg',
+    length: l,
+    product_length: l,
+    width: w,
+    product_width: w,
+    height: h,
+    product_height: h,
+  };
+
+  // Clean package configurations without extraneous read-only properties
+  const cleanPackageConfigs = updatedPkgs.map(p => {
+    const obj = {
+      weight: weightKg,
+      product_weight: weightKg,
+      weight_unit: 'kg',
+      length: l,
+      product_length: l,
+      width: w,
+      product_width: w,
+      height: h,
+      product_height: h,
+    };
+    if (p.id) obj.id = p.id;
+    if (p.quantity != null) obj.quantity = p.quantity;
+    if (p.barcode) obj.barcode = p.barcode;
+    return obj;
+  });
+
+  let updateResult = null;
+  let lastErr = null;
+
+  // Try updating root inventory with targeted payloads
+  const payloadVariations = [
+    { ...cleanFields, package_configurations: cleanPackageConfigs },
+    { ...cleanFields },
+    { weight: weightKg, length: l, width: w, height: h },
+    { product_weight: weightKg, product_length: l, product_width: w, product_height: h }
+  ];
+
+  for (const method of ['PUT', 'PATCH', 'POST']) {
+    for (const body of payloadVariations) {
       try {
-        return await authedMutate('POST', `/inventory/${cleanId}`, data);
-      } catch {
-        throw err1;
+        updateResult = await authedMutate(method, `/inventory/${cleanId}`, body);
+        if (updateResult) break;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (updateResult) break;
+  }
+
+  // Also update package configuration endpoints if an ID exists
+  for (const pkg of cleanPackageConfigs) {
+    if (pkg && pkg.id) {
+      const pkgId = String(pkg.id);
+      for (const m of ['PUT', 'PATCH', 'POST']) {
+        try {
+          await authedMutate(m, `/package_configurations/${pkgId}`, {
+            weight: weightKg,
+            product_weight: weightKg,
+            weight_unit: 'kg',
+            length: l,
+            width: w,
+            height: h
+          });
+          break;
+        } catch {}
       }
     }
   }
+
+  // Re-fetch detail to verify persistency
+  try {
+    const verifyRes = await fetchInventoryDetail(cleanId);
+    const verified = verifyRes?.data || verifyRes || {};
+    console.log(`[helm-update] Verified item ${cleanId} state:`, {
+      weight: verified.weight ?? verified.product_weight,
+      package_configurations: verified.package_configurations
+    });
+  } catch {}
+
+  if (!updateResult && lastErr) {
+    throw lastErr;
+  }
+
+  return updateResult || { ok: true };
 }
+
 

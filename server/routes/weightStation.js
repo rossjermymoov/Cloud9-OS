@@ -160,10 +160,20 @@ router.post('/update', async (req, res, next) => {
       ]
     );
 
+    if (syncStatus === 'failed') {
+      return res.status(422).json({
+        ok: false,
+        sync_status: 'failed',
+        error: errorMessage || 'Helm WMS rejected the update',
+        log: logRows[0],
+        weight_g: weightInG,
+        weight_kg: weightInKg
+      });
+    }
+
     res.json({
-      ok: syncStatus !== 'failed',
+      ok: true,
       sync_status: syncStatus,
-      error: errorMessage,
       log: logRows[0],
       weight_g: weightInG,
       weight_kg: weightInKg

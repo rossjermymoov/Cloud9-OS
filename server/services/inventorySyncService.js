@@ -17,7 +17,8 @@ export function deepExtractBarcodes(obj, seen = new Set()) {
   const check = (v) => {
     if (v != null) {
       const s = String(v).trim();
-      if (s && s !== 'null' && s !== 'undefined' && s.length >= 3 && !/^\s*$/.test(s)) {
+      // True barcodes are at least 4 alphanumeric chars and not boolean/null
+      if (s && s !== 'null' && s !== 'undefined' && s.length >= 4 && !/^\s*$/.test(s)) {
         codes.add(s);
       }
     }
@@ -36,12 +37,15 @@ export function deepExtractBarcodes(obj, seen = new Set()) {
     for (const [k, v] of Object.entries(o)) {
       const keyLower = k.toLowerCase();
       if (
-        keyLower.includes('barcode') ||
+        keyLower === 'barcode' ||
+        keyLower.endsWith('_barcode') ||
+        keyLower.startsWith('barcode_') ||
+        keyLower === 'ean' ||
+        keyLower === 'ean13' ||
+        keyLower === 'ean8' ||
         keyLower.includes('ean') ||
         keyLower.includes('upc') ||
-        keyLower.includes('gtin') ||
-        keyLower === 'code' ||
-        keyLower === 'alias'
+        keyLower.includes('gtin')
       ) {
         if (typeof v === 'string' || typeof v === 'number') {
           check(v);
@@ -124,9 +128,12 @@ async function bulkUpsertPhysicalProducts(items, custMap) {
 
     chunk.forEach((it) => {
       if (!it || !it.id) return;
-      // Only include Type 1 (Physical Inventory) - ignore Groups (3), Components (2), Packaging (4, 5)
-      const t = parseInt(it.type ?? it.product_type ?? 1);
-      if (t !== 1 && it.type != null) return;
+      // Strictly Type 1 (Physical Inventory) - ignore Groups/Bundles (3), Components (2), Packaging (4, 5)
+      const rawType = it.product_type ?? it.type ?? it.product_type_id ?? it.type_id;
+      const t = rawType != null ? parseInt(rawType) : null;
+      if (t != null && t !== 1) return;
+      if (it.is_bundle || it.is_group || it.is_component || it.is_packaging) return;
+      if (it.status === 'archived' || it.archived === true || it.is_active === false || it.deleted_at) return;
 
       const helmId = String(it.id);
       const phys = extractItemPhysicals(it);
@@ -245,7 +252,7 @@ export async function syncHelmProducts({ force = false, truncate = false } = {})
       custMap.set(String(c.helm_customer_id), c);
     }
 
-    // ── Single Global Sweep: Physical Inventory Only (filters[product_types][]=1) ──
+    // ── Single Global Sweep: Physical Inventory Only (Type 1) ──
     let page = 1;
     let globalPages = 0;
     const maxGlobalPages = 300;
@@ -254,6 +261,7 @@ export async function syncHelmProducts({ force = false, truncate = false } = {})
       try {
         const res = await authedGet('/inventory', {
           'filters[product_types][]': 1,
+          'filters[product_type][]': 1,
           page,
           per_page: 100
         });
@@ -295,7 +303,8 @@ export async function syncHelmProducts({ force = false, truncate = false } = {})
 }
 
 /**
- * Instant local lookup by barcode, with automatic deep fallback into Helm.
+ * Instant local lookup by barcode (or exact numeric Helm Product ID).
+ * Never searches SKUs or raw JSON metadata.
  */
 export async function findProductsByBarcode(rawBarcode) {
   const queryTerm = String(rawBarcode || '').trim();
@@ -303,18 +312,22 @@ export async function findProductsByBarcode(rawBarcode) {
 
   const clean = queryTerm.replace(/[^a-zA-Z0-9]/gi, '');
 
-  // 1. Instant local database search
+  // 1. Instant local database search — strictly barcodes or exact numeric Helm ID
   const { rows } = await query(`
     SELECT *
     FROM helm_products
     WHERE barcode = $1
        OR $1 = ANY(barcodes)
-       OR sku ILIKE $1
-       OR helm_id = $1
-       OR raw_data::text ILIKE $2
-       OR (length($3) >= 5 AND regexp_replace(barcode, '[^a-zA-Z0-9]', '', 'g') = $3)
+       OR (helm_id = $1 AND $1 ~ '^[0-9]+$')
+       OR (length($2) >= 5 AND (
+            regexp_replace(barcode, '[^a-zA-Z0-9]', '', 'g') = $2
+            OR EXISTS (
+              SELECT 1 FROM unnest(barcodes) b
+              WHERE regexp_replace(b, '[^a-zA-Z0-9]', '', 'g') = $2
+            )
+          ))
     ORDER BY name ASC
-  `, [queryTerm, `%${queryTerm}%`, clean]);
+  `, [queryTerm, clean]);
 
   if (rows.length > 0) {
     return rows.map(r => ({
@@ -349,13 +362,16 @@ export async function findProductsByBarcode(rawBarcode) {
         if (!Array.isArray(list)) return;
         for (const item of list) {
           if (item && item.id && !seenIds.has(String(item.id))) {
+            const rawType = item.product_type ?? item.type ?? item.product_type_id ?? item.type_id;
+            const t = rawType != null ? parseInt(rawType) : null;
+            if (t != null && t !== 1) continue; // Physical only
             seenIds.add(String(item.id));
             candidates.push(item);
           }
         }
       };
 
-      // A. If ID is direct Helm product ID (e.g. 34993)
+      // A. If query is a direct numeric Helm product ID (e.g. 34993)
       if (/^\d+$/.test(queryTerm)) {
         try {
           const detailRes = await fetchInventoryDetail(queryTerm);
@@ -364,20 +380,10 @@ export async function findProductsByBarcode(rawBarcode) {
         } catch {}
       }
 
-      // B. Search Helm via search / barcode / sku filters
+      // B. Search Helm strictly by barcode filter
       try {
-        const bySearch = await authedGet('/inventory', { 'filters[product_types][]': 1, 'filters[search]': queryTerm, limit: 25 });
-        addCandidates(bySearch?.data);
-      } catch {}
-
-      try {
-        const bySku = await authedGet('/inventory', { 'filters[product_types][]': 1, 'filters[sku]': queryTerm, limit: 25 });
-        addCandidates(bySku?.data);
-      } catch {}
-
-      try {
-        const byRootSearch = await authedGet('/inventory', { 'filters[product_types][]': 1, search: queryTerm, limit: 25 });
-        addCandidates(byRootSearch?.data);
+        const byBarcode = await authedGet('/inventory', { 'filters[product_types][]': 1, 'filters[barcode]': queryTerm, limit: 25 });
+        addCandidates(byBarcode?.data);
       } catch {}
 
       // C. For each candidate, fetch full detail, extract physicals & barcodes, and cache

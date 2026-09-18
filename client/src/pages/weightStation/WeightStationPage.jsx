@@ -53,8 +53,9 @@ export default function WeightStationPage() {
   const debounceTimerRef = useRef(null);
   const countdownIntervalRef = useRef(null);
 
-  // Success celebration state
+  // Success and Error feedback state
   const [successToast, setSuccessToast] = useState(null);
+  const [updateError, setUpdateError] = useState(null);
 
   // Focus management for barcode scanner
   const barcodeInputRef = useRef(null);
@@ -75,6 +76,7 @@ export default function WeightStationPage() {
 
     setIsSearching(true);
     setSearchError(null);
+    setUpdateError(null);
     setSearchResults([]);
 
     try {
@@ -100,6 +102,7 @@ export default function WeightStationPage() {
     setSelectedProduct(prod);
     setSearchResults([]);
     setSearchError(null);
+    setUpdateError(null);
     setBarcodeInput('');
     setEnteredWeight('');
     setEnteredLength(prod.length ? String(prod.length) : '');
@@ -120,6 +123,7 @@ export default function WeightStationPage() {
     setSelectedProduct(null);
     setSearchResults([]);
     setSearchError(null);
+    setUpdateError(null);
     setEnteredWeight('');
     setEnteredLength('');
     setEnteredWidth('');
@@ -142,6 +146,7 @@ export default function WeightStationPage() {
   function handleWeightChange(val) {
     setEnteredWeight(val);
     setStabilized(false);
+    setUpdateError(null);
 
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
@@ -177,6 +182,7 @@ export default function WeightStationPage() {
   const updateMutation = useMutation({
     mutationFn: updateProductWeight,
     onSuccess: (res) => {
+      setUpdateError(null);
       qc.invalidateQueries({ queryKey: ['weight-station-logs'] });
       setSuccessToast({
         sku: selectedProduct.sku,
@@ -188,7 +194,8 @@ export default function WeightStationPage() {
       resetStation();
     },
     onError: (err) => {
-      alert(`Failed to update weight in Helm: ${err?.response?.data?.error || err.message}`);
+      const msg = err?.response?.data?.error || err.message || 'Helm update rejected the request';
+      setUpdateError(msg);
     }
   });
 
@@ -706,6 +713,20 @@ export default function WeightStationPage() {
                       padding: '10px 14px', fontSize: 13, fontFamily: 'inherit'
                     }}
                   />
+
+                  {/* Error banner if Helm update failed */}
+                  {updateError && (
+                    <div style={{
+                      background: '#FEF2F2', border: '1px solid #FCA5A5',
+                      borderRadius: 12, padding: '12px 16px', color: '#B91C1C',
+                      fontSize: 13, display: 'flex', alignItems: 'flex-start', gap: 10
+                    }}>
+                      <AlertCircle size={18} style={{ flexShrink: 0, marginTop: 1 }} />
+                      <div>
+                        <strong>Helm Sync Rejected:</strong> {updateError}
+                      </div>
+                    </div>
+                  )}
 
                   {/* GIANT SUBMIT BUTTON */}
                   <div style={{ marginTop: 'auto', paddingTop: 10 }}>
