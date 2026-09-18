@@ -211,54 +211,283 @@ export default function InventoryValidator() {
 }
 
 function Results({ run, result, scope }) {
+  const [activeTab, setActiveTab] = useState('sanity'); // 'sanity' | 'missing' | 'customers'
+  const [dismissedMap, setDismissedMap] = useState({});
+  const [dismissing, setDismissing] = useState(null);
+
+  const sanityList = (result.sanityAlerts || []).filter(item => {
+    const activeFlags = item.flags.filter(fl => !dismissedMap[`${item.sku}::${fl.type}`]);
+    return activeFlags.length > 0;
+  });
+
   const total = run.items_checked || 0;
-  const clean = total - (run.issues_found || 0);
+  const missingCount = run.issues_found || 0;
+  const sanityCount = sanityList.length;
+
   const th = { textAlign: 'left', padding: '9px 12px', fontSize: 11, fontWeight: 700, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.4, whiteSpace: 'nowrap' };
   const td = { padding: '10px 12px', fontSize: 13, color: TITLE, borderTop: '1px solid #F1F5F9', verticalAlign: 'top' };
 
+  async function handleDismiss(item, flag) {
+    const key = `${item.sku}::${flag.type}`;
+    setDismissing(key);
+    try {
+      await dismissAlert({
+        customerId: item.customer_id,
+        sku: item.sku,
+        alertType: flag.type,
+        reason: flag.desc,
+      });
+      setDismissedMap(prev => ({ ...prev, [key]: true }));
+    } catch (e) {
+      console.warn('Failed to dismiss alert:', e.message);
+    } finally {
+      setDismissing(null);
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* summary */}
-      <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, padding: 18 }}>
-        <div style={{ fontSize: 13.5, color: TITLE, fontWeight: 600, marginBottom: 14 }}>
-          Checked <b>{total.toLocaleString()}</b> items · <span style={{ color: GREEN }}>{clean.toLocaleString()} complete</span> · <span style={{ color: RED }}>{(run.issues_found || 0).toLocaleString()} missing data</span>
+      {/* Overview Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+        <div style={{ background: '#fff', borderRadius: 12, padding: 14, boxShadow: SHADOW, borderLeft: `4px solid ${sanityCount ? AMBER : GREEN}` }}>
+          <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }}>Dimensional Sanity Alerts</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: sanityCount ? AMBER : GREEN, marginTop: 2 }}>
+            {sanityCount.toLocaleString()} <span style={{ fontSize: 13, fontWeight: 600, color: MUTED }}>potential outliers</span>
+          </div>
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {result.fields.map(f => {
-            const s = result.byField[f] || { missing: 0, total: 0 };
-            const pct = s.total ? Math.round(((s.total - s.missing) / s.total) * 100) : 100;
-            return (
-              <div key={f}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
-                  <span style={{ fontWeight: 600, color: TITLE, fontFamily: 'ui-monospace, monospace' }}>{f}</span>
-                  <span style={{ color: pctColour(pct), fontWeight: 700 }}>{pct}% complete · {s.missing.toLocaleString()} missing</span>
-                </div>
-                <div style={{ height: 7, background: '#F1F5F9', borderRadius: 4, overflow: 'hidden' }}>
-                  <div style={{ width: `${pct}%`, height: '100%', background: pctColour(pct) }} />
-                </div>
-              </div>
-            );
-          })}
+        <div style={{ background: '#fff', borderRadius: 12, padding: 14, boxShadow: SHADOW, borderLeft: `4px solid ${missingCount ? RED : GREEN}` }}>
+          <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }}>Missing Field Cells</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: missingCount ? RED : GREEN, marginTop: 2 }}>
+            {missingCount.toLocaleString()} <span style={{ fontSize: 13, fontWeight: 600, color: MUTED }}>empty values</span>
+          </div>
         </div>
-        {result.item_cap_hit && <div style={{ marginTop: 12, fontSize: 11.5, color: AMBER }}>Stopped at the item cap — narrow the scope for a complete sweep.</div>}
+        <div style={{ background: '#fff', borderRadius: 12, padding: 14, boxShadow: SHADOW, borderLeft: `4px solid ${ACCENT}` }}>
+          <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }}>Items Interrogated</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: TITLE, marginTop: 2 }}>
+            {total.toLocaleString()} <span style={{ fontSize: 13, fontWeight: 600, color: MUTED }}>SKUs checked</span>
+          </div>
+        </div>
       </div>
 
-      {/* per-customer (all scope) */}
-      {scope === 'all' && result.byCustomer?.length > 0 && (
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid #E2E8F0', paddingBottom: 8 }}>
+        <button
+          onClick={() => setActiveTab('sanity')}
+          style={{
+            border: 'none', background: activeTab === 'sanity' ? ACCENT : 'transparent',
+            color: activeTab === 'sanity' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
+            fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7,
+          }}>
+          <span>📐 Dimensional Sanity</span>
+          {sanityCount > 0 && (
+            <span style={{ background: activeTab === 'sanity' ? 'rgba(255,255,255,0.25)' : '#FEF3C7', color: activeTab === 'sanity' ? '#fff' : AMBER, borderRadius: 10, padding: '1px 6px', fontSize: 11 }}>
+              {sanityCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab('missing')}
+          style={{
+            border: 'none', background: activeTab === 'missing' ? ACCENT : 'transparent',
+            color: activeTab === 'missing' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
+            fontSize: 12.5, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 7,
+          }}>
+          <span>📋 Missing Field Data</span>
+          {result.issues.length > 0 && (
+            <span style={{ background: activeTab === 'missing' ? 'rgba(255,255,255,0.25)' : '#FEE2E2', color: activeTab === 'missing' ? '#fff' : RED, borderRadius: 10, padding: '1px 6px', fontSize: 11 }}>
+              {result.issues.length}
+            </span>
+          )}
+        </button>
+
+        {scope === 'all' && (
+          <button
+            onClick={() => setActiveTab('customers')}
+            style={{
+              border: 'none', background: activeTab === 'customers' ? ACCENT : 'transparent',
+              color: activeTab === 'customers' ? '#fff' : TITLE, borderRadius: 8, padding: '7px 14px',
+              fontSize: 12.5, fontWeight: 700, cursor: 'pointer',
+            }}>
+            🏢 Customers Breakdown
+          </button>
+        )}
+      </div>
+
+      {/* ── TAB 1: DIMENSIONAL SANITY ── */}
+      {activeTab === 'sanity' && (
         <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, overflow: 'hidden' }}>
-          <div style={{ padding: '12px 16px', fontSize: 13.5, fontWeight: 700, color: TITLE }}>By customer</div>
+          <div style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: TITLE }}>Potential Measurement Discrepancies</div>
+              <div style={{ fontSize: 12, color: MUTED }}>Automatic physical sanity checks (aspect ratio, density, zero dimensions, variant outliers). Dismiss any acceptable SKU permanently.</div>
+            </div>
+            {Object.keys(dismissedMap).length > 0 && (
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: GREEN, background: '#DCFCE7', padding: '3px 8px', borderRadius: 6 }}>
+                ✓ {Object.keys(dismissedMap).length} dismissed
+              </span>
+            )}
+          </div>
+
+          {sanityList.length === 0 ? (
+            <div style={{ padding: '36px 16px', color: GREEN, fontSize: 13.5, fontWeight: 600, textAlign: 'center' }}>
+              ✓ All measured dimensions and weights look physically sound with no outliers.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', maxHeight: 600, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ background: '#F8FAFC', position: 'sticky', top: 0, zIndex: 5 }}>
+                    <th style={th}>SKU / Product</th>
+                    {scope === 'all' && <th style={th}>Customer</th>}
+                    <th style={th}>Dimensions</th>
+                    <th style={th}>Weight</th>
+                    <th style={th}>Detected Sanity Alert</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sanityList.map((it, idx) => {
+                    const activeFlags = it.flags.filter(fl => !dismissedMap[`${it.sku}::${fl.type}`]);
+                    return (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                        <td style={{ ...td, maxWidth: 220 }}>
+                          <div style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 700, color: TITLE, fontSize: 12 }}>{it.sku}</div>
+                          <div style={{ fontSize: 11.5, color: MUTED, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.name}>{it.name}</div>
+                        </td>
+                        {scope === 'all' && <td style={{ ...td, fontWeight: 600, color: '#334155' }}>{it.customer}</td>}
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace', color: '#334155', fontSize: 12 }}>{it.dimensions}</td>
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace', color: '#334155', fontSize: 12 }}>{it.weight}</td>
+                        <td style={td}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            {activeFlags.map((fl, fi) => (
+                              <div key={fi} style={{ background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 6, padding: '4px 8px' }}>
+                                <div style={{ fontSize: 11.5, fontWeight: 700, color: '#92400E' }}>⚠️ {fl.title}</div>
+                                <div style={{ fontSize: 11, color: '#B45309', marginTop: 1 }}>{fl.desc}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td style={{ ...td, textAlign: 'right', verticalAlign: 'middle' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
+                            {activeFlags.map((fl, fi) => {
+                              const isBusy = dismissing === `${it.sku}::${fl.type}`;
+                              return (
+                                <button
+                                  key={fi}
+                                  onClick={() => handleDismiss(it, fl)}
+                                  disabled={isBusy}
+                                  title="Accept measurement and permanently dismiss this alert"
+                                  style={{
+                                    border: '1px solid #CBD5E1', background: '#fff', borderRadius: 6,
+                                    padding: '4px 9px', fontSize: 11, fontWeight: 600, color: '#475569',
+                                    cursor: isBusy ? 'default' : 'pointer', opacity: isBusy ? 0.6 : 1,
+                                  }}>
+                                  {isBusy ? 'Dismissing…' : 'Dismiss Alert'}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── TAB 2: MISSING FIELDS ── */}
+      {activeTab === 'missing' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Completion bars */}
+          <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, padding: 18 }}>
+            <div style={{ fontSize: 13.5, color: TITLE, fontWeight: 600, marginBottom: 14 }}>
+              Field Coverage ({result.fields.length} selected fields)
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {result.fields.map(f => {
+                const s = result.byField[f] || { missing: 0, total: 0 };
+                const pct = s.total ? Math.round(((s.total - s.missing) / s.total) * 100) : 100;
+                return (
+                  <div key={f}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                      <span style={{ fontWeight: 600, color: TITLE, fontFamily: 'ui-monospace, monospace' }}>{f}</span>
+                      <span style={{ color: pctColour(pct), fontWeight: 700 }}>{pct}% complete · {s.missing.toLocaleString()} missing</span>
+                    </div>
+                    <div style={{ height: 7, background: '#F1F5F9', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ width: `${pct}%`, height: '100%', background: pctColour(pct) }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Missing items table */}
+          <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, overflow: 'hidden' }}>
+            <div style={{ padding: '12px 16px', fontSize: 13.5, fontWeight: 700, color: TITLE }}>
+              Items with Missing Values {result.issues.length ? `(${result.issues.length}${result.truncated_issues ? '+' : ''})` : ''}
+            </div>
+            {result.issues.length === 0 ? (
+              <div style={{ padding: '24px 16px', color: GREEN, fontSize: 13, fontWeight: 600 }}>No missing data on the selected fields. ✓</div>
+            ) : (
+              <div style={{ overflowX: 'auto', maxHeight: 560, overflowY: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: '#F8FAFC', position: 'sticky', top: 0, zIndex: 5 }}>
+                      <th style={th}>SKU</th><th style={th}>Name</th>{scope === 'all' && <th style={th}>Customer</th>}<th style={th}>Missing fields</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.issues.map((it, i) => (
+                      <tr key={i}>
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontWeight: 600 }}>{it.sku || '—'}</td>
+                        <td style={td}>{it.name || '—'}</td>
+                        {scope === 'all' && <td style={td}>{it.customer}</td>}
+                        <td style={td}>
+                          <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                            {it.missing.map(m => (
+                              <span key={m} style={{ fontSize: 11, fontWeight: 600, color: RED, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 5, padding: '1px 6px', fontFamily: 'ui-monospace, monospace' }}>
+                                {m}
+                              </span>
+                            ))}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── TAB 3: CUSTOMERS BREAKDOWN ── */}
+      {activeTab === 'customers' && scope === 'all' && result.byCustomer?.length > 0 && (
+        <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', fontSize: 13.5, fontWeight: 700, color: TITLE }}>Breakdown by Customer</div>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr style={{ background: '#F8FAFC' }}>
-                <th style={th}>Customer</th><th style={{ ...th, textAlign: 'right' }}>Items</th>
-                <th style={{ ...th, textAlign: 'right' }}>Missing data</th><th style={{ ...th, textAlign: 'right' }}>Complete</th>
-              </tr></thead>
+              <thead>
+                <tr style={{ background: '#F8FAFC' }}>
+                  <th style={th}>Customer</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Items</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Missing Data</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Sanity Alerts</th>
+                  <th style={{ ...th, textAlign: 'right' }}>Complete</th>
+                </tr>
+              </thead>
               <tbody>
-                {[...result.byCustomer].sort((a, b) => (b.with_issues) - (a.with_issues)).map(c => (
+                {[...result.byCustomer].sort((a, b) => (b.with_issues + b.sanity_alerts) - (a.with_issues + a.sanity_alerts)).map(c => (
                   <tr key={c.customer_id}>
                     <td style={{ ...td, fontWeight: 600 }}>{c.customer}</td>
                     <td style={{ ...td, textAlign: 'right' }}>{c.items.toLocaleString()}</td>
                     <td style={{ ...td, textAlign: 'right', color: c.with_issues ? RED : MUTED, fontWeight: 700 }}>{c.with_issues.toLocaleString()}</td>
+                    <td style={{ ...td, textAlign: 'right', color: c.sanity_alerts ? AMBER : MUTED, fontWeight: 700 }}>{(c.sanity_alerts || 0).toLocaleString()}</td>
                     <td style={{ ...td, textAlign: 'right', color: pctColour(c.complete_pct ?? 100), fontWeight: 700 }}>{c.complete_pct == null ? '—' : `${c.complete_pct}%`}</td>
                   </tr>
                 ))}
@@ -267,39 +496,6 @@ function Results({ run, result, scope }) {
           </div>
         </div>
       )}
-
-      {/* item-level issues */}
-      <div style={{ background: '#fff', borderRadius: 14, boxShadow: SHADOW, overflow: 'hidden' }}>
-        <div style={{ padding: '12px 16px', fontSize: 13.5, fontWeight: 700, color: TITLE }}>
-          Items missing data {result.issues.length ? `(${result.issues.length}${result.truncated_issues ? '+' : ''})` : ''}
-        </div>
-        {result.issues.length === 0 ? (
-          <div style={{ padding: '24px 16px', color: GREEN, fontSize: 13, fontWeight: 600 }}>No missing data on the selected fields. ✓</div>
-        ) : (
-          <div style={{ overflowX: 'auto', maxHeight: 560, overflowY: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead><tr style={{ background: '#F8FAFC' }}>
-                <th style={th}>SKU</th><th style={th}>Name</th>{scope === 'all' && <th style={th}>Customer</th>}<th style={th}>Missing fields</th>
-              </tr></thead>
-              <tbody>
-                {result.issues.map((it, i) => (
-                  <tr key={i}>
-                    <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontWeight: 600 }}>{it.sku || '—'}</td>
-                    <td style={td}>{it.name || '—'}</td>
-                    {scope === 'all' && <td style={td}>{it.customer}</td>}
-                    <td style={td}>
-                      <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                        {it.missing.map(m => <span key={m} style={{ fontSize: 11, fontWeight: 600, color: RED, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 5, padding: '1px 6px', fontFamily: 'ui-monospace, monospace' }}>{m}</span>)}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        {result.truncated_issues && <div style={{ padding: '10px 16px', fontSize: 11.5, color: AMBER }}>Showing the first {result.issues.length.toLocaleString()} items — refine fields or scope to see the rest.</div>}
-      </div>
     </div>
   );
 }

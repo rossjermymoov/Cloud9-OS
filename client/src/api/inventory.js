@@ -8,3 +8,9 @@ export const startInventoryValidation = ({ scope = 'customer', customerId = null
   api.post('/inventory/validate', { scope, customer_id: customerId, fields }).then(r => r.data);
 export const getInventoryValidation   = (runId) =>
   api.get(`/inventory/validate/${runId}`).then(r => r.data);
+export const dismissAlert = ({ customerId, sku, alertType, reason }) =>
+  api.post('/inventory/dismiss-alert', { customer_id: customerId, sku, alert_type: alertType, reason }).then(r => r.data);
+export const undismissAlert = ({ customerId, sku, alertType }) =>
+  api.post('/inventory/undismiss-alert', { customer_id: customerId, sku, alert_type: alertType }).then(r => r.data);
+export const getDismissedAlerts = (customerId = null) =>
+  api.get('/inventory/dismissed-alerts', { params: { customer_id: customerId || undefined } }).then(r => r.data);
