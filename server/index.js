@@ -38,6 +38,7 @@ import slaRulesRouter       from './routes/slaRules.js';
 import collectionsRouter    from './routes/collections.js';
 import standupRouter        from './routes/standup.js';
 import weightStationRouter  from './routes/weightStation.js';
+import { syncHelmProducts }   from './services/inventorySyncService.js';
 import { runMorningPrecompute } from './services/standupService.js';
 import { configured as upsConfigured, syncCollectionsTracking } from './services/upsClient.js';
 
@@ -179,6 +180,19 @@ async function start() {
       }
     }, 60 * 1000);
     console.log('📦 Storage footprint sync scheduled for 03:00 UK');
+
+    // Helm Inventory Cache for Weigh Station — sync shortly after boot, then nightly at 03:30 UK.
+    setTimeout(() => syncHelmProducts().catch(e => console.warn('[inventory-sync]', e.message)), 45 * 1000);
+    let lastInvSync = null;
+    setInterval(() => {
+      const uk = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/London' }));
+      const key = `${uk.getFullYear()}-${uk.getMonth()}-${uk.getDate()}`;
+      if (uk.getHours() === 3 && uk.getMinutes() === 30 && lastInvSync !== key) {
+        lastInvSync = key;
+        syncHelmProducts().catch(e => console.warn('[inventory-sync]', e.message));
+      }
+    }, 60 * 1000);
+    console.log('🏷️  Inventory cache sync scheduled for 03:30 UK & on startup');
   }
 
   // Morning Standup & New Customers — pre-compute stats & pull fulfilment clients from Helm every morning at 06:00 UK

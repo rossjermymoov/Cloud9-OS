@@ -1,248 +1,42 @@
 /**
  * Cloud9 OS — Weigh & Measure Station Routes
  *
- * GET  /api/weight-station/search?q=...   — Search products in Helm across all clients by barcode or SKU
- * POST /api/weight-station/update        — Update weight & dimensions in Helm and log audit trail
- * GET  /api/weight-station/logs          — Fetch audit history logs
+ * GET  /api/weight-station/search?barcode=... — Instant barcode lookup (< 2ms) from local cache + Helm fallback
+ * POST /api/weight-station/update            — Update weight in Helm, update local cache, write audit log
+ * GET  /api/weight-station/logs              — Fetch audit history logs
+ * POST /api/weight-station/sync              — Trigger full background sync of Helm inventory
+ * GET  /api/weight-station/sync-status       — Check local inventory cache product count & last sync time
  */
 
 import express from 'express';
 import { query } from '../db/index.js';
-import { helmConfigured, authedGet, updateInventoryItem, fetchInventoryDetail } from '../services/helmClient.js';
+import { helmConfigured, updateInventoryItem } from '../services/helmClient.js';
+import { findProductsByBarcode, syncHelmProducts } from '../services/inventorySyncService.js';
 
 const router = express.Router();
 
-function extractItemDims(it) {
-  const pkg = Array.isArray(it.package_configurations) && it.package_configurations[0]
-    ? it.package_configurations[0]
-    : (it.package_configuration || it.package || {});
-
-  const l = parseFloat(it.length ?? it.product_length ?? pkg.length ?? pkg.product_length ?? 0) || 0;
-  const w = parseFloat(it.width ?? it.product_width ?? pkg.width ?? pkg.product_width ?? 0) || 0;
-  const h = parseFloat(it.height ?? it.product_height ?? pkg.height ?? pkg.product_height ?? 0) || 0;
-
-  let rawWeight = parseFloat(it.weight ?? it.product_weight ?? pkg.weight ?? pkg.product_weight ?? 0) || 0;
-  const unit = String(it.weight_unit || pkg.weight_unit || (rawWeight > 0 && rawWeight < 50 ? 'kg' : 'g')).toLowerCase();
-  
-  // Normalized weight in grams and kg
-  const weightGrams = unit === 'kg' ? Math.round(rawWeight * 1000 * 100) / 100 : rawWeight;
-  const weightKg = unit === 'kg' ? rawWeight : Math.round((rawWeight / 1000) * 1000) / 1000;
-
-  // Extract image
-  let image = it.image_url || it.image || it.product_image || it.thumbnail_url || null;
-  if (!image && Array.isArray(it.images) && it.images[0]) {
-    image = typeof it.images[0] === 'string' ? it.images[0] : (it.images[0].url || it.images[0].src || null);
-  }
-
-  return {
-    length: l,
-    width: w,
-    height: h,
-    dimension_unit: 'cm',
-    weight_g: weightGrams,
-    weight_kg: weightKg,
-    raw_weight: rawWeight,
-    raw_unit: unit,
-    image_url: image,
-    pkg_config: pkg
-  };
-}
-
-function collectItemBarcodes(it) {
-  const codes = new Set();
-  const add = (v) => {
-    if (v != null) {
-      const s = String(v).trim();
-      if (s) codes.add(s);
-    }
-  };
-  add(it.barcode);
-  add(it.product_barcode);
-  add(it.ean);
-  add(it.upc);
-  add(it.barcode_number);
-  if (Array.isArray(it.barcodes)) {
-    for (const b of it.barcodes) {
-      if (typeof b === 'string' || typeof b === 'number') add(b);
-      else if (b && typeof b === 'object') {
-        add(b.barcode);
-        add(b.code);
-        add(b.value);
-      }
-    }
-  }
-  if (Array.isArray(it.package_configurations)) {
-    for (const pkg of it.package_configurations) {
-      add(pkg.barcode);
-      add(pkg.product_barcode);
-    }
-  }
-  return Array.from(codes);
-}
-
-function collectItemSkus(it) {
-  const skus = new Set();
-  const add = (v) => {
-    if (v != null) {
-      const s = String(v).trim();
-      if (s) skus.add(s);
-    }
-  };
-  add(it.sku);
-  add(it.product_sku);
-  add(it.item_code);
-  add(it.code);
-  return Array.from(skus);
-}
-
-function isExactItemMatch(it, targetRaw) {
-  if (!it || !targetRaw) return false;
-  const target = String(targetRaw).trim().toLowerCase();
-  const targetClean = target.replace(/[^a-z0-9]/gi, '');
-
-  const barcodes = collectItemBarcodes(it);
-  for (const b of barcodes) {
-    const bLower = b.toLowerCase();
-    const bClean = bLower.replace(/[^a-z0-9]/gi, '');
-    if (bLower === target || (targetClean && bClean === targetClean)) {
-      return true;
-    }
-  }
-
-  const skus = collectItemSkus(it);
-  for (const s of skus) {
-    const sLower = s.toLowerCase();
-    const sClean = sLower.replace(/[^a-z0-9]/gi, '');
-    if (sLower === target || (targetClean && sClean === targetClean)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-// ── Search Helm for products matching barcode or SKU ─────────────────────────
+// ── Instant Barcode Search (< 2ms) ───────────────────────────────────────────
 router.get('/search', async (req, res, next) => {
   try {
-    const rawQ = String(req.query.q || req.query.barcode || '').trim();
-    if (!rawQ) return res.json({ products: [], total: 0, query: '' });
-
-    if (!helmConfigured()) {
-      return res.status(503).json({ error: 'Helm API not configured' });
+    const rawBarcode = String(req.query.barcode || req.query.q || '').trim();
+    if (!rawBarcode) {
+      return res.json({ products: [], total: 0, query: '' });
     }
 
-    // Load customer map from DB: helm_customer_id -> customer info
-    const custRes = await query(`SELECT id, helm_customer_id, business_name, primary_email FROM customers WHERE helm_customer_id IS NOT NULL`);
-    const custMap = new Map();
-    const activeClients = [];
-    for (const c of custRes.rows) {
-      custMap.set(String(c.helm_customer_id), c);
-      activeClients.push(c);
-    }
+    const products = await findProductsByBarcode(rawBarcode);
 
-    const matchedMap = new Map();
-
-    const checkAndAdd = (candidates) => {
-      if (!Array.isArray(candidates)) return;
-      for (const it of candidates) {
-        if (!it || !it.id) continue;
-        if (isExactItemMatch(it, rawQ)) {
-          matchedMap.set(String(it.id), it);
-        }
-      }
-    };
-
-    // 1. Try search by barcode filter
-    try {
-      const byBarcode = await authedGet('/inventory', { 'filters[barcode]': rawQ, limit: 100 });
-      checkAndAdd(byBarcode?.data);
-    } catch {}
-
-    // 2. Try search by SKU filter
-    if (matchedMap.size === 0) {
-      try {
-        const bySku = await authedGet('/inventory', { 'filters[sku]': rawQ, limit: 100 });
-        checkAndAdd(bySku?.data);
-      } catch {}
-    }
-
-    // 3. Try general search filter
-    if (matchedMap.size === 0) {
-      try {
-        const bySearch = await authedGet('/inventory', { 'filters[search]': rawQ, limit: 100 });
-        checkAndAdd(bySearch?.data);
-      } catch {}
-    }
-
-    // 4. Try root search query parameter
-    if (matchedMap.size === 0) {
-      try {
-        const byRootSearch = await authedGet('/inventory', { search: rawQ, limit: 100 });
-        checkAndAdd(byRootSearch?.data);
-      } catch {}
-    }
-
-    // 5. If still no matches, search per active customer in Helm
-    if (matchedMap.size === 0 && activeClients.length > 0) {
-      for (const client of activeClients) {
-        try {
-          const clientRes = await authedGet('/inventory', {
-            'filters[fulfilment_clients][]': client.helm_customer_id,
-            'filters[search]': rawQ,
-            limit: 50
-          });
-          checkAndAdd(clientRes?.data);
-          if (matchedMap.size > 0) break;
-        } catch {}
-      }
-    }
-
-    const matchedCandidates = Array.from(matchedMap.values());
-
-    // Decorate each matched item with full detail and customer mapping
-    const products = await Promise.all(matchedCandidates.map(async (it) => {
-      let detail = it;
-      try {
-        const d = await fetchInventoryDetail(it.id);
-        if (d?.data) detail = { ...it, ...d.data };
-        else if (d && typeof d === 'object') detail = { ...it, ...d };
-      } catch {}
-
-      const dims = extractItemDims(detail);
-      const helmClientId = String(detail.fulfilment_client_id || detail.client_id || detail.customer_id || '');
-      const cust = custMap.get(helmClientId) || null;
-      const foundBarcodes = collectItemBarcodes(detail);
-      const primaryBarcode = foundBarcodes[0] || detail.barcode || detail.product_barcode || null;
-
-      return {
-        id: String(detail.id),
-        sku: detail.sku || detail.product_sku || '',
-        name: detail.name || detail.title || detail.product_name || 'Unnamed Product',
-        barcode: primaryBarcode,
-        all_barcodes: foundBarcodes,
-        image_url: dims.image_url,
-        length: dims.length,
-        width: dims.width,
-        height: dims.height,
-        dimension_unit: dims.dimension_unit,
-        weight_g: dims.weight_g,
-        weight_kg: dims.weight_kg,
-        raw_unit: dims.raw_unit,
-        stock_level: detail.stock_level ?? detail.quantity ?? null,
-        locations: Array.isArray(detail.locations) ? detail.locations : [],
-        customer_id: cust ? cust.id : null,
-        helm_customer_id: helmClientId || (cust ? cust.helm_customer_id : null),
-        customer_name: cust ? cust.business_name : (detail.fulfilment_client?.name || `Customer #${helmClientId || 'Unknown'}`),
-      };
-    }));
-
-    res.json({ products, total: products.length, query: rawQ });
+    res.json({
+      products,
+      total: products.length,
+      barcode: rawBarcode,
+      cached_search: true
+    });
   } catch (err) {
     next(err);
   }
 });
 
-// ── Update Product Weight & Dimensions in Helm & Record Audit Log ─────────────
+// ── Update Product Weight in Helm & Local Cache & Record Audit Log ─────────────
 router.post('/update', async (req, res, next) => {
   try {
     const {
@@ -274,13 +68,9 @@ router.post('/update', async (req, res, next) => {
     }
 
     const finalWeightNum = parseFloat(new_weight);
-
-    // Normalize weight for Helm
-    // If unit is grams, weight in kg = weight / 1000
     const weightInKg = weight_unit === 'kg' ? finalWeightNum : Math.round((finalWeightNum / 1000) * 10000) / 10000;
     const weightInG = weight_unit === 'g' ? finalWeightNum : Math.round(finalWeightNum * 1000);
 
-    // Prepare Helm API payload
     const helmPayload = {
       weight: weightInKg,
       product_weight: weightInKg,
@@ -291,13 +81,12 @@ router.post('/update', async (req, res, next) => {
     if (new_width != null)  { helmPayload.width = parseFloat(new_width);   helmPayload.product_width = parseFloat(new_width); }
     if (new_height != null) { helmPayload.height = parseFloat(new_height); helmPayload.product_height = parseFloat(new_height); }
 
-    let helmResult = null;
     let syncStatus = 'synced';
     let errorMessage = null;
 
     if (helmConfigured()) {
       try {
-        helmResult = await updateInventoryItem(product_id, helmPayload);
+        await updateInventoryItem(product_id, helmPayload);
       } catch (hErr) {
         console.error('Helm inventory update error:', hErr.message);
         syncStatus = 'failed';
@@ -305,6 +94,33 @@ router.post('/update', async (req, res, next) => {
       }
     } else {
       syncStatus = 'offline_simulated';
+    }
+
+    // Update local cache immediately
+    try {
+      await query(`
+        UPDATE helm_products SET
+          weight_g = $1,
+          weight_kg = $2,
+          raw_weight = $3,
+          raw_unit = $4,
+          length = COALESCE($5, length),
+          width = COALESCE($6, width),
+          height = COALESCE($7, height),
+          updated_at = NOW()
+        WHERE helm_id = $8
+      `, [
+        weightInG,
+        weightInKg,
+        finalWeightNum,
+        weight_unit,
+        new_length != null ? parseFloat(new_length) : null,
+        new_width != null ? parseFloat(new_width) : null,
+        new_height != null ? parseFloat(new_height) : null,
+        String(product_id)
+      ]);
+    } catch (dbErr) {
+      console.warn('Failed to update local helm_products cache:', dbErr.message);
     }
 
     // Record audit log
@@ -351,6 +167,29 @@ router.post('/update', async (req, res, next) => {
       log: logRows[0],
       weight_g: weightInG,
       weight_kg: weightInKg
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Cache Sync Trigger & Status ───────────────────────────────────────────────
+router.post('/sync', async (_req, res, next) => {
+  try {
+    // Run sync in background and return immediate acknowledgement
+    syncHelmProducts({ force: true }).catch(err => console.error('Manual inventory sync failed:', err));
+    res.json({ ok: true, message: 'Inventory synchronization started in background' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/sync-status', async (_req, res, next) => {
+  try {
+    const { rows: countRows } = await query(`SELECT COUNT(*)::int AS total, MAX(updated_at) as last_synced_at FROM helm_products`);
+    res.json({
+      total_products: countRows[0]?.total || 0,
+      last_synced_at: countRows[0]?.last_synced_at || null
     });
   } catch (err) {
     next(err);

@@ -2,9 +2,12 @@ import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Scale, ScanBarcode, CheckCircle2, AlertCircle, History, Search,
-  ArrowRight, RefreshCw, Box, User, Clock, Layers, Sparkles, X, ChevronRight
+  ArrowRight, RefreshCw, Box, User, Clock, Layers, Sparkles, X, ChevronRight, Database
 } from 'lucide-react';
-import { searchProducts, updateProductWeight, getWeightLogs } from '../../api/weightStation';
+import {
+  searchProducts, updateProductWeight, getWeightLogs,
+  triggerInventorySync, getInventorySyncStatus
+} from '../../api/weightStation';
 import { useAuth } from '../../context/AuthContext';
 
 const HEADER = '#0B1220', TITLE = '#0F172A', MUTED = '#64748B', ACCENT = '#0056FB', GREEN = '#10B981', AMBER = '#F59E0B', RED = '#EF4444';
@@ -20,6 +23,20 @@ export default function WeightStationPage() {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchError, setSearchError] = useState(null);
+
+  // Sync status
+  const { data: syncStatus, refetch: refetchSyncStatus } = useQuery({
+    queryKey: ['inventory-sync-status'],
+    queryFn: getInventorySyncStatus,
+    refetchInterval: 10000
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: triggerInventorySync,
+    onSuccess: () => {
+      setTimeout(() => refetchSyncStatus(), 2000);
+    }
+  });
 
   // Weighing & Measurement state
   const [unit, setUnit] = useState('g'); // 'g' | 'kg'
@@ -65,7 +82,7 @@ export default function WeightStationPage() {
       const items = data.products || [];
 
       if (items.length === 0) {
-        setSearchError(`No product found in Helm matching barcode/SKU "${query}"`);
+        setSearchError(`No product found with barcode "${query}". If this is a new product, try clicking "Sync Inventory" above.`);
       } else if (items.length === 1) {
         selectProduct(items[0]);
       } else {
@@ -73,7 +90,7 @@ export default function WeightStationPage() {
         setSearchResults(items);
       }
     } catch (err) {
-      setSearchError(err?.response?.data?.error || 'Failed to search Helm inventory');
+      setSearchError(err?.response?.data?.error || 'Failed to search inventory');
     } finally {
       setIsSearching(false);
     }
@@ -225,32 +242,59 @@ export default function WeightStationPage() {
           </p>
         </div>
 
-        {/* Tab Switcher */}
-        <div style={{ display: 'flex', background: '#E2E8F0', padding: 3, borderRadius: 10, gap: 4 }}>
-          <button
-            onClick={() => setActiveTab('station')}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6, border: 'none',
-              background: activeTab === 'station' ? '#fff' : 'transparent',
-              color: activeTab === 'station' ? TITLE : MUTED,
-              fontWeight: 700, fontSize: 13, padding: '7px 14px', borderRadius: 8,
-              cursor: 'pointer', boxShadow: activeTab === 'station' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-            }}
-          >
-            <Scale size={15} /> Scale Station
-          </button>
-          <button
-            onClick={() => setActiveTab('logs')}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6, border: 'none',
-              background: activeTab === 'logs' ? '#fff' : 'transparent',
-              color: activeTab === 'logs' ? TITLE : MUTED,
-              fontWeight: 700, fontSize: 13, padding: '7px 14px', borderRadius: 8,
-              cursor: 'pointer', boxShadow: activeTab === 'logs' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
-            }}
-          >
-            <History size={15} /> Audit History
-          </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {/* Cache Sync Status & Trigger */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            background: '#fff', border: '1px solid #CBD5E1', borderRadius: 10,
+            padding: '6px 12px', fontSize: 12, color: MUTED, boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
+          }}>
+            <Database size={14} color={ACCENT} />
+            <span>
+              <strong>{syncStatus?.total_products ? syncStatus.total_products.toLocaleString() : '0'}</strong> products cached
+            </span>
+            <button
+              onClick={() => syncMutation.mutate()}
+              disabled={syncMutation.isPending}
+              style={{
+                border: 'none', background: '#EFF6FF', color: ACCENT,
+                fontWeight: 700, fontSize: 11.5, padding: '3px 8px', borderRadius: 6,
+                cursor: syncMutation.isPending ? 'default' : 'pointer', display: 'flex',
+                alignItems: 'center', gap: 4
+              }}
+            >
+              <RefreshCw size={11} className={syncMutation.isPending ? 'animate-spin' : ''} />
+              {syncMutation.isPending ? 'Syncing...' : 'Sync Now'}
+            </button>
+          </div>
+
+          {/* Tab Switcher */}
+          <div style={{ display: 'flex', background: '#E2E8F0', padding: 3, borderRadius: 10, gap: 4 }}>
+            <button
+              onClick={() => setActiveTab('station')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, border: 'none',
+                background: activeTab === 'station' ? '#fff' : 'transparent',
+                color: activeTab === 'station' ? TITLE : MUTED,
+                fontWeight: 700, fontSize: 13, padding: '7px 14px', borderRadius: 8,
+                cursor: 'pointer', boxShadow: activeTab === 'station' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+              }}
+            >
+              <Scale size={15} /> Scale Station
+            </button>
+            <button
+              onClick={() => setActiveTab('logs')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, border: 'none',
+                background: activeTab === 'logs' ? '#fff' : 'transparent',
+                color: activeTab === 'logs' ? TITLE : MUTED,
+                fontWeight: 700, fontSize: 13, padding: '7px 14px', borderRadius: 8,
+                cursor: 'pointer', boxShadow: activeTab === 'logs' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+              }}
+            >
+              <History size={15} /> Audit History
+            </button>
+          </div>
         </div>
       </div>
 
@@ -303,7 +347,7 @@ export default function WeightStationPage() {
                 <input
                   ref={barcodeInputRef}
                   type="text"
-                  placeholder="Scan product barcode or enter SKU (auto-focused)..."
+                  placeholder="Scan product barcode (barcode-only search)..."
                   value={barcodeInput}
                   onChange={(e) => setBarcodeInput(e.target.value)}
                   style={{
@@ -333,7 +377,7 @@ export default function WeightStationPage() {
                 }}
               >
                 {isSearching ? <RefreshCw size={20} className="animate-spin" /> : <Search size={20} />}
-                Search Helm
+                Lookup Barcode
               </button>
 
               {selectedProduct && (
@@ -368,10 +412,10 @@ export default function WeightStationPage() {
               <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
                   <div style={{ fontSize: 17, fontWeight: 800, color: TITLE, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Layers size={20} color={ACCENT} /> Multiple Products Found ({searchResults.length})
+                    <Layers size={20} color={ACCENT} /> Multiple Products Share This Barcode ({searchResults.length})
                   </div>
                   <div style={{ fontSize: 13, color: MUTED }}>
-                    This barcode is shared across different customers or SKU records. Select the correct one to update:
+                    This barcode is assigned across multiple customer records. Select the correct one to weigh:
                   </div>
                 </div>
               </div>
@@ -480,6 +524,13 @@ export default function WeightStationPage() {
                 <div style={{ fontSize: 14, color: MUTED, marginBottom: 18, lineHeight: 1.4 }}>
                   {selectedProduct.name}
                 </div>
+
+                {/* Barcode badge */}
+                {selectedProduct.barcode && (
+                  <div style={{ marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: MUTED }}>
+                    <ScanBarcode size={15} color={ACCENT} /> Barcode: <strong>{selectedProduct.barcode}</strong>
+                  </div>
+                )}
 
                 {/* Current Helm Physical Profile */}
                 <div style={{ marginTop: 'auto', background: '#F8FAFC', borderRadius: 12, padding: 16, border: '1px solid #E2E8F0' }}>
@@ -698,10 +749,10 @@ export default function WeightStationPage() {
                 <ScanBarcode size={38} />
               </div>
               <h3 style={{ fontSize: 20, fontWeight: 800, color: TITLE, margin: '0 0 6px' }}>
-                Station Ready for Product Scan
+                Station Ready for Barcode Scan
               </h3>
               <p style={{ fontSize: 14, color: MUTED, maxWidth: 500, margin: '0 auto' }}>
-                Point your handheld or stationary USB barcode scanner at any item. The system will retrieve the product profile from Helm and prepare the scale weight capture automatically.
+                Scan any product barcode with your scanner. The product profile will be retrieved instantly for weight capture.
               </p>
             </div>
           )}
