@@ -18,6 +18,7 @@ import WarehouseBoard from './pages/warehouse/WarehouseBoard';
 import StatusBoardPage from './pages/statusBoard/StatusBoardPage';
 import StatisticsPage from './pages/statistics/StatisticsPage';
 import InventoryValidator from './pages/inventory/InventoryValidator';
+import WeightStationPage from './pages/weightStation/WeightStationPage';
 import CollectionsPage from './pages/collections/CollectionsPage';
 import SettingsPage from './pages/settings/SettingsPage';
 import { LoginScreen, SetupScreen, AuthLoading } from './pages/auth/AuthScreens';
@@ -38,6 +39,20 @@ function GatedApp() {
   if (loading) return <AuthLoading />;
   if (needsSetup) return <SetupScreen />;
   if (!user) return <LoginScreen />;
+
+  const isStationOnly = user.role === 'scale_station_only';
+
+  if (isStationOnly) {
+    return (
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route path="weight-station" element={<WeightStationPage />} />
+          <Route path="*" element={<Navigate to="/weight-station" replace />} />
+        </Route>
+      </Routes>
+    );
+  }
+
   return (
     <Routes>
       <Route element={<AppShell />}>
@@ -55,6 +70,7 @@ function GatedApp() {
         <Route path="picking"         element={<PickingPage />} />
         <Route path="storage"         element={<StoragePage />} />
         <Route path="inventory-validator" element={<InventoryValidator />} />
+        <Route path="weight-station"  element={<WeightStationPage />} />
         <Route path="on-time"         element={<OnTimePage />} />
         <Route path="returns"         element={<ReturnsPage />} />
         <Route path="notifications"   element={<NotificationCenter />} />

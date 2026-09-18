@@ -37,6 +37,7 @@ import gmailRouter          from './routes/gmail.js';
 import slaRulesRouter       from './routes/slaRules.js';
 import collectionsRouter    from './routes/collections.js';
 import standupRouter        from './routes/standup.js';
+import weightStationRouter  from './routes/weightStation.js';
 import { runMorningPrecompute } from './services/standupService.js';
 import { configured as upsConfigured, syncCollectionsTracking } from './services/upsClient.js';
 
@@ -87,6 +88,7 @@ app.use('/api/xero',            xeroRouter);    // OAuth connect/callback public
 app.use('/api/settings',        requireAuth, settingsRouter);
 app.use('/api/sla-rules',       requireAuth, slaRulesRouter);
 app.use('/api/collections',     requireAuth, collectionsRouter);
+app.use('/api/weight-station',   requireAuth, weightStationRouter);
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', service: 'cloud9-os' }));
 

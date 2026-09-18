@@ -13,13 +13,14 @@ function InviteDrawer({ onClose }) {
   const [full_name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [role, setRole] = useState('admin'); // 'admin' | 'scale_station_only'
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   async function submit(e) {
     e.preventDefault(); setErr(null);
     if (password.length < 8) { setErr('Password must be at least 8 characters'); return; }
     setBusy(true);
-    try { await createUser({ full_name, email, password }); await qc.invalidateQueries({ queryKey: ['app-users'] }); onClose(); }
+    try { await createUser({ full_name, email, password, role }); await qc.invalidateQueries({ queryKey: ['app-users'] }); onClose(); }
     catch (e) { setErr(e?.response?.data?.error || 'Could not create user'); setBusy(false); }
   }
   return (
@@ -29,12 +30,25 @@ function InviteDrawer({ onClose }) {
           <span style={{ fontSize: 16, fontWeight: 700, color: TITLE }}>Invite a user</span>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: MUTED }}><X size={18} /></button>
         </div>
-        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 18 }}>Set their email and a starting password — they can change it after signing in. Everyone has full access for now.</div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 18 }}>Set their email, role, and a starting password. Users with Scale Station Only will be locked to that single screen.</div>
         <form onSubmit={submit}>
           {err && <div style={{ background: '#FEF2F2', color: '#B91C1C', fontSize: 12.5, borderRadius: 8, padding: '9px 11px', marginBottom: 12 }}>{err}</div>}
           <input style={input} placeholder="Full name" value={full_name} onChange={e => setName(e.target.value)} autoFocus />
           <input style={input} type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} required />
           <input style={input} type="text" placeholder="Starting password (min 8 chars)" value={password} onChange={e => setPassword(e.target.value)} required />
+          
+          <div style={{ marginBottom: 14 }}>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 700, color: TITLE, marginBottom: 6 }}>Access Role</label>
+            <select
+              value={role}
+              onChange={e => setRole(e.target.value)}
+              style={{ ...input, marginBottom: 0, cursor: 'pointer' }}
+            >
+              <option value="admin">Full Access / Admin (All Pages)</option>
+              <option value="scale_station_only">Scale Station Only (Weigh & Measure Page Only)</option>
+            </select>
+          </div>
+
           <button type="submit" disabled={busy} style={{ width: '100%', border: 'none', background: ACCENT, color: '#fff', borderRadius: 10, padding: 12, fontSize: 14, fontWeight: 700, cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create user'}</button>
         </form>
       </div>
@@ -61,15 +75,21 @@ export default function UsersPage() {
       qc.invalidateQueries({ queryKey: ['app-users'] });
     } catch (e) { window.alert(e?.response?.data?.error || 'Could not update user'); }
   }
+  async function changeRole(u, newRole) {
+    try {
+      await updateUser(u.id, { role: newRole });
+      qc.invalidateQueries({ queryKey: ['app-users'] });
+    } catch (e) { window.alert(e?.response?.data?.error || 'Could not update role'); }
+  }
 
   return (
     <div style={{ width: '100%', maxWidth: 'none' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 800, color: HEADER, margin: '0 0 4px', letterSpacing: -0.6, display: 'flex', alignItems: 'center', gap: 9 }}>
-            <UserCog size={22} /> Users
+            <UserCog size={22} /> Users & Roles
           </h1>
-          <p style={{ fontSize: 13, color: MUTED, margin: 0 }}>People who can sign in to Cloud9 OS. Everyone has full access for now.</p>
+          <p style={{ fontSize: 13, color: MUTED, margin: 0 }}>People who can sign in to Cloud9 OS. Assign Scale Station Only to lock floor operators to Weigh & Measure.</p>
         </div>
         <button onClick={() => setInvite(true)} style={{ display: 'flex', alignItems: 'center', gap: 7, border: 'none', background: ACCENT, color: '#fff', borderRadius: 9, padding: '9px 14px', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
           <UserPlus size={15} /> Invite user
@@ -80,6 +100,7 @@ export default function UsersPage() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead><tr style={{ color: '#94A3B8', textAlign: 'left', fontSize: 11.5 }}>
             <th style={{ padding: '10px 12px' }}>Name</th><th style={{ padding: '10px 12px' }}>Email</th>
+            <th style={{ padding: '10px 12px' }}>Role</th>
             <th style={{ padding: '10px 12px' }}>Status</th><th style={{ padding: '10px 12px' }}>Last sign-in</th>
             <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
           </tr></thead>
@@ -88,6 +109,23 @@ export default function UsersPage() {
               <tr key={u.id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
                 <td style={{ padding: '11px 12px', fontWeight: 600, color: TITLE }}>{u.full_name || '—'}{me && u.id === me.id && <span style={{ color: '#94A3B8', fontWeight: 500 }}> (you)</span>}</td>
                 <td style={{ padding: '11px 12px', color: MUTED }}>{u.email}</td>
+                <td style={{ padding: '11px 12px' }}>
+                  <select
+                    value={u.role || (u.is_admin ? 'admin' : 'scale_station_only')}
+                    onChange={(e) => changeRole(u, e.target.value)}
+                    disabled={me && u.id === me.id}
+                    style={{
+                      border: '1px solid #CBD5E1', borderRadius: 6, padding: '3px 6px',
+                      fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+                      background: u.role === 'scale_station_only' ? '#FEF3C7' : '#EFF6FF',
+                      color: u.role === 'scale_station_only' ? '#B45309' : ACCENT,
+                      cursor: me && u.id === me.id ? 'default' : 'pointer'
+                    }}
+                  >
+                    <option value="admin">Admin / Full Access</option>
+                    <option value="scale_station_only">Scale Station Only</option>
+                  </select>
+                </td>
                 <td style={{ padding: '11px 12px' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: 600, color: u.active ? GREEN : RED }}>
                     <span style={{ width: 7, height: 7, borderRadius: '50%', background: u.active ? GREEN : RED }} />{u.active ? 'Active' : 'Disabled'}</span>
@@ -101,7 +139,7 @@ export default function UsersPage() {
                 </td>
               </tr>
             ))}
-            {(!users?.length) && <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#94A3B8' }}>No users yet.</td></tr>}
+            {(!users?.length) && <tr><td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#94A3B8' }}>No users yet.</td></tr>}
           </tbody>
         </table>
       </div>

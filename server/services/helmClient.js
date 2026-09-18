@@ -75,6 +75,45 @@ async function authedGet(pathOrUrl, params = {}) {
   return res.json();
 }
 
+// ─── Authenticated Mutation (PUT / PATCH / POST) ──────────────────────────────
+async function authedMutate(method, pathOrUrl, body = {}, params = {}) {
+  const url = pathOrUrl.startsWith('http')
+    ? new URL(pathOrUrl)
+    : new URL(`${BASE}${pathOrUrl}`);
+  for (const [k, v] of Object.entries(params)) {
+    if (v != null) url.searchParams.set(k, v);
+  }
+
+  let t = await token();
+  const headers = { Authorization: `Bearer ${t}`, 'Content-Type': 'application/json', Accept: 'application/json' };
+  let res = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  if (res.status === 401) {
+    cachedToken = null;
+    t = await login();
+    headers.Authorization = `Bearer ${t}`;
+    res = await fetch(url, {
+      method,
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  }
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`Helm API ${res.status} on ${method} ${url.pathname}: ${text.slice(0, 300)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { ok: true, raw: text };
+  }
+}
+
 // Walk Helm's pagination ({ data, current_page, last_page, next_page_url }).
 async function fetchAllPages(path, { params = {}, max = 100 } = {}) {
   const all = [];
@@ -373,3 +412,42 @@ export async function fetchInventoryForClient({ helmClientId, perPage = 100, max
 export async function fetchInventoryDetail(id) {
   return authedGet(`/inventory/${id}`);
 }
+
+/**
+ * Search inventory items across Helm by barcode or search query.
+ */
+export async function searchInventory({ query: searchTerm, barcode, sku, helmClientId, limit = 50 }) {
+  const qs = new URLSearchParams();
+  qs.set('limit', String(limit));
+  if (helmClientId != null) qs.append('filters[fulfilment_clients][]', String(helmClientId));
+  if (barcode) qs.set('filters[barcode]', String(barcode));
+  if (sku) qs.set('filters[sku]', String(sku));
+  if (searchTerm && !barcode && !sku) qs.set('filters[search]', String(searchTerm));
+
+  const res = await authedGet(`/inventory?${qs.toString()}`);
+  return Array.isArray(res?.data) ? res.data : [];
+}
+
+/**
+ * Update inventory item weight and dimensions in Helm.
+ * Tries PUT /inventory/:id, with fallback to PATCH /inventory/:id and POST /inventory/:id.
+ */
+export async function updateInventoryItem(id, data) {
+  if (!id) throw new Error('Inventory ID is required to update item in Helm');
+  const cleanId = String(id).trim();
+
+  try {
+    return await authedMutate('PUT', `/inventory/${cleanId}`, data);
+  } catch (err1) {
+    try {
+      return await authedMutate('PATCH', `/inventory/${cleanId}`, data);
+    } catch (err2) {
+      try {
+        return await authedMutate('POST', `/inventory/${cleanId}`, data);
+      } catch {
+        throw err1;
+      }
+    }
+  }
+}
+

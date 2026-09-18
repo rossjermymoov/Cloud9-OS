@@ -2,8 +2,9 @@ import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, Users, Truck, PackagePlus, RotateCcw, Bell, MessageSquare, Settings,
   ScanBarcode, Clock, UserCog, Warehouse, LayoutGrid, LineChart, ClipboardCheck, CalendarClock,
-  Sun, Sparkles
+  Sun, Sparkles, Scale
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 const SECTIONS = [
   {
@@ -19,6 +20,7 @@ const SECTIONS = [
   {
     title: 'WAREHOUSE & FLOOR',
     items: [
+      { to: '/weight-station',      label: 'Weigh & Measure',     Icon: Scale, badge: 'Station' },
       { to: '/picking',             label: 'Picking & Labor',     Icon: ScanBarcode },
       { to: '/storage',             label: 'Storage Footprint',   Icon: Warehouse },
       { to: '/purchase-orders',     label: 'Purchase Orders',     Icon: PackagePlus },
@@ -46,6 +48,20 @@ const SECTIONS = [
 ];
 
 export default function Sidebar() {
+  const { user } = useAuth();
+  const isStationOnly = user?.role === 'scale_station_only';
+
+  const visibleSections = isStationOnly
+    ? [
+        {
+          title: 'STATION MODE',
+          items: [
+            { to: '/weight-station', label: 'Weigh & Measure', Icon: Scale, badge: 'Active' }
+          ]
+        }
+      ]
+    : SECTIONS;
+
   return (
     <aside style={{
       width: 232, flexShrink: 0, background: '#0E131F', color: '#fff',
@@ -62,13 +78,15 @@ export default function Sidebar() {
         }}>C9</div>
         <div>
           <div style={{ fontSize: 14.5, fontWeight: 800, letterSpacing: -0.2 }}>Cloud9 OS</div>
-          <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.45)', fontWeight: 500 }}>3PL Operations Suite</div>
+          <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.45)', fontWeight: 500 }}>
+            {isStationOnly ? 'Floor Station' : '3PL Operations Suite'}
+          </div>
         </div>
       </div>
 
       {/* Nav List grouped by category */}
       <nav style={{ flex: 1, padding: '12px 10px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {SECTIONS.map((sec, sIdx) => (
+        {visibleSections.map((sec, sIdx) => (
           <div key={sIdx}>
             <div style={{
               fontSize: 10, fontWeight: 700, letterSpacing: 0.8,
