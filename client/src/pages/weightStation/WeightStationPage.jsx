@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Scale, ScanBarcode, CheckCircle2, AlertCircle, History, Search,
   RefreshCw, Box, Layers, X, ChevronRight, Database, Square,
-  Calendar, Filter, User, Tag
+  Calendar, Filter, User, Tag, Zap, Usb, Check, ArrowRight
 } from 'lucide-react';
 import {
   searchProducts, updateProductWeight, getWeightLogs,
@@ -24,6 +24,13 @@ export default function WeightStationPage() {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchError, setSearchError] = useState(null);
+
+  // USB Scale & Hands-Free Automation Settings
+  const [usbScaleDevice, setUsbScaleDevice] = useState(null);
+  const [usbScaleConnected, setUsbScaleConnected] = useState(false);
+  const [usbScaleName, setUsbScaleName] = useState('');
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  const [isAutoSyncing, setIsAutoSyncing] = useState(false);
 
   // Sync status polling
   const { data: syncStatus, refetch: refetchSyncStatus } = useQuery({
@@ -60,6 +67,7 @@ export default function WeightStationPage() {
   const [countdown, setCountdown] = useState(0);
   const debounceTimerRef = useRef(null);
   const countdownIntervalRef = useRef(null);
+  const autoSyncTimeoutRef = useRef(null);
 
   // Success and Error feedback state
   const [successToast, setSuccessToast] = useState(null);
@@ -68,6 +76,105 @@ export default function WeightStationPage() {
   // Focus management for barcode scanner
   const barcodeInputRef = useRef(null);
   const weightInputRef = useRef(null);
+
+  // ── WebHID USB Scale Integration (My Weigh UltraShip U2) ───────────────────
+  async function connectUsbScale() {
+    if (!('hid' in navigator)) {
+      alert('WebHID is not supported in this browser. Please use Google Chrome, Brave, or Microsoft Edge.');
+      return;
+    }
+
+    try {
+      // Standard USB POS Scales, DYMO, My Weigh UltraShip U2
+      const devices = await navigator.hid.requestDevice({
+        filters: [
+          { usagePage: 0x008d }, // Point of Sale (POS) Scale Page
+          { usagePage: 0x008c },
+          { vendorId: 0x0922 },  // DYMO / My Weigh / Pelouze
+          { vendorId: 0x0b67 },  // Fairbanks / My Weigh
+          { vendorId: 0x1446 }
+        ]
+      }).catch(async () => {
+        // Fallback open prompt without filters so operator can pick any connected USB scale
+        return await navigator.hid.requestDevice({ filters: [] });
+      });
+
+      if (!devices || devices.length === 0) return;
+
+      const device = devices[0];
+      await attachUsbScale(device);
+    } catch (err) {
+      console.error('USB scale connection failed:', err);
+      alert(`Could not connect USB scale: ${err.message}`);
+    }
+  }
+
+  async function attachUsbScale(device) {
+    if (!device.opened) {
+      await device.open();
+    }
+
+    setUsbScaleDevice(device);
+    setUsbScaleConnected(true);
+    setUsbScaleName(device.productName || 'My Weigh UltraShip U2');
+
+    device.oninputreport = (event) => {
+      const { data } = event;
+      if (!data || data.byteLength < 5) return;
+
+      // Standard USB Scale HID report:
+      // Byte 0: Report ID
+      // Byte 1: Scale Status (1=Fault, 2=Zero, 3=In Motion, 4=Stable, 5=Under Zero, 6=Over Limit)
+      // Byte 2: Unit (2=g, 3=kg, 11=oz, 12=lbs)
+      // Byte 3: Scaling Exponent (e.g. -1, -2, 0)
+      // Byte 4-5: 16-bit integer weight
+      const status = data.getUint8(1);
+      const unitCode = data.getUint8(2);
+      const exp = data.getInt8(3);
+      const rawInt = data.getUint16(4, true); // Little endian
+
+      let weightVal = rawInt * Math.pow(10, exp);
+
+      // Convert unit if scale reports in ounces or pounds
+      if (unitCode === 11) {
+        // Ounces -> Grams
+        weightVal = weightVal * 28.3495;
+      } else if (unitCode === 12) {
+        // Pounds -> Grams
+        weightVal = weightVal * 453.592;
+      } else if (unitCode === 3) {
+        // Kilograms -> Grams
+        weightVal = weightVal * 1000;
+      }
+
+      // If operator selected kg mode, format accordingly
+      const finalDisplayVal = unit === 'kg' ? (weightVal / 1000).toFixed(3) : Math.round(weightVal);
+
+      if (weightVal > 0) {
+        handleWeightChange(String(finalDisplayVal));
+      }
+    };
+  }
+
+  // Auto-reconnect previously authorized USB scales on mount
+  useEffect(() => {
+    if ('hid' in navigator) {
+      navigator.hid.getDevices().then((devices) => {
+        if (devices && devices.length > 0) {
+          attachUsbScale(devices[0]).catch(() => {});
+        }
+      });
+    }
+  }, []);
+
+  function disconnectUsbScale() {
+    if (usbScaleDevice && usbScaleDevice.opened) {
+      usbScaleDevice.close().catch(() => {});
+    }
+    setUsbScaleDevice(null);
+    setUsbScaleConnected(false);
+    setUsbScaleName('');
+  }
 
   // Reset station state
   function resetStation() {
@@ -83,9 +190,11 @@ export default function WeightStationPage() {
     setNotes('');
     setStabilized(false);
     setStabilizing(false);
+    setIsAutoSyncing(false);
     setCountdown(0);
     clearInterval(countdownIntervalRef.current);
     clearTimeout(debounceTimerRef.current);
+    clearTimeout(autoSyncTimeoutRef.current);
 
     setTimeout(() => {
       if (barcodeInputRef.current) {
@@ -153,6 +262,7 @@ export default function WeightStationPage() {
     setEnteredHeight(prod.height ? String(prod.height) : '');
     setStabilized(false);
     setStabilizing(false);
+    setIsAutoSyncing(false);
 
     // Auto-focus weight input after product selected
     setTimeout(() => {
@@ -166,10 +276,12 @@ export default function WeightStationPage() {
   function handleWeightChange(val) {
     setEnteredWeight(val);
     setStabilized(false);
+    setIsAutoSyncing(false);
     setUpdateError(null);
 
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
 
     const num = parseFloat(val);
     if (!isNaN(num) && num > 0) {
@@ -205,10 +317,10 @@ export default function WeightStationPage() {
       setUpdateError(null);
       qc.invalidateQueries({ queryKey: ['weight-station-logs'] });
       setSuccessToast({
-        sku: selectedProduct.sku,
-        name: selectedProduct.name,
+        sku: selectedProduct?.sku,
+        name: selectedProduct?.name,
         newWeight: `${res.weight_g} g (${res.weight_kg} kg)`,
-        customer: selectedProduct.customer_name
+        customer: selectedProduct?.customer_name
       });
       setTimeout(() => setSuccessToast(null), 4500);
       resetStation();
@@ -216,12 +328,13 @@ export default function WeightStationPage() {
     onError: (err) => {
       const msg = err?.response?.data?.error || err.message || 'Helm update rejected the request';
       setUpdateError(msg);
+      setIsAutoSyncing(false);
     }
   });
 
   function handleSubmitUpdate(e) {
     if (e) e.preventDefault();
-    if (!selectedProduct) return;
+    if (!selectedProduct || updateMutation.isPending) return;
     const finalWeight = parseFloat(enteredWeight);
     if (isNaN(finalWeight) || finalWeight <= 0) {
       alert('Please enter a valid weight from the scale.');
@@ -250,6 +363,24 @@ export default function WeightStationPage() {
     });
   }
 
+  // ── ⚡ Hands-Free Auto-Push on Scale Stabilization ─────────────────────────
+  useEffect(() => {
+    if (
+      autoSyncEnabled &&
+      stabilized &&
+      selectedProduct &&
+      !updateMutation.isPending &&
+      enteredWeight &&
+      parseFloat(enteredWeight) > 0
+    ) {
+      setIsAutoSyncing(true);
+      autoSyncTimeoutRef.current = setTimeout(() => {
+        handleSubmitUpdate();
+      }, 500); // 0.5s auto-push after scale reading is locked
+      return () => clearTimeout(autoSyncTimeoutRef.current);
+    }
+  }, [stabilized, autoSyncEnabled, selectedProduct, enteredWeight]);
+
   // Calculate delta comparison
   const parsedNewWeightG = unit === 'kg' ? (parseFloat(enteredWeight) || 0) * 1000 : (parseFloat(enteredWeight) || 0);
   const oldWeightG = selectedProduct?.weight_g || 0;
@@ -267,6 +398,55 @@ export default function WeightStationPage() {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          {/* USB Scale Connect Button & Status */}
+          {usbScaleConnected ? (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: '#ECFDF5', border: '1px solid #A7F3D0', color: '#065F46',
+              borderRadius: 10, padding: '6px 12px', fontSize: 12, fontWeight: 700
+            }}>
+              <Usb size={15} color={GREEN} />
+              <span>{usbScaleName} (Live)</span>
+              <button
+                onClick={disconnectUsbScale}
+                style={{ background: 'none', border: 'none', color: '#065F46', cursor: 'pointer', padding: 0, marginLeft: 4 }}
+                title="Disconnect USB scale"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={connectUsbScale}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                background: '#fff', border: '1px solid #CBD5E1', color: TITLE,
+                borderRadius: 10, padding: '6px 12px', fontSize: 12, fontWeight: 700,
+                cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
+              }}
+              title="Connect My Weigh UltraShip U2 via USB"
+            >
+              <Usb size={14} color={ACCENT} /> Connect USB Scale
+            </button>
+          )}
+
+          {/* Hands-Free Auto-Sync Toggle */}
+          <button
+            onClick={() => setAutoSyncEnabled(prev => !prev)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              background: autoSyncEnabled ? '#EFF6FF' : '#F8FAFC',
+              border: autoSyncEnabled ? '1px solid #BFDBFE' : '1px solid #CBD5E1',
+              color: autoSyncEnabled ? ACCENT : MUTED,
+              borderRadius: 10, padding: '6px 12px', fontSize: 12, fontWeight: 700,
+              cursor: 'pointer'
+            }}
+            title="Automatically send Helm update once scale reading stabilizes"
+          >
+            <Zap size={14} color={autoSyncEnabled ? ACCENT : MUTED} />
+            {autoSyncEnabled ? 'Hands-Free Auto-Sync: ON' : 'Auto-Sync: OFF'}
+          </button>
+
           {/* Cache Sync Status & Trigger */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 8,
@@ -372,6 +552,52 @@ export default function WeightStationPage() {
       {/* ── TAB 1: MAIN STATION VIEW ── */}
       {activeTab === 'station' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Hands-Free Workflow Progress Bar */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10,
+            background: '#fff', borderRadius: 14, padding: '12px 18px', boxShadow: SHADOW
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: !selectedProduct ? ACCENT : GREEN, fontWeight: 700, fontSize: 12.5 }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: '50%', background: !selectedProduct ? ACCENT : '#ECFDF5',
+                color: !selectedProduct ? '#fff' : GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11
+              }}>
+                {selectedProduct ? '✓' : '1'}
+              </div>
+              <span>1. Scan Barcode</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: selectedProduct && !enteredWeight ? ACCENT : (enteredWeight ? GREEN : MUTED), fontWeight: 700, fontSize: 12.5 }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: '50%', background: selectedProduct && !enteredWeight ? ACCENT : (enteredWeight ? '#ECFDF5' : '#F1F5F9'),
+                color: selectedProduct && !enteredWeight ? '#fff' : (enteredWeight ? GREEN : MUTED), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11
+              }}>
+                {enteredWeight ? '✓' : '2'}
+              </div>
+              <span>2. Place on Scale</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: stabilizing ? AMBER : (stabilized ? GREEN : MUTED), fontWeight: 700, fontSize: 12.5 }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: '50%', background: stabilizing ? '#FEF3C7' : (stabilized ? '#ECFDF5' : '#F1F5F9'),
+                color: stabilizing ? AMBER : (stabilized ? GREEN : MUTED), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11
+              }}>
+                {stabilized ? '✓' : '3'}
+              </div>
+              <span>3. Stabilize</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: isAutoSyncing || updateMutation.isPending ? ACCENT : (stabilized && autoSyncEnabled ? GREEN : MUTED), fontWeight: 700, fontSize: 12.5 }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: '50%', background: isAutoSyncing || updateMutation.isPending ? ACCENT : '#F1F5F9',
+                color: isAutoSyncing || updateMutation.isPending ? '#fff' : MUTED, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11
+              }}>
+                4
+              </div>
+              <span>4. Auto-Push to Helm</span>
+            </div>
+          </div>
+
           {/* 1. GIANT SCAN BARCODE INPUT */}
           <div style={{
             background: '#fff', borderRadius: 16, padding: '24px 28px',
@@ -395,7 +621,7 @@ export default function WeightStationPage() {
                 <input
                   ref={barcodeInputRef}
                   type="text"
-                  placeholder="Scan product barcode (barcode-only search)..."
+                  placeholder="Scan product barcode..."
                   value={barcodeInput}
                   onChange={(e) => setBarcodeInput(e.target.value)}
                   style={{
@@ -606,7 +832,7 @@ export default function WeightStationPage() {
               <div style={{ background: '#fff', borderRadius: 16, padding: 26, boxShadow: SHADOW, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
                   <div style={{ fontSize: 18, fontWeight: 800, color: TITLE, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Scale size={22} color={ACCENT} /> USB Scale & Weight Capture
+                    <Scale size={22} color={ACCENT} /> Live Scale Reading
                   </div>
 
                   {/* Unit Selector */}
@@ -637,7 +863,7 @@ export default function WeightStationPage() {
                 </div>
 
                 <form onSubmit={handleSubmitUpdate} style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: 18 }}>
-                  {/* GIANT WEIGHT INPUT */}
+                  {/* GIANT WEIGHT INPUT & STABILIZATION STATUS */}
                   <div style={{
                     background: '#F8FAFC', borderRadius: 16, padding: 20,
                     border: '2px solid',
@@ -645,7 +871,8 @@ export default function WeightStationPage() {
                     transition: 'border-color 0.2s ease'
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <label style={{ fontSize: 13, fontWeight: 700, color: TITLE }}>
+                      <label style={{ fontSize: 13, fontWeight: 700, color: TITLE, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        {usbScaleConnected && <Usb size={14} color={GREEN} />}
                         Scale Weight ({unit === 'g' ? 'Grams' : 'Kilograms'})
                       </label>
                       {stabilizing && (
@@ -653,9 +880,14 @@ export default function WeightStationPage() {
                           <RefreshCw size={13} className="animate-spin" /> Stabilizing ({countdown}s)...
                         </span>
                       )}
-                      {stabilized && (
+                      {stabilized && !isAutoSyncing && !updateMutation.isPending && (
                         <span style={{ fontSize: 12, fontWeight: 700, color: GREEN, display: 'flex', alignItems: 'center', gap: 5 }}>
                           <CheckCircle2 size={14} /> Scale reading locked & stable
+                        </span>
+                      )}
+                      {isAutoSyncing && (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: ACCENT, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <Zap size={14} className="animate-bounce" /> Auto-syncing to Helm...
                         </span>
                       )}
                     </div>
@@ -741,7 +973,7 @@ export default function WeightStationPage() {
                   {/* Operator Notes (Optional) */}
                   <input
                     type="text"
-                    placeholder="Optional operator notes (e.g. weighed with primary packaging)..."
+                    placeholder="Optional operator notes..."
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     style={{
@@ -814,7 +1046,7 @@ export default function WeightStationPage() {
                 Station Ready for Barcode Scan
               </h3>
               <p style={{ fontSize: 14, color: MUTED, maxWidth: 500, margin: '0 auto' }}>
-                Scan any product barcode with your scanner. The product profile will be retrieved instantly for weight capture.
+                Scan any product barcode with your scanner. The product profile will be retrieved instantly for scale capture.
               </p>
             </div>
           )}
@@ -842,7 +1074,7 @@ function AuditLogsView() {
     deleteFailedLogs().catch(() => {});
   }, []);
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['weight-station-logs', searchTerm, skuFilter, userFilter, startDate, endDate, page],
     queryFn: () => getWeightLogs({
       q: searchTerm,
