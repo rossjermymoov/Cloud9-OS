@@ -12,6 +12,8 @@ import express from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../db/index.js';
+import { getSetting, setSetting } from '../services/appSettings.js';
+import { helmConfigured, testHelmCredentials, clearHelmTokenCache } from '../services/helmClient.js';
 
 const router = express.Router();
 
@@ -60,16 +62,62 @@ export async function requireAuth(req, res, next) {
 
 // ─── Public: setup state + first-admin creation + login ──────────────────────
 router.get('/setup-status', async (_req, res, next) => {
-  try { res.json({ needs_setup: (await userCount()) === 0 }); }
-  catch (err) { next(err); }
+  try {
+    const totalUsers = await userCount();
+    const isHelmConfigured = await helmConfigured();
+    const branding = await getSetting('branding', {
+      app_name: 'Cloud9 OS',
+      company_name: 'Cloud9 Fulfillment',
+      primary_color: '#0056FB',
+      logo_url: '',
+    });
+    res.json({
+      needs_setup: totalUsers === 0,
+      helm_configured: isHelmConfigured,
+      branding,
+    });
+  } catch (err) { next(err); }
 });
 
 router.post('/setup', async (req, res, next) => {
   try {
     if (await userCount() > 0) return res.status(409).json({ error: 'Setup already complete — ask an admin to invite you.' });
-    const { full_name, email, password } = req.body || {};
+    const { full_name, email, password, app_name, company_name, helm_base_url, helm_email, helm_password, helm_2fa_code } = req.body || {};
     if (!validEmail(email)) return res.status(400).json({ error: 'A valid email is required' });
     if (!password || String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+
+    // Optional branding save during setup
+    if (app_name || company_name) {
+      await setSetting('branding', {
+        app_name: String(app_name || 'Warehouse OS').trim().slice(0, 60),
+        company_name: String(company_name || '').trim().slice(0, 100),
+        logo_url: '',
+        primary_color: '#0056FB',
+      });
+    }
+
+    // Optional Helm credentials save during setup
+    if (helm_base_url && helm_email && helm_password) {
+      try {
+        await testHelmCredentials({
+          baseUrl: helm_base_url,
+          email: helm_email,
+          password: helm_password,
+          twoFaCode: helm_2fa_code,
+        });
+        await setSetting('helm_integration', {
+          base_url: String(helm_base_url).trim().replace(/\/$/, ''),
+          email: String(helm_email).trim(),
+          password: helm_password,
+          two_fa_code: helm_2fa_code || '',
+          updated_at: new Date().toISOString(),
+        });
+        clearHelmTokenCache();
+      } catch (helmErr) {
+        console.warn('[setup] Helm test connection warning:', helmErr.message);
+      }
+    }
+
     const hash = await bcrypt.hash(String(password), 10);
     const { rows } = await query(
       `INSERT INTO app_users (email, full_name, password_hash, is_admin, role) VALUES ($1,$2,$3,true,'admin')

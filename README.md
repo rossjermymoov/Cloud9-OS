@@ -1,40 +1,50 @@
-# Cloud9 OS
+# Warehouse OS (3PL Operations Suite)
 
-Air traffic control for 3PL — wraps a **Helm** WMS and **Xero** billing into one operational view. Customer section and tracking page are carried over from Moov OS; the Notification Center and Helm/webhook pipework are new.
+A standalone, white-labelable operations platform for 3PL warehouses that wraps **Helm WMS**, scales integration, courier tracking, and inventory interrogation into a single command centre.
 
-See `Cloud9-OS-Architecture.md` for the full design and build plan.
+---
 
-## Status — Phase 0 scaffold (🟢 builds)
+## Quickstart Guide for New Warehouses
 
-| Area | State |
-|---|---|
-| Project structure, build, deploy config | 🟢 Done |
-| Core database schema (customers, tracking, POs, notifications) | 🟢 Done |
-| Tracking page (copied exactly from Moov OS) + status engine | 🟢 Done |
-| Customers (list + record + activity feed) | 🟢 Done |
-| Notification Center + per-customer thread | 🟢 Done |
-| Purchase Order page (list + detail + lines) | 🟢 Done |
-| Returns view + return-created webhook | 🟢 Built (best-guess shape, refine after live fire) |
-| Picks-completed metric (picks/day on dashboard) | 🟢 Built (best-guess shape) |
-| Webhook capture log (`/api/v1/webhooks/log`) for parser-locking | 🟢 Done |
-| GitHub + Railway deploy | 🟡 Repo committed locally; see `DEPLOY.md` to push + deploy |
-| Webhook pipework (PO created, tracking, shipment, inbound, cancel) | 🟢 Endpoints live (payloads to validate vs real Helm fires) |
-| Helm API client — auth + customer sync | 🟢 Built (Helm `fulfilment_clients` → Cloud9 customers) |
-| Helm dispatch-volume sync — parcels + items/day per customer | 🟢 Built + on the dashboard & customer record |
-| Xero billing | 🔴 Later phase (Helm `accounts_id` is the link) |
-| Queries & claims (copy from Moov OS) | 🔴 Later phase |
-| Auth / login | 🔴 Off in Phase 0 |
+### Option A: 1-Command Docker Setup (Recommended)
+Make sure you have [Docker Desktop](https://www.docker.com/) installed, then run:
 
-## Stack
-React 18 + Vite + Tailwind (client) · Node + Express + PostgreSQL (server) · Railway.
-
-## Run locally
 ```bash
-npm run install:all                 # install root + server + client deps
-cp server/.env.example server/.env  # then fill in DATABASE_URL etc.
-npm run dev                         # server (5000) + client (3000)
+docker compose up -d
 ```
-Production: `npm run build && npm start` (server serves the built client).
+Open **`http://localhost:5000`** in your browser to start the **3-step Onboarding Wizard**:
+1. Enter your warehouse / app display name (e.g. *Apex Fulfilment OS*).
+2. Enter your Helm WMS API URL and login credentials.
+3. Create your initial admin login.
+
+---
+
+### Option B: Local Node.js Setup
+
+1. **Install dependencies**:
+   ```bash
+   npm run install:all
+   ```
+2. **Configure environment**:
+   ```bash
+   cp .env.example server/.env
+   # Edit server/.env to set your PostgreSQL connection string
+   ```
+3. **Start in development mode**:
+   ```bash
+   npm run dev
+   ```
+   Open `http://localhost:3000` to complete setup.
+
+---
+
+## Features
+- **White-Labeling**: Customize brand name, top-left logo, and accent colour dynamically.
+- **Helm WMS Integration**: Live sync for fulfilment clients, purchase orders, inventory schemas, and dispatch volume.
+- **Weigh & Measure Station**: Direct USB scale integration (My Weigh UltraShip U2) with hands-free auto-sync to Helm.
+- **Inventory Interrogator**: Data quality sweeps with rate-limit backoff and exportable CSV reports.
+- **Warehouse TV Board**: Real-time dispatch and productivity board for floor screens (`/warehouse`).
+
 
 ## Webhook endpoints (point Helm here)
 All require header `Authorization: Bearer <CLOUD9_WEBHOOK_TOKEN>`.

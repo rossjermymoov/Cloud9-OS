@@ -39,10 +39,14 @@ export function AuthProvider({ children }) {
     return data.user;
   }, []);
 
-  const setupAdmin = useCallback(async (full_name, email, password) => {
+  const setupAdmin = useCallback(async (payloadOrName, email, password) => {
+    const body = typeof payloadOrName === 'object' && payloadOrName !== null
+      ? payloadOrName
+      : { full_name: payloadOrName, email, password };
+
     const res = await fetch(`${API}/auth/setup`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ full_name, email, password }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Setup failed');

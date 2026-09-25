@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { BrandingProvider } from './context/BrandingContext';
 import AppShell from './components/layout/AppShell';
 import Dashboard from './pages/Dashboard';
 import MorningStandupPage from './pages/standup/MorningStandupPage';
@@ -86,7 +87,9 @@ function GatedApp() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppRoutes />
+      <BrandingProvider>
+        <AppRoutes />
+      </BrandingProvider>
     </AuthProvider>
   );
 }

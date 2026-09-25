@@ -14,28 +14,71 @@
  * Cloud9 "customer" == Helm **fulfilment_client** (the businesses we fulfil for
  * and bill via Xero — they carry billing_email + accounts_id). Helm's own
  * /customers endpoint is end-consumer shipping contacts and is NOT used here.
- */
-
-const BASE     = (process.env.HELM_API_BASE || '').replace(/\/$/, '');
-const EMAIL    = process.env.HELM_EMAIL || '';
-const PASSWORD = process.env.HELM_PASSWORD || '';
-const TWO_FA   = process.env.HELM_2FA_CODE || '';
+import { getSetting } from './appSettings.js';
 
 let cachedToken = null;
+let lastUsedConfigHash = '';
 
-export function helmConfigured() {
-  return Boolean(BASE && EMAIL && PASSWORD);
+export async function getHelmConfig() {
+  const dbConfig = await getSetting('helm_integration', null);
+  if (dbConfig && dbConfig.base_url && dbConfig.email && dbConfig.password) {
+    return {
+      baseUrl: (dbConfig.base_url || '').replace(/\/$/, ''),
+      email: dbConfig.email || '',
+      password: dbConfig.password || '',
+      twoFaCode: dbConfig.two_fa_code || '',
+      source: 'database',
+    };
+  }
+  return {
+    baseUrl: (process.env.HELM_API_BASE || '').replace(/\/$/, ''),
+    email: process.env.HELM_EMAIL || '',
+    password: process.env.HELM_PASSWORD || '',
+    twoFaCode: process.env.HELM_2FA_CODE || '',
+    source: 'env',
+  };
+}
+
+export async function helmConfigured() {
+  const cfg = await getHelmConfig();
+  return Boolean(cfg.baseUrl && cfg.email && cfg.password);
+}
+
+export function clearHelmTokenCache() {
+  cachedToken = null;
+  lastUsedConfigHash = '';
+}
+
+// ─── Test Credentials (dry-run without saving) ────────────────────────────────
+export async function testHelmCredentials({ baseUrl, email, password, twoFaCode = '' }) {
+  const cleanBase = String(baseUrl || '').trim().replace(/\/$/, '');
+  if (!cleanBase || !email || !password) {
+    throw new Error('Base URL, email, and password are required');
+  }
+  const res = await fetch(`${cleanBase}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ email: email.trim(), password, '2fa_code': twoFaCode }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Helm authentication failed (${res.status}): ${body.slice(0, 180)}`);
+  }
+  const data = await res.json();
+  if (!data.token) throw new Error('Helm responded without an authentication token');
+  return { ok: true, token: data.token };
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 async function login() {
-  if (!helmConfigured()) {
-    throw new Error('Helm API not configured — set HELM_API_BASE / HELM_EMAIL / HELM_PASSWORD in server/.env');
+  const cfg = await getHelmConfig();
+  if (!cfg.baseUrl || !cfg.email || !cfg.password) {
+    throw new Error('Helm API not configured — enter credentials in Settings > Helm Integration or set HELM_API_BASE in .env');
   }
-  const res = await fetch(`${BASE}/auth/login`, {
+  const res = await fetch(`${cfg.baseUrl}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ email: EMAIL, password: PASSWORD, '2fa_code': TWO_FA }),
+    body: JSON.stringify({ email: cfg.email, password: cfg.password, '2fa_code': cfg.twoFaCode }),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -44,6 +87,7 @@ async function login() {
   const data = await res.json();
   if (!data.token) throw new Error('Helm login returned no token');
   cachedToken = data.token;
+  lastUsedConfigHash = `${cfg.baseUrl}:${cfg.email}`;
   return cachedToken;
 }
 
@@ -55,9 +99,10 @@ async function token() {
 
 // ─── Authenticated GET (auto re-login once on 401 & auto-backoff on 429) ──────
 export async function authedGet(pathOrUrl, params = {}) {
+  const cfg = await getHelmConfig();
   const url = pathOrUrl.startsWith('http')
     ? new URL(pathOrUrl)
-    : new URL(`${BASE}${pathOrUrl}`);
+    : new URL(`${cfg.baseUrl}${pathOrUrl}`);
   for (const [k, v] of Object.entries(params)) {
     if (v != null) url.searchParams.set(k, v);
   }
@@ -97,9 +142,10 @@ export async function authedGet(pathOrUrl, params = {}) {
 
 // ─── Authenticated Mutation (PUT / PATCH / POST with 429 backoff) ─────────────
 export async function authedMutate(method, pathOrUrl, body = {}, params = {}) {
+  const cfg = await getHelmConfig();
   const url = pathOrUrl.startsWith('http')
     ? new URL(pathOrUrl)
-    : new URL(`${BASE}${pathOrUrl}`);
+    : new URL(`${cfg.baseUrl}${pathOrUrl}`);
   for (const [k, v] of Object.entries(params)) {
     if (v != null) url.searchParams.set(k, v);
   }

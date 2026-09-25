@@ -5,6 +5,7 @@ import {
   Sun, Sparkles, Scale
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useBranding } from '../../context/BrandingContext';
 
 const SECTIONS = [
   {
@@ -49,7 +50,12 @@ const SECTIONS = [
 
 export default function Sidebar() {
   const { user } = useAuth();
+  const { appName, primaryColor, logoUrl } = useBranding();
   const isStationOnly = user?.role === 'scale_station_only';
+
+  const initials = appName
+    ? appName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+    : 'OS';
 
   const visibleSections = isStationOnly
     ? [
@@ -70,14 +76,20 @@ export default function Sidebar() {
     }}>
       {/* Brand */}
       <div style={{ padding: '18px 20px', display: 'flex', alignItems: 'center', gap: 11, borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-        <div style={{
-          width: 32, height: 32, borderRadius: 9,
-          background: 'linear-gradient(135deg, #0056FB 0%, #7B2FBE 100%)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontWeight: 800, fontSize: 14, color: '#fff', boxShadow: '0 2px 8px rgba(0,86,251,0.3)'
-        }}>C9</div>
-        <div>
-          <div style={{ fontSize: 14.5, fontWeight: 800, letterSpacing: -0.2 }}>Cloud9 OS</div>
+        {logoUrl ? (
+          <img src={logoUrl} alt={appName} style={{ width: 32, height: 32, borderRadius: 9, objectFit: 'contain' }} />
+        ) : (
+          <div style={{
+            width: 32, height: 32, borderRadius: 9,
+            background: `linear-gradient(135deg, ${primaryColor || '#0056FB'} 0%, #7B2FBE 100%)`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontWeight: 800, fontSize: 13.5, color: '#fff', boxShadow: '0 2px 8px rgba(0,86,251,0.3)'
+          }}>{initials}</div>
+        )}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontSize: 14.5, fontWeight: 800, letterSpacing: -0.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {appName || 'Warehouse OS'}
+          </div>
           <div style={{ fontSize: 10.5, color: 'rgba(255,255,255,0.45)', fontWeight: 500 }}>
             {isStationOnly ? 'Floor Station' : '3PL Operations Suite'}
           </div>
@@ -134,7 +146,7 @@ export default function Sidebar() {
       </nav>
 
       <div style={{ padding: '12px 20px', fontSize: 11, color: 'rgba(255,255,255,0.35)', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>Cloud9 OS · v1.0</span>
+        <span>{appName || 'Warehouse OS'} · v1.0</span>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10B981' }} title="System operational" />
       </div>
     </aside>

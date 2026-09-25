@@ -1,5 +1,14 @@
 import api from './client';
 
+// Branding & White-Labeling
+export const getBranding        = ()              => api.get('/settings/branding').then(r => r.data);
+export const saveBranding       = (branding)      => api.put('/settings/branding', branding).then(r => r.data);
+
+// Helm WMS Integration
+export const getHelmIntegration = ()              => api.get('/settings/helm-integration').then(r => r.data);
+export const saveHelmIntegration = (creds)        => api.put('/settings/helm-integration', creds).then(r => r.data);
+export const testHelmConnection = (creds)        => api.post('/settings/helm-test', creds).then(r => r.data);
+
 // Warehouse-board messages (welcome slide + urgent banner)
 export const getBoardMessages   = ()              => api.get('/settings/board-messages').then(r => r.data);
 export const saveBoardWelcome   = (enabled, who)  => api.put('/settings/board-welcome', { enabled, who }).then(r => r.data);
