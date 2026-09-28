@@ -77,35 +77,92 @@ export default function WeightStationPage() {
   const barcodeInputRef = useRef(null);
   const weightInputRef = useRef(null);
 
-  // ── WebHID USB Scale Integration (My Weigh UltraShip U2) ───────────────────
+  // ── WebHID & WebSerial USB Scale Integration (My Weigh UltraShip U2) ──────
+  const [serialPort, setSerialPort] = useState(null);
+  const serialReaderRef = useRef(null);
+
   async function connectUsbScale() {
     if (!('hid' in navigator)) {
-      alert('WebHID is not supported in this browser. Please use Google Chrome, Brave, or Microsoft Edge.');
+      alert('WebHID is not supported in this browser. Please use Google Chrome or Microsoft Edge.');
       return;
     }
 
     try {
-      // Standard USB POS Scales, DYMO, My Weigh UltraShip U2
-      const devices = await navigator.hid.requestDevice({
-        filters: [
-          { usagePage: 0x008d }, // Point of Sale (POS) Scale Page
-          { usagePage: 0x008c },
-          { vendorId: 0x0922 },  // DYMO / My Weigh / Pelouze
-          { vendorId: 0x0b67 },  // Fairbanks / My Weigh
-          { vendorId: 0x1446 }
-        ]
-      }).catch(async () => {
-        // Fallback open prompt without filters so operator can pick any connected USB scale
-        return await navigator.hid.requestDevice({ filters: [] });
-      });
-
+      // Pass filters: [] so Chrome displays ALL connected USB HID devices without filtering
+      const devices = await navigator.hid.requestDevice({ filters: [] });
       if (!devices || devices.length === 0) return;
 
       const device = devices[0];
       await attachUsbScale(device);
     } catch (err) {
-      console.error('USB scale connection failed:', err);
-      alert(`Could not connect USB scale: ${err.message}`);
+      if (err.name !== 'NotFoundError') {
+        console.error('USB scale connection failed:', err);
+        alert(`Could not connect USB scale: ${err.message}`);
+      }
+    }
+  }
+
+  async function connectUsbSerial() {
+    if (!('serial' in navigator)) {
+      alert('WebSerial is not supported in this browser. Please use Google Chrome or Microsoft Edge.');
+      return;
+    }
+
+    try {
+      const port = await navigator.serial.requestPort({ filters: [] });
+      await port.open({ baudRate: 9600, dataBits: 8, stopBits: 1, parity: 'none' });
+      setSerialPort(port);
+      setUsbScaleConnected(true);
+      setUsbScaleName('UltraShip U2 (Serial/COM)');
+
+      const textDecoder = new TextDecoderStream();
+      port.readable.pipeTo(textDecoder.writable).catch(() => {});
+      const reader = textDecoder.readable.getReader();
+      serialReaderRef.current = reader;
+
+      let buffer = '';
+      (async () => {
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) {
+              buffer += value;
+              const lines = buffer.split(/[\r\n]+/);
+              buffer = lines.pop(); // keep partial line
+              for (const line of lines) {
+                parseSerialWeight(line);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Serial stream read error:', e);
+        }
+      })();
+    } catch (err) {
+      if (err.name !== 'NotFoundError') {
+        console.error('Serial connection failed:', err);
+        alert(`Could not connect Serial port: ${err.message}`);
+      }
+    }
+  }
+
+  function parseSerialWeight(line) {
+    if (!line || !line.trim()) return;
+    // Match common scale formats: e.g. "ST,GS,+000.450kg", "125.4 g", "0.45 kg", "1.25 lb"
+    const clean = line.replace(/[^0-9.\-a-zA-Z]/g, ' ').trim();
+    const match = clean.match(/([+-]?[0-9]+(?:\.[0-9]+)?)\s*(kg|g|lb|lbs|oz)?/i);
+    if (match) {
+      let val = parseFloat(match[1]);
+      let u = (match[2] || 'g').toLowerCase();
+      if (isNaN(val) || val <= 0) return;
+
+      if (u === 'kg') val = val * 1000;
+      else if (u === 'lb' || u === 'lbs') val = val * 453.592;
+      else if (u === 'oz') val = val * 28.3495;
+
+      const finalVal = unit === 'kg' ? (val / 1000).toFixed(3) : Math.round(val);
+      handleWeightChange(String(finalVal));
     }
   }
 
@@ -170,6 +227,14 @@ export default function WeightStationPage() {
   function disconnectUsbScale() {
     if (usbScaleDevice && usbScaleDevice.opened) {
       usbScaleDevice.close().catch(() => {});
+    }
+    if (serialReaderRef.current) {
+      serialReaderRef.current.cancel().catch(() => {});
+      serialReaderRef.current = null;
+    }
+    if (serialPort) {
+      serialPort.close().catch(() => {});
+      setSerialPort(null);
     }
     setUsbScaleDevice(null);
     setUsbScaleConnected(false);
@@ -416,18 +481,32 @@ export default function WeightStationPage() {
               </button>
             </div>
           ) : (
-            <button
-              onClick={connectUsbScale}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                background: '#fff', border: '1px solid #CBD5E1', color: TITLE,
-                borderRadius: 10, padding: '6px 12px', fontSize: 12, fontWeight: 700,
-                cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
-              }}
-              title="Connect My Weigh UltraShip U2 via USB"
-            >
-              <Usb size={14} color={ACCENT} /> Connect USB Scale
-            </button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={connectUsbScale}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  background: ACCENT, color: '#fff', border: 'none',
+                  borderRadius: 10, padding: '6px 13px', fontSize: 12, fontWeight: 700,
+                  cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,86,251,0.2)'
+                }}
+                title="Connect My Weigh UltraShip U2 via standard USB HID"
+              >
+                <Usb size={14} /> Connect USB Scale
+              </button>
+              <button
+                onClick={connectUsbSerial}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  background: '#fff', border: '1px solid #CBD5E1', color: TITLE,
+                  borderRadius: 10, padding: '6px 11px', fontSize: 12, fontWeight: 600,
+                  cursor: 'pointer', boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
+                }}
+                title="Connect via Serial / Virtual COM Port"
+              >
+                COM / Serial Port
+              </button>
+            </div>
           )}
 
           {/* Hands-Free Auto-Sync Toggle */}
