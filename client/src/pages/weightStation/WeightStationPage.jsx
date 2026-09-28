@@ -166,6 +166,8 @@ export default function WeightStationPage() {
     }
   }
 
+  const [lastRawPacket, setLastRawPacket] = useState('');
+
   async function attachUsbScale(device) {
     if (!device.opened) {
       await device.open();
@@ -176,41 +178,82 @@ export default function WeightStationPage() {
     setUsbScaleName(device.productName || 'My Weigh UltraShip U2');
 
     device.oninputreport = (event) => {
-      const { data } = event;
-      if (!data || data.byteLength < 5) return;
-
-      // Standard USB Scale HID report:
-      // Byte 0: Report ID
-      // Byte 1: Scale Status (1=Fault, 2=Zero, 3=In Motion, 4=Stable, 5=Under Zero, 6=Over Limit)
-      // Byte 2: Unit (2=g, 3=kg, 11=oz, 12=lbs)
-      // Byte 3: Scaling Exponent (e.g. -1, -2, 0)
-      // Byte 4-5: 16-bit integer weight
-      const status = data.getUint8(1);
-      const unitCode = data.getUint8(2);
-      const exp = data.getInt8(3);
-      const rawInt = data.getUint16(4, true); // Little endian
-
-      let weightVal = rawInt * Math.pow(10, exp);
-
-      // Convert unit if scale reports in ounces or pounds
-      if (unitCode === 11) {
-        // Ounces -> Grams
-        weightVal = weightVal * 28.3495;
-      } else if (unitCode === 12) {
-        // Pounds -> Grams
-        weightVal = weightVal * 453.592;
-      } else if (unitCode === 3) {
-        // Kilograms -> Grams
-        weightVal = weightVal * 1000;
-      }
-
-      // If operator selected kg mode, format accordingly
-      const finalDisplayVal = unit === 'kg' ? (weightVal / 1000).toFixed(3) : Math.round(weightVal);
-
-      if (weightVal > 0) {
-        handleWeightChange(String(finalDisplayVal));
-      }
+      parseHidScalePacket(event);
     };
+  }
+
+  function parseHidScalePacket(event) {
+    const { data } = event;
+    if (!data || data.byteLength === 0) return;
+
+    // Convert to hex string for live diagnostics
+    const hexArr = [];
+    for (let i = 0; i < data.byteLength; i++) {
+      hexArr.push(data.getUint8(i).toString(16).padStart(2, '0').toUpperCase());
+    }
+    const hexStr = hexArr.join(' ');
+    console.log('[WebHID Scale Report]:', hexStr);
+
+    // 1. Try ASCII text decode first if packet contains printable numbers
+    try {
+      const asciiText = new TextDecoder().decode(data.buffer);
+      if (/[0-9]/.test(asciiText)) {
+        const match = asciiText.match(/([+-]?[0-9]+(?:\.[0-9]+)?)\s*(kg|g|lb|lbs|oz)?/i);
+        if (match) {
+          let val = parseFloat(match[1]);
+          let u = (match[2] || 'g').toLowerCase();
+          if (!isNaN(val) && val > 0) {
+            if (u === 'kg') val = val * 1000;
+            else if (u === 'lb' || u === 'lbs') val = val * 453.592;
+            else if (u === 'oz') val = val * 28.3495;
+            const finalVal = unit === 'kg' ? (val / 1000).toFixed(3) : Math.round(val);
+            setLastRawPacket(`${hexStr} (ASCII: ${finalVal}${unit})`);
+            handleWeightChange(String(finalVal));
+            return;
+          }
+        }
+      }
+    } catch { /* not ascii */ }
+
+    // 2. Try Standard USB POS scale format (try offsets 0, 1, 2)
+    let weightVal = null;
+    for (let offset = 0; offset <= Math.min(2, data.byteLength - 4); offset++) {
+      const uCode = data.getUint8(offset + 1);
+      // Unit codes: 2=g, 3=kg, 11/0x0B=oz, 12/0x0C=lbs
+      if ([2, 3, 11, 12, 0x02, 0x03, 0x0B, 0x0C].includes(uCode)) {
+        const exp = data.getInt8(offset + 2);
+        const raw = data.getUint16(offset + 3, true);
+        if (raw > 0 && exp >= -4 && exp <= 3) {
+          let calc = raw * Math.pow(10, exp);
+          if (uCode === 11 || uCode === 0x0B) calc *= 28.3495;
+          else if (uCode === 12 || uCode === 0x0C) calc *= 453.592;
+          else if (uCode === 3 || uCode === 0x03) calc *= 1000;
+          if (calc > 0 && calc < 500000) {
+            weightVal = calc;
+            break;
+          }
+        }
+      }
+    }
+
+    // 3. Fallback: inspect 16-bit integer values across packet
+    if (weightVal == null && data.byteLength >= 4) {
+      for (let offset = 0; offset <= data.byteLength - 2; offset++) {
+        const le = data.getUint16(offset, true);
+        if (le > 0 && le <= 50000) {
+          weightVal = le;
+          break;
+        }
+      }
+    }
+
+    if (weightVal != null && weightVal > 0) {
+      const finalDisplayVal = unit === 'kg' ? (weightVal / 1000).toFixed(3) : Math.round(weightVal);
+      setLastRawPacket(`${hexStr} -> ${finalDisplayVal}${unit}`);
+      handleWeightChange(String(finalDisplayVal));
+    } else {
+      setLastRawPacket(`${hexStr} (${data.byteLength} bytes)`);
+    }
   }
 
   // Auto-reconnect previously authorized USB scales on mount
@@ -1003,6 +1046,17 @@ export default function WeightStationPage() {
                           {weightDiffG > 0 ? `+${weightDiffG} g` : `${weightDiffG} g`}
                           {weightDiffPct != null && ` (${weightDiffPct > 0 ? `+${weightDiffPct}` : weightDiffPct}%)`}
                         </span>
+                      </div>
+                    )}
+
+                    {/* Live Scale Diagnostic Stream */}
+                    {usbScaleConnected && (
+                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #E2E8F0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, color: MUTED, flexWrap: 'wrap', gap: 6 }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ width: 6, height: 6, borderRadius: '50%', background: GREEN, display: 'inline-block' }} />
+                          Scale Stream: <code style={{ fontFamily: 'ui-monospace, monospace', color: TITLE, background: '#fff', padding: '2px 6px', borderRadius: 4, border: '1px solid #CBD5E1' }}>{lastRawPacket || 'Listening for packets...'}</code>
+                        </span>
+                        <span style={{ color: '#94A3B8' }}>Press SEND on scale if needed</span>
                       </div>
                     )}
                   </div>
