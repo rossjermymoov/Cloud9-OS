@@ -300,6 +300,8 @@ export default function WeightStationPage() {
     setStabilizing(false);
     setIsAutoSyncing(false);
     setCountdown(0);
+    candidateWeightRef.current = null;
+    isUpdatingRef.current = false;
     clearInterval(countdownIntervalRef.current);
     clearTimeout(debounceTimerRef.current);
     clearTimeout(autoSyncTimeoutRef.current);
@@ -308,7 +310,7 @@ export default function WeightStationPage() {
       if (barcodeInputRef.current) {
         barcodeInputRef.current.focus();
       }
-    }, 50);
+    }, 80);
   }
 
   // Listen to sidebar click navigation to reset station to initial blank state
@@ -358,51 +360,79 @@ export default function WeightStationPage() {
     }
   }
 
+  // Stable tracking refs
+  const candidateWeightRef = useRef(null);
+  const currentLiveWeightRef = useRef('');
+  const isUpdatingRef = useRef(false);
+
   function selectProduct(prod) {
     setSelectedProduct(prod);
     setSearchResults([]);
     setSearchError(null);
     setUpdateError(null);
     setBarcodeInput('');
-    setEnteredWeight('');
     setEnteredLength(prod.length ? String(prod.length) : '');
     setEnteredWidth(prod.width ? String(prod.width) : '');
     setEnteredHeight(prod.height ? String(prod.height) : '');
-    setStabilized(false);
-    setStabilizing(false);
-    setIsAutoSyncing(false);
 
-    // Auto-focus weight input after product selected
+    // If scale already has an item on it, initialize weight and kick off 2.0s countdown
+    if (currentLiveWeightRef.current && parseFloat(currentLiveWeightRef.current) > 0) {
+      handleWeightChange(currentLiveWeightRef.current);
+    } else {
+      setEnteredWeight('');
+      setStabilized(false);
+      setStabilizing(false);
+      setIsAutoSyncing(false);
+    }
+
+    // Auto-focus barcode input or weight input
     setTimeout(() => {
-      if (weightInputRef.current) {
-        weightInputRef.current.focus();
+      if (barcodeInputRef.current) {
+        barcodeInputRef.current.focus();
       }
-    }, 100);
+    }, 50);
   }
 
-  // Weight input handler with USB scale debounce stabilization
+  // Weight input handler with USB scale 2.0s stabilization
   function handleWeightChange(val) {
+    currentLiveWeightRef.current = val;
     setEnteredWeight(val);
-    setStabilized(false);
-    setIsAutoSyncing(false);
     setUpdateError(null);
 
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-    if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
-
     const num = parseFloat(val);
-    if (!isNaN(num) && num > 0) {
+    if (isNaN(num) || num <= 0) {
+      candidateWeightRef.current = null;
+      setStabilizing(false);
+      setStabilized(false);
+      setCountdown(0);
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
+      return;
+    }
+
+    // Tolerance for stability (±2 grams or ±0.002 kg)
+    const tolerance = unit === 'kg' ? 0.002 : 2;
+    const isClose = candidateWeightRef.current !== null && Math.abs(num - candidateWeightRef.current) <= tolerance;
+
+    if (!isClose) {
+      // Weight shifted: restart 2-second stabilization countdown
+      candidateWeightRef.current = num;
+      setStabilized(false);
       setStabilizing(true);
-      setCountdown(1.5);
+      setCountdown(2.0);
+
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+      if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
 
       const startTime = Date.now();
-      const totalDuration = 1500; // 1.5 seconds debounce
+      const totalDuration = 2000; // Exact 2.0 seconds debounce stabilization
 
       countdownIntervalRef.current = setInterval(() => {
         const elapsed = Date.now() - startTime;
         const remaining = Math.max(0, (totalDuration - elapsed) / 1000);
-        setCountdown(Math.round(remaining * 10) / 10);
+        setCountdown(remaining.toFixed(1));
         if (elapsed >= totalDuration) {
           clearInterval(countdownIntervalRef.current);
         }
@@ -411,17 +441,19 @@ export default function WeightStationPage() {
       debounceTimerRef.current = setTimeout(() => {
         setStabilizing(false);
         setStabilized(true);
+        setCountdown(0);
       }, totalDuration);
-    } else {
-      setStabilizing(false);
-      setStabilized(false);
     }
   }
 
   // Update Mutation
   const updateMutation = useMutation({
     mutationFn: updateProductWeight,
+    onMutate: () => {
+      isUpdatingRef.current = true;
+    },
     onSuccess: (res) => {
+      isUpdatingRef.current = false;
       setUpdateError(null);
       qc.invalidateQueries({ queryKey: ['weight-station-logs'] });
       setSuccessToast({
@@ -430,10 +462,11 @@ export default function WeightStationPage() {
         newWeight: `${res.weight_g} g (${res.weight_kg} kg)`,
         customer: selectedProduct?.customer_name
       });
-      setTimeout(() => setSuccessToast(null), 4500);
+      setTimeout(() => setSuccessToast(null), 3000);
       resetStation();
     },
     onError: (err) => {
+      isUpdatingRef.current = false;
       const msg = err?.response?.data?.error || err.message || 'Helm update rejected the request';
       setUpdateError(msg);
       setIsAutoSyncing(false);
@@ -442,7 +475,7 @@ export default function WeightStationPage() {
 
   function handleSubmitUpdate(e) {
     if (e) e.preventDefault();
-    if (!selectedProduct || updateMutation.isPending) return;
+    if (!selectedProduct || updateMutation.isPending || isUpdatingRef.current) return;
     const finalWeight = parseFloat(enteredWeight);
     if (isNaN(finalWeight) || finalWeight <= 0) {
       alert('Please enter a valid weight from the scale.');
@@ -471,20 +504,21 @@ export default function WeightStationPage() {
     });
   }
 
-  // ── ⚡ Hands-Free Auto-Push on Scale Stabilization ─────────────────────────
+  // ── ⚡ Hands-Free Auto-Push on Scale Stabilization (2s stabilized) ────────
   useEffect(() => {
     if (
       autoSyncEnabled &&
       stabilized &&
       selectedProduct &&
       !updateMutation.isPending &&
+      !isUpdatingRef.current &&
       enteredWeight &&
       parseFloat(enteredWeight) > 0
     ) {
       setIsAutoSyncing(true);
       autoSyncTimeoutRef.current = setTimeout(() => {
         handleSubmitUpdate();
-      }, 500); // 0.5s auto-push after scale reading is locked
+      }, 150);
       return () => clearTimeout(autoSyncTimeoutRef.current);
     }
   }, [stabilized, autoSyncEnabled, selectedProduct, enteredWeight]);
