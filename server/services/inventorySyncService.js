@@ -360,12 +360,25 @@ export async function findProductsByBarcode(rawBarcode) {
 
   // 1. Instant local database search — indexed direct barcode or Helm ID match (<1ms)
   const { rows } = await query(`
-    SELECT *
-    FROM helm_products
-    WHERE (barcode IS NOT NULL AND barcode = $1)
-       OR ($1 = ANY(barcodes))
-       OR (helm_id = $1 AND $1 ~ '^[0-9]+$')
-    ORDER BY name ASC
+    SELECT p.*,
+           l.id as last_log_id,
+           l.created_at as last_weighed_at,
+           l.user_name as last_weighed_by,
+           l.new_weight as last_logged_weight,
+           l.weight_unit as last_logged_unit
+    FROM helm_products p
+    LEFT JOIN LATERAL (
+      SELECT id, created_at, user_name, new_weight, weight_unit
+      FROM inventory_weight_logs
+      WHERE (product_id = p.helm_id OR sku = p.sku)
+        AND status != 'failed'
+      ORDER BY created_at DESC
+      LIMIT 1
+    ) l ON true
+    WHERE (p.barcode IS NOT NULL AND p.barcode = $1)
+       OR ($1 = ANY(p.barcodes))
+       OR (p.helm_id = $1 AND $1 ~ '^[0-9]+$')
+    ORDER BY p.name ASC
     LIMIT 20
   `, [queryTerm]);
 
@@ -388,7 +401,12 @@ export async function findProductsByBarcode(rawBarcode) {
       locations: r.locations || [],
       customer_id: r.customer_id,
       helm_customer_id: r.helm_customer_id,
-      customer_name: r.customer_name || 'Customer'
+      customer_name: r.customer_name || 'Customer',
+      already_weighed: Boolean(r.last_weighed_at),
+      last_weighed_at: r.last_weighed_at || null,
+      last_weighed_by: r.last_weighed_by || null,
+      last_logged_weight: r.last_logged_weight != null ? parseFloat(r.last_logged_weight) : null,
+      last_logged_unit: r.last_logged_unit || null
     }));
   }
 
@@ -413,6 +431,16 @@ export async function findProductsByBarcode(rawBarcode) {
         const cust = custMap.get(helmClientId);
         if (cust) {
           const phys = extractItemPhysicals(detail);
+          const { rows: logRows } = await query(`
+            SELECT id, created_at, user_name, new_weight, weight_unit
+            FROM inventory_weight_logs
+            WHERE (product_id = $1 OR sku = $2)
+              AND status != 'failed'
+            ORDER BY created_at DESC
+            LIMIT 1
+          `, [String(detail.id), String(detail.sku || '')]);
+          const lastLog = logRows[0] || null;
+
           return [{
             id: String(detail.id),
             sku: detail.sku || '',
@@ -431,7 +459,12 @@ export async function findProductsByBarcode(rawBarcode) {
             locations: detail.locations || [],
             customer_id: cust.id,
             helm_customer_id: helmClientId,
-            customer_name: cust.business_name
+            customer_name: cust.business_name,
+            already_weighed: Boolean(lastLog),
+            last_weighed_at: lastLog?.created_at || null,
+            last_weighed_by: lastLog?.user_name || null,
+            last_logged_weight: lastLog?.new_weight != null ? parseFloat(lastLog.new_weight) : null,
+            last_logged_unit: lastLog?.weight_unit || null
           }];
         }
       }

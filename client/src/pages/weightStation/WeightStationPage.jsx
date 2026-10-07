@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Scale, ScanBarcode, CheckCircle2, AlertCircle, History, Search,
+  Scale, ScanBarcode, CheckCircle2, AlertCircle, AlertTriangle, History, Search,
   RefreshCw, Box, Layers, X, ChevronRight, Database, Square,
   Calendar, Filter, User, Tag, Zap, Usb, Check, ArrowRight
 } from 'lucide-react';
@@ -24,6 +24,44 @@ export default function WeightStationPage() {
   const [searchResults, setSearchResults] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [searchError, setSearchError] = useState(null);
+
+  // Already Scanned detection state & audio feedback
+  const [alreadyScannedNotice, setAlreadyScannedNotice] = useState(null);
+  const alreadyScannedTimerRef = useRef(null);
+
+  function playWarningBeep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(340, ctx.currentTime);
+      osc.frequency.setValueAtTime(240, ctx.currentTime + 0.12);
+      gain.gain.setValueAtTime(0.18, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.35);
+    } catch {}
+  }
+
+  function playSuccessChime() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, ctx.currentTime); // C5
+      osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.1); // G5
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.3);
+    } catch {}
+  }
 
   // USB Scale & Hands-Free Automation Settings
   const [usbScaleDevice, setUsbScaleDevice] = useState(null);
@@ -290,6 +328,7 @@ export default function WeightStationPage() {
     setSearchResults([]);
     setSearchError(null);
     setUpdateError(null);
+    setAlreadyScannedNotice(null);
     setBarcodeInput('');
     setEnteredWeight('');
     setEnteredLength('');
@@ -305,6 +344,7 @@ export default function WeightStationPage() {
     clearInterval(countdownIntervalRef.current);
     clearTimeout(debounceTimerRef.current);
     clearTimeout(autoSyncTimeoutRef.current);
+    if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
 
     setTimeout(() => {
       if (barcodeInputRef.current) {
@@ -336,6 +376,8 @@ export default function WeightStationPage() {
     const query = barcodeInput.trim();
     if (!query) return;
 
+    if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
+    setAlreadyScannedNotice(null);
     setIsSearching(true);
     setSearchError(null);
     setUpdateError(null);
@@ -348,7 +390,35 @@ export default function WeightStationPage() {
       if (items.length === 0) {
         setSearchError(`No product found with barcode "${query}". If this is a newly added item, click "Reset & Re-sync" above.`);
       } else if (items.length === 1) {
-        selectProduct(items[0]);
+        const prod = items[0];
+        if (prod.already_weighed) {
+          playWarningBeep();
+          setAlreadyScannedNotice({
+            sku: prod.sku,
+            name: prod.name,
+            customer: prod.customer_name,
+            weight: prod.last_logged_weight != null ? prod.last_logged_weight : prod.weight_g,
+            unit: prod.last_logged_unit || 'g',
+            user: prod.last_weighed_by,
+            date: prod.last_weighed_at ? new Date(prod.last_weighed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'previously',
+            prod: prod
+          });
+          setBarcodeInput('');
+
+          // Let notice hang on screen for 2.2 seconds then auto-dismiss and refocus cursor
+          alreadyScannedTimerRef.current = setTimeout(() => {
+            setAlreadyScannedNotice(null);
+            if (barcodeInputRef.current) {
+              barcodeInputRef.current.focus();
+            }
+          }, 2200);
+
+          setTimeout(() => {
+            if (barcodeInputRef.current) barcodeInputRef.current.focus();
+          }, 50);
+        } else {
+          selectProduct(prod);
+        }
       } else {
         // Multiple products match (e.g. across multiple customers)
         setSearchResults(items);
@@ -366,6 +436,8 @@ export default function WeightStationPage() {
   const isUpdatingRef = useRef(false);
 
   function selectProduct(prod) {
+    if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
+    setAlreadyScannedNotice(null);
     setSelectedProduct(prod);
     setSearchResults([]);
     setSearchError(null);
@@ -454,6 +526,7 @@ export default function WeightStationPage() {
     },
     onSuccess: (res) => {
       isUpdatingRef.current = false;
+      playSuccessChime();
       setUpdateError(null);
       qc.invalidateQueries({ queryKey: ['weight-station-logs'] });
       setSuccessToast({
@@ -836,6 +909,67 @@ export default function WeightStationPage() {
             )}
           </div>
 
+          {/* ALREADY SCANNED WARNING BANNER */}
+          {alreadyScannedNotice && (
+            <div style={{
+              background: '#FFFBEB', border: '2px solid #F59E0B', color: '#92400E',
+              borderRadius: 16, padding: '20px 24px', display: 'flex', alignItems: 'center',
+              justifyContent: 'space-between', boxShadow: '0 8px 24px rgba(245, 158, 11, 0.18)',
+              gap: 16, flexWrap: 'wrap'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                <div style={{
+                  width: 52, height: 52, borderRadius: 14, background: '#FEF3C7',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: '#D97706', flexShrink: 0
+                }}>
+                  <AlertTriangle size={30} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: '#92400E', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span>This product has already been scanned!</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, background: '#FDE68A', color: '#78350F', padding: '3px 8px', borderRadius: 6 }}>
+                      Synced to WMS
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 14, color: '#B45309', marginTop: 4 }}>
+                    <strong>{alreadyScannedNotice.sku}</strong> ({alreadyScannedNotice.customer}) was recorded as <strong>{alreadyScannedNotice.weight} {alreadyScannedNotice.unit}</strong>
+                    {alreadyScannedNotice.user ? ` by ${alreadyScannedNotice.user}` : ''} on {alreadyScannedNotice.date}.
+                  </div>
+                  <div style={{ fontSize: 12.5, color: '#D97706', marginTop: 4, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Zap size={13} /> Flashing cursor ready for next barcode — keep scanning without putting your scanner down...
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const p = alreadyScannedNotice.prod;
+                    setAlreadyScannedNotice(null);
+                    selectProduct(p);
+                  }}
+                  style={{
+                    background: '#fff', border: '1px solid #FCD34D', color: '#92400E',
+                    borderRadius: 10, padding: '9px 16px', fontSize: 13, fontWeight: 700,
+                    cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
+                  }}
+                >
+                  Re-weigh anyway
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlreadyScannedNotice(null)}
+                  style={{ background: 'none', border: 'none', color: '#92400E', cursor: 'pointer', padding: 4 }}
+                  title="Dismiss"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* 2. MULTI-PRODUCT DISAMBIGUATION PICKER */}
           {searchResults.length > 1 && (
             <div style={{ background: '#fff', borderRadius: 16, padding: 24, boxShadow: SHADOW }}>
@@ -899,9 +1033,15 @@ export default function WeightStationPage() {
                       <div style={{ fontSize: 12.5, color: MUTED, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {prod.name}
                       </div>
-                      <div style={{ fontSize: 11.5, color: '#475569', marginTop: 4 }}>
-                        Current: <strong>{prod.weight_g} g</strong> ({prod.weight_kg} kg)
-                      </div>
+                      {prod.already_weighed ? (
+                        <div style={{ fontSize: 11.5, color: '#059669', marginTop: 4, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <CheckCircle2 size={13} color="#059669" /> Weighed: <strong>{prod.last_logged_weight} {prod.last_logged_unit || 'g'}</strong>
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 11.5, color: '#475569', marginTop: 4 }}>
+                          Current: <strong>{prod.weight_g} g</strong> ({prod.weight_kg} kg)
+                        </div>
+                      )}
                     </div>
 
                     <ChevronRight size={20} color="#94A3B8" />
