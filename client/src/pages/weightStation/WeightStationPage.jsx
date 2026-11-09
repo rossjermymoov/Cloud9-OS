@@ -103,6 +103,9 @@ export default function WeightStationPage() {
   const [stabilizing, setStabilizing] = useState(false);
   const [stabilized, setStabilized] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  const [scaleMustClear, setScaleMustClear] = useState(false);
+  const scaleMustClearRef = useRef(false);
+  const selectedProductRef = useRef(null);
   const debounceTimerRef = useRef(null);
   const countdownIntervalRef = useRef(null);
   const autoSyncTimeoutRef = useRef(null);
@@ -324,6 +327,7 @@ export default function WeightStationPage() {
 
   // Reset station state
   function resetStation() {
+    selectedProductRef.current = null;
     setSelectedProduct(null);
     setSearchResults([]);
     setSearchError(null);
@@ -346,12 +350,24 @@ export default function WeightStationPage() {
     clearTimeout(autoSyncTimeoutRef.current);
     if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
 
+    // If scale is empty or 0 right now, clear the lock flag immediately
+    const live = parseFloat(currentLiveWeightRef.current);
+    if (isNaN(live) || live <= (unit === 'kg' ? 0.002 : 2)) {
+      scaleMustClearRef.current = false;
+      setScaleMustClear(false);
+    }
+
     setTimeout(() => {
       if (barcodeInputRef.current) {
         barcodeInputRef.current.focus();
       }
     }, 80);
   }
+
+  // Keep selectedProductRef in sync with state
+  useEffect(() => {
+    selectedProductRef.current = selectedProduct;
+  }, [selectedProduct]);
 
   // Listen to sidebar click navigation to reset station to initial blank state
   useEffect(() => {
@@ -435,9 +451,52 @@ export default function WeightStationPage() {
   const currentLiveWeightRef = useRef('');
   const isUpdatingRef = useRef(false);
 
+  // Clear all stabilization timers & state
+  function clearStabilization() {
+    candidateWeightRef.current = null;
+    setStabilizing(false);
+    setStabilized(false);
+    setIsAutoSyncing(false);
+    setCountdown(0);
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
+  }
+
+  // Start exact 2.0s stabilization countdown
+  function startStabilization(targetNum) {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+    if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
+
+    candidateWeightRef.current = targetNum;
+    setStabilized(false);
+    setStabilizing(true);
+    setCountdown('2.0');
+
+    const startTime = Date.now();
+    const totalDuration = 2000; // 2.0 seconds stabilization countdown
+
+    countdownIntervalRef.current = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, (totalDuration - elapsed) / 1000);
+      setCountdown(remaining.toFixed(1));
+      if (elapsed >= totalDuration) {
+        clearInterval(countdownIntervalRef.current);
+      }
+    }, 100);
+
+    debounceTimerRef.current = setTimeout(() => {
+      setStabilizing(false);
+      setStabilized(true);
+      setCountdown(0);
+    }, totalDuration);
+  }
+
   function selectProduct(prod) {
     if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
     setAlreadyScannedNotice(null);
+    selectedProductRef.current = prod;
     setSelectedProduct(prod);
     setSearchResults([]);
     setSearchError(null);
@@ -447,17 +506,21 @@ export default function WeightStationPage() {
     setEnteredWidth(prod.width ? String(prod.width) : '');
     setEnteredHeight(prod.height ? String(prod.height) : '');
 
-    // If scale already has an item on it, initialize weight and kick off 2.0s countdown
-    if (currentLiveWeightRef.current && parseFloat(currentLiveWeightRef.current) > 0) {
-      handleWeightChange(currentLiveWeightRef.current);
-    } else {
-      setEnteredWeight('');
-      setStabilized(false);
-      setStabilizing(false);
-      setIsAutoSyncing(false);
+    // Reset weight and stabilization state completely when a barcode is entered.
+    // It MUST NOT immediately sync! We wait for the physical item to be weighed.
+    clearStabilization();
+    setEnteredWeight('');
+
+    // If an item is ALREADY physically on the scale before scanning (and the scale was cleared since last sync),
+    // initialize the weight and start the full 2.0s stabilization countdown so it NEVER submits immediately.
+    const liveWeight = parseFloat(currentLiveWeightRef.current);
+    const hasLiveWeight = !isNaN(liveWeight) && liveWeight > (unit === 'kg' ? 0.002 : 2);
+    if (!scaleMustClearRef.current && hasLiveWeight) {
+      setEnteredWeight(currentLiveWeightRef.current);
+      startStabilization(liveWeight);
     }
 
-    // Auto-focus barcode input or weight input
+    // Auto-focus barcode input
     setTimeout(() => {
       if (barcodeInputRef.current) {
         barcodeInputRef.current.focus();
@@ -468,53 +531,41 @@ export default function WeightStationPage() {
   // Weight input handler with USB scale 2.0s stabilization
   function handleWeightChange(val) {
     currentLiveWeightRef.current = val;
-    setEnteredWeight(val);
-    setUpdateError(null);
-
     const num = parseFloat(val);
-    if (isNaN(num) || num <= 0) {
-      candidateWeightRef.current = null;
-      setStabilizing(false);
-      setStabilized(false);
-      setCountdown(0);
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-      if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
+
+    // If scale drops to zero or empty pan (<= 2 grams or <= 0.002 kg)
+    const isZero = isNaN(num) || (unit === 'kg' ? num <= 0.002 : num <= 2);
+    if (isZero) {
+      scaleMustClearRef.current = false;
+      setScaleMustClear(false);
+      if (selectedProductRef.current) {
+        setEnteredWeight('');
+        clearStabilization();
+      }
       return;
     }
+
+    // If no product is currently selected, do not run stabilization timers
+    if (!selectedProductRef.current) {
+      return;
+    }
+
+    // If previous item hasn't been removed yet from scale, ignore weight until removed
+    if (scaleMustClearRef.current) {
+      return;
+    }
+
+    // Product is selected and a valid item is on the scale:
+    setEnteredWeight(val);
+    setUpdateError(null);
 
     // Tolerance for stability (±2 grams or ±0.002 kg)
     const tolerance = unit === 'kg' ? 0.002 : 2;
     const isClose = candidateWeightRef.current !== null && Math.abs(num - candidateWeightRef.current) <= tolerance;
 
     if (!isClose) {
-      // Weight shifted: restart 2-second stabilization countdown
-      candidateWeightRef.current = num;
-      setStabilized(false);
-      setStabilizing(true);
-      setCountdown(2.0);
-
-      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-      if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
-      if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
-
-      const startTime = Date.now();
-      const totalDuration = 2000; // Exact 2.0 seconds debounce stabilization
-
-      countdownIntervalRef.current = setInterval(() => {
-        const elapsed = Date.now() - startTime;
-        const remaining = Math.max(0, (totalDuration - elapsed) / 1000);
-        setCountdown(remaining.toFixed(1));
-        if (elapsed >= totalDuration) {
-          clearInterval(countdownIntervalRef.current);
-        }
-      }, 100);
-
-      debounceTimerRef.current = setTimeout(() => {
-        setStabilizing(false);
-        setStabilized(true);
-        setCountdown(0);
-      }, totalDuration);
+      // Weight shifted or item just placed: restart 2.0s stabilization countdown
+      startStabilization(num);
     }
   }
 
@@ -536,6 +587,8 @@ export default function WeightStationPage() {
         customer: selectedProduct?.customer_name
       });
       setTimeout(() => setSuccessToast(null), 3000);
+      scaleMustClearRef.current = true;
+      setScaleMustClear(true);
       resetStation();
     },
     onError: (err) => {
@@ -591,7 +644,7 @@ export default function WeightStationPage() {
       setIsAutoSyncing(true);
       autoSyncTimeoutRef.current = setTimeout(() => {
         handleSubmitUpdate();
-      }, 150);
+      }, 500); // 0.5s confirmation window so operator sees locked weight
       return () => clearTimeout(autoSyncTimeoutRef.current);
     }
   }, [stabilized, autoSyncEnabled, selectedProduct, enteredWeight]);
@@ -1171,6 +1224,16 @@ export default function WeightStationPage() {
                         {usbScaleConnected && <Usb size={14} color={GREEN} />}
                         Scale Weight ({unit === 'g' ? 'Grams' : 'Kilograms'})
                       </label>
+                      {scaleMustClear && (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: AMBER, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <AlertTriangle size={14} /> Remove previous item from scale
+                        </span>
+                      )}
+                      {!scaleMustClear && !enteredWeight && (
+                        <span style={{ fontSize: 12, fontWeight: 600, color: MUTED, display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <Scale size={14} /> Place item on scale...
+                        </span>
+                      )}
                       {stabilizing && (
                         <span style={{ fontSize: 12, fontWeight: 700, color: AMBER, display: 'flex', alignItems: 'center', gap: 5 }}>
                           <RefreshCw size={13} className="animate-spin" /> Stabilizing ({countdown}s)...
@@ -1178,7 +1241,7 @@ export default function WeightStationPage() {
                       )}
                       {stabilized && !isAutoSyncing && !updateMutation.isPending && (
                         <span style={{ fontSize: 12, fontWeight: 700, color: GREEN, display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <CheckCircle2 size={14} /> Scale reading locked & stable
+                          <CheckCircle2 size={14} /> Scale reading locked &amp; stable
                         </span>
                       )}
                       {isAutoSyncing && (
