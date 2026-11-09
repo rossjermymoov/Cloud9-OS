@@ -76,3 +76,18 @@ export function firstWorkingOnOrBefore(ymd, hs) {
 export function lastWorkingBefore(ymd, hs) {
   return firstWorkingOnOrBefore(addDaysStr(ymd, -1), hs);
 }
+
+/**
+ * Advance `ymd` by `n` working days (skipping weekends and bank holidays).
+ * If `n <= 0`, returns `ymd`.
+ */
+export function addWorkingDays(ymd, n, hs) {
+  let count = Math.max(0, parseInt(n, 10) || 0);
+  let cur = ymd;
+  while (count > 0) {
+    cur = firstWorkingAfter(cur, hs);
+    count--;
+  }
+  return cur;
+}
+

@@ -48,6 +48,7 @@ router.get('/', async (req, res, next) => {
                c.postcode, c.city, c.county, c.country, c.tier, c.account_status,
                c.health_score, c.health_score_summary, c.is_on_stop, c.outstanding_balance, c.credit_limit,
                c.billing_cycle, c.payment_terms_days, c.date_onboarded,
+               c.cutoff_time::text AS cutoff_time, COALESCE(c.sla_lead_days, 0) AS sla_lead_days,
                am.full_name AS account_manager_name
         FROM customers c
         LEFT JOIN staff am ON am.id = c.account_manager_id
@@ -140,7 +141,8 @@ router.patch('/:id', async (req, res, next) => {
     const allowed = ['business_name','address_line_1','address_line_2','city','county','postcode','country',
       'phone_number','primary_email','accounts_email','company_type','company_reg_number','vat_number',
       'tier','account_status','payment_terms_days','billing_cycle','credit_limit',
-      'salesperson_id','account_manager_id','onboarding_person_id'];
+      'salesperson_id','account_manager_id','onboarding_person_id',
+      'cutoff_time','sla_lead_days'];
     const updates = Object.entries(req.body).filter(([k]) => allowed.includes(k));
     if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
 

@@ -55,30 +55,87 @@ function CutoffEditor({ onClose }) {
   const [edits, setEdits] = useState({});
   const [saving, setSaving] = useState(null);
 
-  async function save(id) {
-    const val = edits[id];
-    if (!val) return;
-    setSaving(id);
-    try { await setCutoff(id, val); await qc.invalidateQueries({ queryKey: ['sla-cutoffs'] }); qc.invalidateQueries({ queryKey: ['sla'] }); }
-    finally { setSaving(null); }
+  function getDraft(c) {
+    return edits[c.id] || {
+      cutoff_time: (c.cutoff_time || '14:00:00').slice(0, 5),
+      sla_lead_days: c.sla_lead_days || 0,
+    };
   }
+
+  function updateDraft(c, field, value) {
+    const cur = getDraft(c);
+    setEdits(p => ({
+      ...p,
+      [c.id]: { ...cur, [field]: value }
+    }));
+  }
+
+  async function save(id) {
+    const payload = edits[id];
+    if (!payload) return;
+    setSaving(id);
+    try {
+      await setCutoff(id, payload);
+      await qc.invalidateQueries({ queryKey: ['sla-cutoffs'] });
+      qc.invalidateQueries({ queryKey: ['sla'] });
+      setEdits(p => {
+        const next = { ...p };
+        delete next[id];
+        return next;
+      });
+    } finally {
+      setSaving(null);
+    }
+  }
+
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 100 }}>
-      <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 0, right: 0, height: '100%', width: 440, maxWidth: '92vw', background: '#fff', boxShadow: '-8px 0 24px rgba(0,0,0,0.12)', padding: 24, overflowY: 'auto' }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: TITLE, marginBottom: 4 }}>Customer cutoff times</div>
-        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 16 }}>Orders received before the cutoff on a working day must ship that day. Default 14:00.</div>
-        {(rows || []).map(c => (
-          <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderTop: '1px solid rgba(0,0,0,0.05)' }}>
-            <div style={{ flex: 1, fontSize: 13, color: TITLE }}>{c.business_name}</div>
-            <input type="time" defaultValue={(c.cutoff_time || '14:00:00').slice(0, 5)}
-              onChange={e => setEdits(p => ({ ...p, [c.id]: e.target.value }))}
-              style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: '5px 8px', fontSize: 13, fontFamily: 'inherit' }} />
-            <button onClick={() => save(c.id)} disabled={!edits[c.id] || saving === c.id}
-              style={{ border: 'none', background: edits[c.id] ? ACCENT : '#E2E8F0', color: edits[c.id] ? '#fff' : '#94A3B8', borderRadius: 8, padding: '6px 9px', cursor: edits[c.id] ? 'pointer' : 'default', display: 'flex', alignItems: 'center' }}>
-              <Save size={14} />
-            </button>
-          </div>
-        ))}
+      <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', top: 0, right: 0, height: '100%', width: 560, maxWidth: '94vw', background: '#fff', boxShadow: '-8px 0 24px rgba(0,0,0,0.12)', padding: 24, overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: TITLE }}>Customer SLA &amp; Cutoffs</div>
+          <button onClick={onClose} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 18, color: MUTED }}>×</button>
+        </div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 16, lineHeight: 1.5 }}>
+          Configure dispatch cutoff times and SLA adaptations. For clients with bespoke work (such as engraving or personalization), add +1 or +2 working days so their orders are not flagged as breaches on the exceptions report.
+        </div>
+        {(rows || []).map(c => {
+          const draft = getDraft(c);
+          const isDirty = Boolean(edits[c.id]);
+          return (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', borderTop: '1px solid rgba(0,0,0,0.05)' }}>
+              <div style={{ flex: 1, minWidth: 140 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: TITLE }}>{c.business_name}</div>
+                {c.sla_lead_days > 0 && !isDirty && (
+                  <div style={{ fontSize: 11, color: '#2563EB', fontWeight: 600 }}>+{c.sla_lead_days}d lead time</div>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span title="Order cutoff time" style={{ fontSize: 11, color: MUTED }}>Cutoff:</span>
+                <input type="time" value={draft.cutoff_time}
+                  onChange={e => updateDraft(c, 'cutoff_time', e.target.value)}
+                  style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: '5px 7px', fontSize: 12.5, fontFamily: 'inherit' }} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span title="Lead time offset" style={{ fontSize: 11, color: MUTED }}>Lead:</span>
+                <select value={draft.sla_lead_days}
+                  onChange={e => updateDraft(c, 'sla_lead_days', parseInt(e.target.value, 10))}
+                  style={{ border: '1px solid #E2E8F0', borderRadius: 8, padding: '5px 7px', fontSize: 12.5, fontFamily: 'inherit', background: '#fff' }}>
+                  <option value={0}>+0d (same day)</option>
+                  <option value={1}>+1d working day</option>
+                  <option value={2}>+2d working days</option>
+                  <option value={3}>+3d working days</option>
+                  <option value={4}>+4d working days</option>
+                  <option value={5}>+5d working days</option>
+                </select>
+              </div>
+              <button onClick={() => save(c.id)} disabled={!isDirty || saving === c.id}
+                title="Save changes"
+                style={{ border: 'none', background: isDirty ? ACCENT : '#E2E8F0', color: isDirty ? '#fff' : '#94A3B8', borderRadius: 8, padding: '7px 10px', cursor: isDirty ? 'pointer' : 'default', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                <Save size={14} />
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -117,7 +174,7 @@ export default function OnTimePage() {
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Seg value={period} onChange={setPeriod} options={PERIODS} />
-          <button onClick={() => setShowCutoffs(true)} style={iconBtn}><Settings2 size={14} /> Cutoffs</button>
+          <button onClick={() => setShowCutoffs(true)} style={iconBtn}><Settings2 size={14} /> SLA &amp; Cutoffs</button>
           <button onClick={runSync} disabled={syncing} style={{ ...iconBtn, opacity: syncing ? 0.6 : 1 }}>
             <RefreshCw size={14} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} /> {syncing ? 'Syncing…' : 'Sync'}
           </button>
@@ -149,7 +206,15 @@ export default function OnTimePage() {
                   const st = STATUS[r.sla_status] || { l: r.sla_status, c: MUTED };
                   return (
                     <tr key={r.id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
-                      <td style={{ padding: '9px 6px', color: TITLE, fontWeight: 600 }}>{r.business_name}</td>
+                      <td style={{ padding: '9px 6px', color: TITLE, fontWeight: 600 }}>
+                        {r.business_name}
+                        {r.sla_lead_days > 0 ? (
+                          <span title={`Per-client SLA adaptation: +${r.sla_lead_days} working day${r.sla_lead_days > 1 ? 's' : ''} lead time`}
+                            style={{ marginLeft: 6, fontSize: 10.5, padding: '2px 6px', borderRadius: 5, background: '#EFF6FF', color: '#1D4ED8', border: '1px solid #BFDBFE', fontWeight: 600 }}>
+                            +{r.sla_lead_days}d SLA
+                          </span>
+                        ) : null}
+                      </td>
                       <td style={{ padding: '9px 6px', color: MUTED }}>{r.order_ref}</td>
                       <td style={{ padding: '9px 6px', color: MUTED, whiteSpace: 'nowrap' }}>{fmtDT(r.received_at)}</td>
                       <td style={{ padding: '9px 6px', color: '#334155', whiteSpace: 'nowrap' }}>{fmtD(r.due)}</td>
@@ -181,7 +246,15 @@ export default function OnTimePage() {
             <tbody>
               {(data.data?.customers || []).map(c => (
                 <tr key={c.customer_id} style={{ borderTop: '1px solid rgba(0,0,0,0.05)' }}>
-                  <td style={{ padding: '8px 6px', color: TITLE, fontWeight: 600 }}>{c.business_name}</td>
+                  <td style={{ padding: '8px 6px', color: TITLE, fontWeight: 600 }}>
+                    {c.business_name}
+                    {c.sla_lead_days > 0 ? (
+                      <span title={`+${c.sla_lead_days} working day${c.sla_lead_days > 1 ? 's' : ''} SLA lead time`}
+                        style={{ marginLeft: 5, fontSize: 10, color: '#2563EB', fontWeight: 600 }}>
+                        +{c.sla_lead_days}d
+                      </span>
+                    ) : null}
+                  </td>
                   <td style={{ padding: '8px 6px', textAlign: 'right', color: c.on_time_pct == null ? '#CBD5E1' : (c.on_time_pct >= 98 ? GREEN : c.on_time_pct >= 90 ? AMBER : RED), fontWeight: 700 }}>{c.on_time_pct == null ? '—' : `${c.on_time_pct}%`}</td>
                   <td style={{ padding: '8px 6px', textAlign: 'right', color: c.breaches ? RED : '#94A3B8', fontWeight: 600 }}>{c.breaches}</td>
                 </tr>

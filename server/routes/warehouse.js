@@ -108,7 +108,8 @@ router.get('/board', async (req, res, next) => {
       // All recent orders (dispatched or not) so we can judge "due today" with
       // the working-day rollover and split done vs outstanding. Parked statuses
       // (Draft/Service/Replenishment/Supervisor/Beddoes Review) are excluded.
-      query(`SELECT o.received_at, o.dispatched_at, o.status_id, o.status_label, c.business_name, c.cutoff_time::text AS cutoff
+      query(`SELECT o.received_at, o.dispatched_at, o.status_id, o.status_label, c.business_name,
+                    c.cutoff_time::text AS cutoff, COALESCE(c.sla_lead_days, 0) AS sla_lead_days
               FROM orders o JOIN customers c ON c.id = o.customer_id
               WHERE o.received_at >= now() - interval '8 days'
                 AND (o.status_label IS NULL OR o.status_label NOT ILIKE '%cancel%')
@@ -126,7 +127,7 @@ router.get('/board', async (req, res, next) => {
     const byCustomer = {};    // distinct impacted customers
     let dispatched = 0;
     for (const o of orders.rows) {
-      if (dueDateFor(o.received_at, o.cutoff, hs) !== today) continue;   // only today's commitments
+      if (dueDateFor(o.received_at, o.cutoff, hs, o.sla_lead_days) !== today) continue;   // only today's commitments
       if (o.dispatched_at) { dispatched++; continue; }                   // already out → done
       const left = CLOSE_MIN - nowM;                                     // minutes to the 5pm dispatch deadline
       const st = left <= 0 ? 'breached' : left < 60 ? 'red' : left < 120 ? 'amber' : 'green';

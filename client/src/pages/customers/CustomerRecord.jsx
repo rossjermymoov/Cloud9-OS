@@ -74,11 +74,17 @@ function OverviewTab({ c, onSaved }) {
       address_line_1: c.address_line_1 || '', address_line_2: c.address_line_2 || '', city: c.city || '', county: c.county || '',
       postcode: c.postcode || '', country: c.country || 'United Kingdom',
       credit_limit: c.credit_limit ?? 0, payment_terms_days: c.payment_terms_days ?? 30, billing_cycle: c.billing_cycle || 'monthly', tier: c.tier || 'bronze',
+      cutoff_time: (c.cutoff_time || '14:00:00').slice(0, 5), sla_lead_days: c.sla_lead_days ?? 0,
     });
     setEdit(true);
   }
   const save = useMutation({
-    mutationFn: () => updateCustomer(c.id, { ...form, credit_limit: parseFloat(form.credit_limit) || 0, payment_terms_days: parseInt(form.payment_terms_days) || 30 }),
+    mutationFn: () => updateCustomer(c.id, {
+      ...form,
+      credit_limit: parseFloat(form.credit_limit) || 0,
+      payment_terms_days: parseInt(form.payment_terms_days) || 30,
+      sla_lead_days: parseInt(form.sla_lead_days, 10) || 0,
+    }),
     onSuccess: () => { onSaved(); setEdit(false); },
   });
 
@@ -140,11 +146,15 @@ function OverviewTab({ c, onSaved }) {
               <EditRow label="Credit limit (£)" k="credit_limit" form={form} set={set} />
               <EditRow label="Payment terms (days)" k="payment_terms_days" form={form} set={set} />
               <EditRow label="Billing cycle" k="billing_cycle" form={form} set={set} />
+              <EditRow label="Cutoff time" k="cutoff_time" form={form} set={set} placeholder="14:00" />
+              <EditRow label="SLA lead days (+N)" k="sla_lead_days" form={form} set={set} placeholder="0 (e.g. 1 or 2 for engraving)" />
             </> : <>
               <Field label="Tier" value={c.tier} />
               <Field label="Credit limit" value={gbp(c.credit_limit)} />
               <Field label="Payment terms" value={`${c.payment_terms_days} days`} />
               <Field label="Billing cycle" value={c.billing_cycle} />
+              <Field label="Cutoff time" value={(c.cutoff_time || '14:00:00').slice(0, 5)} />
+              <Field label="SLA dispatch offset" value={c.sla_lead_days ? `+${c.sla_lead_days} working day${c.sla_lead_days > 1 ? 's' : ''}` : 'Standard (0 days)'} />
               <Field label="Status" value={(STATUS[c.account_status] || {}).l} />
             </>}
           </Card>

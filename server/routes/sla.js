@@ -66,7 +66,11 @@ router.get('/breaches', async (req, res, next) => {
     // Per-customer rollup (always over breaches) for the breakdown panel.
     const byCustomer = {};
     for (const x of r.rows) {
-      const b = (byCustomer[x.customer_id] ||= { customer_id: x.customer_id, business_name: x.business_name, on_time: 0, breaches: 0, pending: 0 });
+      const b = (byCustomer[x.customer_id] ||= {
+        customer_id: x.customer_id, business_name: x.business_name,
+        sla_lead_days: x.sla_lead_days || 0,
+        on_time: 0, breaches: 0, pending: 0,
+      });
       if (x.sla_status === 'on_time') b.on_time++;
       else if (x.sla_status === 'pending') b.pending++;
       else if (x.sla_status.startsWith('breach')) b.breaches++;
@@ -82,6 +86,7 @@ router.get('/breaches', async (req, res, next) => {
         id: x.id, order_ref: x.channel_order_id || x.helm_order_id,
         business_name: x.business_name, received_at: x.received_at, dispatched_at: x.dispatched_at,
         due: x.due, sla_status: x.sla_status, parcels: x.parcel_count, items: x.item_count,
+        sla_lead_days: x.sla_lead_days || 0,
       })),
       customers,
     });
@@ -91,7 +96,8 @@ router.get('/breaches', async (req, res, next) => {
 router.get('/cutoffs', async (_req, res, next) => {
   try {
     const { rows } = await query(`
-      SELECT id, business_name, helm_accounts_id, cutoff_time::text AS cutoff_time, account_status
+      SELECT id, business_name, helm_accounts_id, cutoff_time::text AS cutoff_time,
+             COALESCE(sla_lead_days, 0) AS sla_lead_days, account_status
       FROM customers WHERE account_status = 'active' ORDER BY business_name ASC
     `);
     res.json(rows);
@@ -100,11 +106,35 @@ router.get('/cutoffs', async (_req, res, next) => {
 
 router.patch('/cutoffs/:id', async (req, res, next) => {
   try {
-    const t = String(req.body?.cutoff_time || '').trim();
-    if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(t)) return res.status(400).json({ error: 'cutoff_time must be HH:MM' });
+    const updates = [];
+    const vals = [req.params.id];
+
+    if (req.body?.cutoff_time !== undefined) {
+      const t = String(req.body.cutoff_time || '').trim();
+      if (!/^\d{1,2}:\d{2}(:\d{2})?$/.test(t)) return res.status(400).json({ error: 'cutoff_time must be HH:MM' });
+      vals.push(t.length === 5 ? `${t}:00` : t);
+      updates.push(`cutoff_time = $${vals.length}`);
+    }
+
+    if (req.body?.sla_lead_days !== undefined) {
+      const days = parseInt(req.body.sla_lead_days, 10);
+      if (isNaN(days) || days < 0 || days > 30) {
+        return res.status(400).json({ error: 'sla_lead_days must be an integer between 0 and 30' });
+      }
+      vals.push(days);
+      updates.push(`sla_lead_days = $${vals.length}`);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No valid fields to update (cutoff_time or sla_lead_days required)' });
+    }
+
+    updates.push('updated_at = NOW()');
+
     const { rows } = await query(
-      `UPDATE customers SET cutoff_time = $1, updated_at = NOW() WHERE id = $2 RETURNING id, cutoff_time::text AS cutoff_time`,
-      [t.length === 5 ? `${t}:00` : t, req.params.id]
+      `UPDATE customers SET ${updates.join(', ')} WHERE id = $1
+       RETURNING id, cutoff_time::text AS cutoff_time, COALESCE(sla_lead_days, 0) AS sla_lead_days`,
+      vals
     );
     if (!rows.length) return res.status(404).json({ error: 'customer not found' });
     res.json({ ok: true, ...rows[0] });

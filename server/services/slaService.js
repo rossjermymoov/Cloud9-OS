@@ -14,7 +14,7 @@
 import { query } from '../db/index.js';
 import { helmConfigured, fetchOrdersForClient, fetchOrdersUpdatedRange, fetchOrdersByStatus } from './helmClient.js';
 import { pickParcelCount } from './volumeService.js';
-import { holidaySet, isWorkingDay, firstWorkingAfter } from './bankHolidayService.js';
+import { holidaySet, isWorkingDay, firstWorkingAfter, addWorkingDays } from './bankHolidayService.js';
 
 function cleanDate(d) { if (!d) return null; const s = String(d); return s.startsWith('0000') ? null : s; }
 
@@ -60,18 +60,22 @@ function cutoffMinutes(cutoff) {
   return (parseInt(h, 10) || 0) * 60 + (parseInt(m, 10) || 0);
 }
 
-/** Due working day (YYYY-MM-DD) for an order received at `receivedAt`. */
-export function dueDateFor(receivedAt, cutoff, hs) {
+/** Due working day (YYYY-MM-DD) for an order received at `receivedAt`. Supports per-client leadDays offset. */
+export function dueDateFor(receivedAt, cutoff, hs, leadDays = 0) {
   const lp = wallClock(receivedAt);
   if (!lp) return null;
-  if (isWorkingDay(lp.ymd, hs) && lp.minutes <= cutoffMinutes(cutoff)) return lp.ymd;
-  return firstWorkingAfter(lp.ymd, hs);
+  const base = (isWorkingDay(lp.ymd, hs) && lp.minutes <= cutoffMinutes(cutoff))
+    ? lp.ymd
+    : firstWorkingAfter(lp.ymd, hs);
+  const extra = Math.max(0, parseInt(leadDays, 10) || 0);
+  return extra > 0 ? addWorkingDays(base, extra, hs) : base;
 }
 
-/** Classify one order row ({ received_at, dispatched_at, cutoff_time }). */
+/** Classify one order row ({ received_at, dispatched_at, cutoff_time, sla_lead_days }). */
 export function classifyOrder(order, hs, todayYmd) {
   if (!order.received_at) return { sla_status: 'unknown', due: null };
-  const due = dueDateFor(order.received_at, order.cutoff_time, hs);
+  const leadDays = order.sla_lead_days ?? order.lead_days ?? 0;
+  const due = dueDateFor(order.received_at, order.cutoff_time, hs, leadDays);
   if (order.dispatched_at) {
     const dl = wallClock(order.dispatched_at);
     const dispYmd = dl ? dl.ymd : null;
@@ -316,7 +320,8 @@ export async function evaluateOrders({ fromYmd, toYmd, customerId = null }) {
 
   const { rows } = await query(`
     SELECT o.id, o.helm_order_id, o.channel_order_id, o.customer_id, o.received_at, o.dispatched_at,
-           o.parcel_count, o.item_count, o.status_label, o.status_id, c.business_name, c.cutoff_time
+           o.parcel_count, o.item_count, o.status_label, o.status_id, c.business_name, c.cutoff_time,
+           COALESCE(c.sla_lead_days, 0) AS sla_lead_days
     FROM orders o JOIN customers c ON c.id = o.customer_id
     WHERE ${where}
     ORDER BY o.received_at DESC

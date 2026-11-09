@@ -1,0 +1,20 @@
+ID,Type Name,Category,Assigned Locations,Location Count
+7,Assembly,1 Location,1,Production / Assembly
+109,Backup,1 Location,1,System / Backup
+108,Despatch Shelves,2 Locations,2,Despatch / Staging
+107,Despatch Terminal,2 Locations,2,Despatch / Packing
+14,Double Sku Shelf,76 Locations,76,Shelving / Pick Face
+102,Goods In Area,4 Locations,4,Inbound / Goods In
+103,Large Cubby Hole,36 Locations,36,Cubby / Pick Face
+105,Large Shelf,67 Locations,67,Shelving / Pick Face
+104,Large Tote,—,0,Tote / Mobile
+3,Medium Shelf,3539 Locations,3539,Shelving / Pick Face
+15,Packaging Storage,26 Locations,26,Consumables / Packaging
+5,Pallet,1333 Locations,1333,Pallet Racking / Bulk
+101,Pickable Pallet,18 Locations,18,Pallet / Pick Face
+99,Pre Sort,—,0,Staging / Sorting
+10,Small Cubby Hole,10330 Locations,10330,Cubby / Pick Face
+106,Small Tote,—,0,Tote / Mobile
+1,Tote,586 Locations,586,Tote / Mobile
+4,Warehouse,1 Location,1,Virtual / Facility
+100,Zone,2 Locations,2,Virtual / Zone
