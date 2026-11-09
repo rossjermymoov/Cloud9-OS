@@ -407,6 +407,17 @@ export default function WeightStationPage() {
         setSearchError(`No product found with barcode "${query}". If this is a newly added item, click "Reset & Re-sync" above.`);
       } else if (items.length === 1) {
         const prod = items[0];
+        // If this product was already flagged as already-weighed and the user scans it again,
+        // treat the second scan as confirmation to re-weigh!
+        if (prod.already_weighed && alreadyScannedNotice?.sku === prod.sku) {
+          if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
+          setAlreadyScannedNotice(null);
+          scaleMustClearRef.current = false;
+          setScaleMustClear(false);
+          selectProduct(prod);
+          return;
+        }
+
         if (prod.already_weighed) {
           playWarningBeep();
           setAlreadyScannedNotice({
@@ -420,14 +431,6 @@ export default function WeightStationPage() {
             prod: prod
           });
           setBarcodeInput('');
-
-          // Let notice hang on screen for 2.2 seconds then auto-dismiss and refocus cursor
-          alreadyScannedTimerRef.current = setTimeout(() => {
-            setAlreadyScannedNotice(null);
-            if (barcodeInputRef.current) {
-              barcodeInputRef.current.focus();
-            }
-          }, 2200);
 
           setTimeout(() => {
             if (barcodeInputRef.current) barcodeInputRef.current.focus();
@@ -496,6 +499,8 @@ export default function WeightStationPage() {
   function selectProduct(prod) {
     if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
     setAlreadyScannedNotice(null);
+    scaleMustClearRef.current = false;
+    setScaleMustClear(false);
     selectedProductRef.current = prod;
     setSelectedProduct(prod);
     setSearchResults([]);
@@ -511,11 +516,11 @@ export default function WeightStationPage() {
     clearStabilization();
     setEnteredWeight('');
 
-    // If an item is ALREADY physically on the scale before scanning (and the scale was cleared since last sync),
+    // If an item is ALREADY physically on the scale before scanning,
     // initialize the weight and start the full 2.0s stabilization countdown so it NEVER submits immediately.
     const liveWeight = parseFloat(currentLiveWeightRef.current);
     const hasLiveWeight = !isNaN(liveWeight) && liveWeight > (unit === 'kg' ? 0.002 : 2);
-    if (!scaleMustClearRef.current && hasLiveWeight) {
+    if (hasLiveWeight) {
       setEnteredWeight(currentLiveWeightRef.current);
       startStabilization(liveWeight);
     }
@@ -990,7 +995,7 @@ export default function WeightStationPage() {
                     {alreadyScannedNotice.user ? ` by ${alreadyScannedNotice.user}` : ''} on {alreadyScannedNotice.date}.
                   </div>
                   <div style={{ fontSize: 12.5, color: '#D97706', marginTop: 4, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Zap size={13} /> Flashing cursor ready for next barcode — keep scanning without putting your scanner down...
+                    <Zap size={13} /> Click &ldquo;Re-weigh Product&rdquo; (or scan barcode again) to re-weigh. Or scan next item...
                   </div>
                 </div>
               </div>
@@ -999,17 +1004,17 @@ export default function WeightStationPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    const p = alreadyScannedNotice.prod;
+                    const p = alreadyScannedNotice?.prod;
                     setAlreadyScannedNotice(null);
-                    selectProduct(p);
+                    if (p) selectProduct(p);
                   }}
                   style={{
                     background: '#fff', border: '1px solid #FCD34D', color: '#92400E',
-                    borderRadius: 10, padding: '9px 16px', fontSize: 13, fontWeight: 700,
+                    borderRadius: 10, padding: '10px 18px', fontSize: 13.5, fontWeight: 700,
                     cursor: 'pointer', boxShadow: '0 1px 3px rgba(0,0,0,0.06)'
                   }}
                 >
-                  Re-weigh anyway
+                  Re-weigh Product
                 </button>
                 <button
                   type="button"
