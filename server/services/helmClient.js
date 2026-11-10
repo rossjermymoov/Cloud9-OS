@@ -517,157 +517,71 @@ export async function searchInventory({ query: searchTerm, barcode, sku, helmCli
 
 /**
  * Update inventory item weight and dimensions in Helm.
- * Updates root properties and package_configurations, trying PUT, PATCH, and POST.
+ * Dispatches main update and package configuration queries concurrently for speed.
  */
 export async function updateInventoryItem(id, data) {
   if (!id) throw new Error('Inventory ID is required to update item in Helm');
   const cleanId = String(id).trim();
 
-  // 1. Fetch current item detail from Helm to ensure we have all required fields and package IDs
-  let current = {};
-  try {
-    const curRes = await fetchInventoryDetail(cleanId);
-    current = curRes?.data || curRes || {};
-  } catch (fetchErr) {
-    console.warn(`[helm-update] Could not fetch current detail for item ${cleanId}:`, fetchErr.message);
-  }
-
   const weightKg = parseFloat(data.weight ?? data.product_weight ?? 0) || 0;
-  const l = data.length != null ? parseFloat(data.length) : (current.length ?? current.product_length ?? 0);
-  const w = data.width != null ? parseFloat(data.width) : (current.width ?? current.product_width ?? 0);
-  const h = data.height != null ? parseFloat(data.height) : (current.height ?? current.product_height ?? 0);
+  const l = data.length != null ? parseFloat(data.length) : null;
+  const w = data.width != null ? parseFloat(data.width) : null;
+  const h = data.height != null ? parseFloat(data.height) : null;
 
-  // Prepare updated package configurations
-  const existingPkgs = Array.isArray(current.package_configurations) && current.package_configurations.length
-    ? current.package_configurations
-    : (current.package_configuration ? [current.package_configuration] : []);
-
-  const updatedPkgs = existingPkgs.length
-    ? existingPkgs.map(pkg => ({
-        ...pkg,
-        weight: weightKg,
-        product_weight: weightKg,
-        weight_unit: 'kg',
-        length: l,
-        product_length: l,
-        width: w,
-        product_width: w,
-        height: h,
-        product_height: h
-      }))
-    : [{
-        weight: weightKg,
-        product_weight: weightKg,
-        weight_unit: 'kg',
-        length: l,
-        width: w,
-        height: h,
-        quantity: 1
-      }];
-
-  // Clean minimal payloads targeting weight and dimensions
-  const cleanFields = {
-    weight: weightKg,
-    product_weight: weightKg,
-    weight_unit: 'kg',
-    length: l,
-    product_length: l,
-    width: w,
-    product_width: w,
-    height: h,
-    product_height: h,
-  };
-
-  // Required inventory metadata for Helm validation
-  const inventoryMeta = {};
-  if (current.name || current.title || data.name || data.product_name) {
-    inventoryMeta.name = current.name || current.title || data.name || data.product_name;
-  }
-  if (current.sku || data.sku) {
-    inventoryMeta.sku = current.sku || data.sku;
-  }
-  const clientId = current.fulfilment_client_id || current.client_id || (typeof current.fulfilment_client === 'object' ? current.fulfilment_client?.id : current.fulfilment_client);
-  if (clientId) {
-    inventoryMeta.fulfilment_client_id = parseInt(clientId) || clientId;
-  }
-
-  // Clean package configurations without extraneous read-only properties
-  const cleanPackageConfigs = updatedPkgs.map(p => {
-    const obj = {
-      weight: weightKg,
-      product_weight: weightKg,
-      weight_unit: 'kg',
-      length: l,
-      product_length: l,
-      width: w,
-      product_width: w,
-      height: h,
-      product_height: h,
-    };
-    if (p.id) obj.id = p.id;
-    if (p.quantity != null) obj.quantity = p.quantity;
-    if (p.barcode) obj.barcode = p.barcode;
-    return obj;
-  });
-
-  let updateResult = null;
-  let lastErr = null;
-
-  // 1. Official Helm Endpoint: POST /inventory/{id}/update
+  // 1. Prepare main update payload
   const updatePayload = {
     product_weight: weightKg,
     weight: weightKg,
     weight_unit: 'kg'
   };
-  if (data.length != null || l > 0) { updatePayload.product_length = l; updatePayload.length = l; }
-  if (data.width != null || w > 0)  { updatePayload.product_width = w;  updatePayload.width = w; }
-  if (data.height != null || h > 0) { updatePayload.product_height = h; updatePayload.height = h; }
+  if (l != null && l > 0) { updatePayload.product_length = l; updatePayload.length = l; }
+  if (w != null && w > 0) { updatePayload.product_width = w;  updatePayload.width = w; }
+  if (h != null && h > 0) { updatePayload.product_height = h; updatePayload.height = h; }
 
-  try {
-    console.log(`[helm-update] Sending POST /inventory/${cleanId}/update:`, updatePayload);
-    updateResult = await authedMutate('POST', `/inventory/${cleanId}/update`, updatePayload);
-  } catch (err) {
-    console.warn(`[helm-update] POST /inventory/${cleanId}/update error:`, err.message);
-    lastErr = err;
-  }
-
-  // 2. Official Helm Package Configuration Endpoint: POST /inventory/{id}/update_package_configuration
-  for (const pkg of updatedPkgs) {
-    if (pkg && pkg.id) {
-      try {
-        const pkgPayload = {
-          package_configuration_id: parseInt(pkg.id) || pkg.id,
-          weight: weightKg,
-          product_weight: weightKg,
-          length: l,
-          width: w,
-          height: h
-        };
-        console.log(`[helm-update] Sending POST /inventory/${cleanId}/update_package_configuration:`, pkgPayload);
-        const pkgRes = await authedMutate('POST', `/inventory/${cleanId}/update_package_configuration`, pkgPayload);
-        if (pkgRes) {
-          updateResult = updateResult || pkgRes;
-          lastErr = null;
-        }
-      } catch (pkgErr) {
-        console.warn(`[helm-update] Package config update error:`, pkgErr.message);
-        if (!updateResult) lastErr = pkgErr;
-      }
-    }
-  }
-
-  // 3. Re-fetch detail to verify persistency
-  try {
-    const verifyRes = await fetchInventoryDetail(cleanId);
-    const verified = verifyRes?.data || verifyRes || {};
-    console.log(`[helm-update] Verified item ${cleanId} state:`, {
-      weight: verified.weight ?? verified.product_weight,
-      package_configurations: verified.package_configurations
+  // 2. Dispatch main update and package configuration fetch concurrently
+  const updatePromise = authedMutate('POST', `/inventory/${cleanId}/update`, updatePayload)
+    .catch(err => {
+      console.warn(`[helm-update] POST /inventory/${cleanId}/update error:`, err.message);
+      return { err };
     });
-  } catch {}
 
-  if (!updateResult && lastErr) {
-    throw lastErr;
+  const detailPromise = fetchInventoryDetail(cleanId)
+    .catch(err => {
+      console.warn(`[helm-update] Could not fetch detail for item ${cleanId}:`, err.message);
+      return null;
+    });
+
+  const [updateResult, curRes] = await Promise.all([updatePromise, detailPromise]);
+
+  // 3. Update existing package configurations in parallel
+  const current = curRes?.data || curRes || {};
+  const existingPkgs = Array.isArray(current.package_configurations) && current.package_configurations.length
+    ? current.package_configurations
+    : (current.package_configuration ? [current.package_configuration] : []);
+
+  const pkgWithIds = existingPkgs.filter(p => p && p.id);
+  if (pkgWithIds.length > 0) {
+    const pkgUpdates = pkgWithIds.map(pkg => {
+      const pkgPayload = {
+        package_configuration_id: parseInt(pkg.id) || pkg.id,
+        weight: weightKg,
+        product_weight: weightKg,
+        length: l != null && l > 0 ? l : (pkg.length ?? 0),
+        width: w != null && w > 0 ? w : (pkg.width ?? 0),
+        height: h != null && h > 0 ? h : (pkg.height ?? 0)
+      };
+      return authedMutate('POST', `/inventory/${cleanId}/update_package_configuration`, pkgPayload)
+        .catch(pkgErr => {
+          console.warn(`[helm-update] Package config update error on pkg ${pkg.id}:`, pkgErr.message);
+          return null;
+        });
+    });
+
+    await Promise.all(pkgUpdates);
+  }
+
+  if (updateResult && updateResult.err) {
+    throw updateResult.err;
   }
 
   return updateResult || { ok: true };
