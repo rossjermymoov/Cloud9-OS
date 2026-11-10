@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Scale, ScanBarcode, CheckCircle2, AlertCircle, AlertTriangle, History, Search,
   RefreshCw, Box, Layers, X, ChevronRight, Database, Square,
-  Calendar, Filter, User, Tag, Zap, Usb, Check, ArrowRight
+  Calendar, Filter, User, Tag, Zap, Usb, Check, ArrowRight, Ruler
 } from 'lucide-react';
 import {
   searchProducts, updateProductWeight, getWeightLogs,
@@ -114,9 +114,16 @@ export default function WeightStationPage() {
   const [successToast, setSuccessToast] = useState(null);
   const [updateError, setUpdateError] = useState(null);
 
-  // Focus management for barcode scanner
+  // Focus management for barcode scanner & weight box
   const barcodeInputRef = useRef(null);
   const weightInputRef = useRef(null);
+
+  // Dimensions Pop-Up Prompt State (3s prompt on scale stabilization)
+  const [dimPromptState, setDimPromptState] = useState(null); // null | 'asking' | 'entering'
+  const [dimCountdown, setDimCountdown] = useState(3);
+  const dimTimerRef = useRef(null);
+  const dimIntervalRef = useRef(null);
+  const dimLengthRef = useRef(null);
 
   // ── WebHID & WebSerial USB Scale Integration (My Weigh UltraShip U2) ──────
   const [serialPort, setSerialPort] = useState(null);
@@ -196,7 +203,11 @@ export default function WeightStationPage() {
     if (match) {
       let val = parseFloat(match[1]);
       let u = (match[2] || 'g').toLowerCase();
-      if (isNaN(val) || val <= 0) return;
+      if (isNaN(val)) return;
+      if (val <= 0) {
+        handleWeightChange('0');
+        return;
+      }
 
       if (u === 'kg') val = val * 1000;
       else if (u === 'lb' || u === 'lbs') val = val * 453.592;
@@ -243,7 +254,12 @@ export default function WeightStationPage() {
         if (match) {
           let val = parseFloat(match[1]);
           let u = (match[2] || 'g').toLowerCase();
-          if (!isNaN(val) && val > 0) {
+          if (!isNaN(val)) {
+            if (val <= 0) {
+              setLastRawPacket(`${hexStr} -> 0${unit}`);
+              handleWeightChange('0');
+              return;
+            }
             if (u === 'kg') val = val * 1000;
             else if (u === 'lb' || u === 'lbs') val = val * 453.592;
             else if (u === 'oz') val = val * 28.3495;
@@ -256,20 +272,35 @@ export default function WeightStationPage() {
       }
     } catch { /* not ascii */ }
 
-    // 2. Try Standard USB POS scale format (try offsets 0, 1, 2)
+    // 2. Standard USB POS Scale Report (HID Usage Page 0x8D)
+    // Supports 5-byte and 6-byte packets (with or without Report ID byte 0x03)
     let weightVal = null;
+    let foundPos = false;
+
     for (let offset = 0; offset <= Math.min(2, data.byteLength - 4); offset++) {
+      const status = data.getUint8(offset);
       const uCode = data.getUint8(offset + 1);
-      // Unit codes: 2=g, 3=kg, 11/0x0B=oz, 12/0x0C=lbs
+
+      // POS Scale unit codes: 2=g, 3=kg, 11/0x0B=oz, 12/0x0C=lbs
       if ([2, 3, 11, 12, 0x02, 0x03, 0x0B, 0x0C].includes(uCode)) {
+        foundPos = true;
         const exp = data.getInt8(offset + 2);
         const raw = data.getUint16(offset + 3, true);
-        if (raw > 0 && exp >= -4 && exp <= 3) {
+
+        // Standard POS Status: 1=Fault, 2=Center of Zero, 3=In Motion, 4=Stable, 5=Under Zero
+        // If center of zero (2), under zero (5), or raw weight is 0, weight is strictly 0g!
+        if (status === 2 || status === 5 || raw === 0) {
+          weightVal = 0;
+          break;
+        }
+
+        if (exp >= -4 && exp <= 3) {
           let calc = raw * Math.pow(10, exp);
           if (uCode === 11 || uCode === 0x0B) calc *= 28.3495;
           else if (uCode === 12 || uCode === 0x0C) calc *= 453.592;
           else if (uCode === 3 || uCode === 0x03) calc *= 1000;
-          if (calc > 0 && calc < 500000) {
+
+          if (calc >= 0 && calc < 500000) {
             weightVal = calc;
             break;
           }
@@ -277,24 +308,19 @@ export default function WeightStationPage() {
       }
     }
 
-    // 3. Fallback: inspect 16-bit integer values across packet
-    if (weightVal == null && data.byteLength >= 4) {
-      for (let offset = 0; offset <= data.byteLength - 2; offset++) {
-        const le = data.getUint16(offset, true);
-        if (le > 0 && le <= 50000) {
-          weightVal = le;
-          break;
-        }
+    if (foundPos && weightVal !== null) {
+      if (weightVal <= 0) {
+        setLastRawPacket(`${hexStr} -> 0${unit}`);
+        handleWeightChange('0');
+      } else {
+        const finalDisplayVal = unit === 'kg' ? (weightVal / 1000).toFixed(3) : Math.round(weightVal);
+        setLastRawPacket(`${hexStr} -> ${finalDisplayVal}${unit}`);
+        handleWeightChange(String(finalDisplayVal));
       }
+      return;
     }
 
-    if (weightVal != null && weightVal > 0) {
-      const finalDisplayVal = unit === 'kg' ? (weightVal / 1000).toFixed(3) : Math.round(weightVal);
-      setLastRawPacket(`${hexStr} -> ${finalDisplayVal}${unit}`);
-      handleWeightChange(String(finalDisplayVal));
-    } else {
-      setLastRawPacket(`${hexStr} (${data.byteLength} bytes)`);
-    }
+    setLastRawPacket(`${hexStr} (${data.byteLength} bytes)`);
   }
 
   // Auto-reconnect previously authorized USB scales on mount
@@ -345,6 +371,7 @@ export default function WeightStationPage() {
     setCountdown(0);
     candidateWeightRef.current = null;
     isUpdatingRef.current = false;
+    closeDimPrompt();
     clearInterval(countdownIntervalRef.current);
     clearTimeout(debounceTimerRef.current);
     clearTimeout(autoSyncTimeoutRef.current);
@@ -407,37 +434,8 @@ export default function WeightStationPage() {
         setSearchError(`No product found with barcode "${query}". If this is a newly added item, click "Reset & Re-sync" above.`);
       } else if (items.length === 1) {
         const prod = items[0];
-        // If this product was already flagged as already-weighed and the user scans it again,
-        // treat the second scan as confirmation to re-weigh!
-        if (prod.already_weighed && alreadyScannedNotice?.sku === prod.sku) {
-          if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
-          setAlreadyScannedNotice(null);
-          scaleMustClearRef.current = false;
-          setScaleMustClear(false);
-          selectProduct(prod);
-          return;
-        }
-
-        if (prod.already_weighed) {
-          playWarningBeep();
-          setAlreadyScannedNotice({
-            sku: prod.sku,
-            name: prod.name,
-            customer: prod.customer_name,
-            weight: prod.last_logged_weight != null ? prod.last_logged_weight : prod.weight_g,
-            unit: prod.last_logged_unit || 'g',
-            user: prod.last_weighed_by,
-            date: prod.last_weighed_at ? new Date(prod.last_weighed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'previously',
-            prod: prod
-          });
-          setBarcodeInput('');
-
-          setTimeout(() => {
-            if (barcodeInputRef.current) barcodeInputRef.current.focus();
-          }, 50);
-        } else {
-          selectProduct(prod);
-        }
+        // Open product spotlight immediately
+        selectProduct(prod);
       } else {
         // Multiple products match (e.g. across multiple customers)
         setSearchResults(items);
@@ -466,7 +464,7 @@ export default function WeightStationPage() {
     if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
   }
 
-  // Start exact 2.0s stabilization countdown
+  // Start exact 3.0s stabilization countdown
   function startStabilization(targetNum) {
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
@@ -475,10 +473,10 @@ export default function WeightStationPage() {
     candidateWeightRef.current = targetNum;
     setStabilized(false);
     setStabilizing(true);
-    setCountdown('2.0');
+    setCountdown('3.0');
 
     const startTime = Date.now();
-    const totalDuration = 2000; // 2.0 seconds stabilization countdown
+    const totalDuration = 3000; // 3.0 seconds stabilization countdown
 
     countdownIntervalRef.current = setInterval(() => {
       const elapsed = Date.now() - startTime;
@@ -514,10 +512,11 @@ export default function WeightStationPage() {
     // Reset weight and stabilization state completely when a barcode is entered.
     // It MUST NOT immediately sync! We wait for the physical item to be weighed.
     clearStabilization();
+    closeDimPrompt();
     setEnteredWeight('');
 
     // If an item is ALREADY physically on the scale before scanning,
-    // initialize the weight and start the full 2.0s stabilization countdown so it NEVER submits immediately.
+    // initialize the weight and start the full 3.0s stabilization countdown so it NEVER submits immediately.
     const liveWeight = parseFloat(currentLiveWeightRef.current);
     const hasLiveWeight = !isNaN(liveWeight) && liveWeight > (unit === 'kg' ? 0.002 : 2);
     if (hasLiveWeight) {
@@ -525,15 +524,16 @@ export default function WeightStationPage() {
       startStabilization(liveWeight);
     }
 
-    // Auto-focus barcode input
+    // Auto-focus the live weight input box immediately
     setTimeout(() => {
-      if (barcodeInputRef.current) {
-        barcodeInputRef.current.focus();
+      if (weightInputRef.current) {
+        weightInputRef.current.focus();
+        weightInputRef.current.select();
       }
-    }, 50);
+    }, 80);
   }
 
-  // Weight input handler with USB scale 2.0s stabilization
+  // Weight input handler with USB scale 3.0s stabilization
   function handleWeightChange(val) {
     currentLiveWeightRef.current = val;
     const num = parseFloat(val);
@@ -546,6 +546,7 @@ export default function WeightStationPage() {
       if (selectedProductRef.current) {
         setEnteredWeight('');
         clearStabilization();
+        closeDimPrompt();
       }
       return;
     }
@@ -569,7 +570,8 @@ export default function WeightStationPage() {
     const isClose = candidateWeightRef.current !== null && Math.abs(num - candidateWeightRef.current) <= tolerance;
 
     if (!isClose) {
-      // Weight shifted or item just placed: restart 2.0s stabilization countdown
+      // Weight shifted or item just placed: close any prompt and restart 3.0s stabilization countdown
+      closeDimPrompt();
       startStabilization(num);
     }
   }
@@ -604,14 +606,16 @@ export default function WeightStationPage() {
     }
   });
 
-  function handleSubmitUpdate(e) {
-    if (e) e.preventDefault();
+  function handleSubmitUpdate(options = {}) {
+    if (options && typeof options.preventDefault === 'function') options.preventDefault();
     if (!selectedProduct || updateMutation.isPending || isUpdatingRef.current) return;
     const finalWeight = parseFloat(enteredWeight);
     if (isNaN(finalWeight) || finalWeight <= 0) {
       alert('Please enter a valid weight from the scale.');
       return;
     }
+
+    const withDims = options?.withDims === true;
 
     updateMutation.mutate({
       product_id: selectedProduct.id,
@@ -624,9 +628,9 @@ export default function WeightStationPage() {
       new_weight: finalWeight,
       weight_unit: unit,
       old_weight: unit === 'kg' ? selectedProduct.weight_kg : selectedProduct.weight_g,
-      new_length: enteredLength ? parseFloat(enteredLength) : null,
-      new_width: enteredWidth ? parseFloat(enteredWidth) : null,
-      new_height: enteredHeight ? parseFloat(enteredHeight) : null,
+      new_length: withDims && enteredLength ? parseFloat(enteredLength) : null,
+      new_width: withDims && enteredWidth ? parseFloat(enteredWidth) : null,
+      new_height: withDims && enteredHeight ? parseFloat(enteredHeight) : null,
       old_length: selectedProduct.length,
       old_width: selectedProduct.width,
       old_height: selectedProduct.height,
@@ -635,7 +639,102 @@ export default function WeightStationPage() {
     });
   }
 
-  // ── ⚡ Hands-Free Auto-Push on Scale Stabilization (2s stabilized) ────────
+  // ── Dimensions Prompt Logic ──────────────────────────────────────────────
+  function closeDimPrompt() {
+    if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
+    if (dimIntervalRef.current) clearInterval(dimIntervalRef.current);
+    setDimPromptState(null);
+  }
+
+  function triggerDimPrompt() {
+    setDimPromptState('asking');
+    setDimCountdown(3);
+
+    if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
+    if (dimIntervalRef.current) clearInterval(dimIntervalRef.current);
+
+    const startTime = Date.now();
+    const duration = 3000; // 3 seconds pop-up
+
+    dimIntervalRef.current = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const left = Math.max(0, Math.ceil((duration - elapsed) / 1000));
+      setDimCountdown(left);
+      if (elapsed >= duration) {
+        clearInterval(dimIntervalRef.current);
+      }
+    }, 100);
+
+    dimTimerRef.current = setTimeout(() => {
+      // 3 seconds elapsed: automatically close pop-up and save weight only!
+      closeDimPrompt();
+      handleSubmitUpdate({ withDims: false });
+    }, duration);
+  }
+
+  function handleAcceptDims() {
+    if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
+    if (dimIntervalRef.current) clearInterval(dimIntervalRef.current);
+    setDimPromptState('entering');
+    setTimeout(() => {
+      if (dimLengthRef.current) {
+        dimLengthRef.current.focus();
+        dimLengthRef.current.select();
+      }
+    }, 80);
+  }
+
+  function handleDeclineDims() {
+    closeDimPrompt();
+    handleSubmitUpdate({ withDims: false });
+  }
+
+  function handleSaveWithDims(e) {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    closeDimPrompt();
+    handleSubmitUpdate({ withDims: true });
+  }
+
+  // Keyboard shortcut listener when asking for dimensions:
+  // "Enter" / "Return" = Yes (open dimensions fields)
+  // "Escape" = No (save weight only)
+  useEffect(() => {
+    if (dimPromptState !== 'asking') return;
+
+    function handleAskingKeyDown(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        handleAcceptDims();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        handleDeclineDims();
+      }
+    }
+
+    window.addEventListener('keydown', handleAskingKeyDown, true);
+    return () => window.removeEventListener('keydown', handleAskingKeyDown, true);
+  }, [dimPromptState]);
+
+  // Keyboard shortcut listener when entering dimensions:
+  // "Escape" = Cancel and save weight only
+  useEffect(() => {
+    if (dimPromptState !== 'entering') return;
+
+    function handleEnteringKeyDown(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        handleDeclineDims();
+      }
+    }
+
+    window.addEventListener('keydown', handleEnteringKeyDown, true);
+    return () => window.removeEventListener('keydown', handleEnteringKeyDown, true);
+  }, [dimPromptState]);
+
+  // ── ⚡ Scale Stabilization (3s stabilized) -> Prompt for Dimensions ────────
   useEffect(() => {
     if (
       autoSyncEnabled &&
@@ -644,15 +743,12 @@ export default function WeightStationPage() {
       !updateMutation.isPending &&
       !isUpdatingRef.current &&
       enteredWeight &&
-      parseFloat(enteredWeight) > 0
+      parseFloat(enteredWeight) > 0 &&
+      dimPromptState === null
     ) {
-      setIsAutoSyncing(true);
-      autoSyncTimeoutRef.current = setTimeout(() => {
-        handleSubmitUpdate();
-      }, 500); // 0.5s confirmation window so operator sees locked weight
-      return () => clearTimeout(autoSyncTimeoutRef.current);
+      triggerDimPrompt();
     }
-  }, [stabilized, autoSyncEnabled, selectedProduct, enteredWeight]);
+  }, [stabilized, autoSyncEnabled, selectedProduct, enteredWeight, dimPromptState]);
 
   // Calculate delta comparison
   const parsedNewWeightG = unit === 'kg' ? (parseFloat(enteredWeight) || 0) * 1000 : (parseFloat(enteredWeight) || 0);
@@ -1160,23 +1256,30 @@ export default function WeightStationPage() {
                   </div>
                 )}
 
-                {/* Current Helm Physical Profile */}
-                <div style={{ marginTop: 'auto', background: '#F8FAFC', borderRadius: 12, padding: 16, border: '1px solid #E2E8F0' }}>
-                  <div style={{ fontSize: 11, fontWeight: 800, color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
-                    Current Recorded Specs in Helm
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    <div style={{ background: '#fff', padding: 10, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 11, color: MUTED }}>Weight</div>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: TITLE }}>
-                        {selectedProduct.weight_g} g <span style={{ fontSize: 12, fontWeight: 500, color: MUTED }}>({selectedProduct.weight_kg} kg)</span>
-                      </div>
+                {/* Previous weigh notification if already recorded */}
+                {selectedProduct.already_weighed && (
+                  <div style={{
+                    marginTop: 10, background: '#FFFBEB', border: '1px solid #FCD34D',
+                    borderRadius: 10, padding: '10px 12px', fontSize: 12, color: '#92400E',
+                    display: 'flex', alignItems: 'flex-start', gap: 8
+                  }}>
+                    <AlertTriangle size={15} color="#D97706" style={{ flexShrink: 0, marginTop: 1 }} />
+                    <div>
+                      <strong>Previously recorded:</strong> {selectedProduct.last_logged_weight != null ? selectedProduct.last_logged_weight : selectedProduct.weight_g} {selectedProduct.last_logged_unit || 'g'}
+                      {selectedProduct.last_weighed_by ? ` by ${selectedProduct.last_weighed_by}` : ''}
+                      {selectedProduct.last_weighed_at ? ` on ${new Date(selectedProduct.last_weighed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}` : ''}.
                     </div>
-                    <div style={{ background: '#fff', padding: 10, borderRadius: 8, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: 11, color: MUTED }}>Dimensions (L×W×H)</div>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: TITLE }}>
-                        {selectedProduct.length || '—'} × {selectedProduct.width || '—'} × {selectedProduct.height || '—'} cm
-                      </div>
+                  </div>
+                )}
+
+                {/* Current Helm Weight Specs */}
+                <div style={{ marginTop: 'auto', background: '#F8FAFC', borderRadius: 12, padding: 16, border: '1px solid #E2E8F0' }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                    Current Recorded Weight in Helm
+                  </div>
+                  <div style={{ background: '#fff', padding: '12px 14px', borderRadius: 8, border: '1px solid #E2E8F0' }}>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: TITLE }}>
+                      {selectedProduct.weight_g != null ? selectedProduct.weight_g : 0} g <span style={{ fontSize: 13, fontWeight: 500, color: MUTED }}>({selectedProduct.weight_kg != null ? selectedProduct.weight_kg : 0} kg)</span>
                     </div>
                   </div>
                 </div>
@@ -1301,48 +1404,6 @@ export default function WeightStationPage() {
                         <span style={{ color: '#94A3B8' }}>Press SEND on scale if needed</span>
                       </div>
                     )}
-                  </div>
-
-                  {/* Optional Dimension Tweaks */}
-                  <div style={{ background: '#F8FAFC', borderRadius: 12, padding: 14, border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: TITLE, marginBottom: 8 }}>
-                      Package Dimensions (Optional - in cm)
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
-                      <div>
-                        <span style={{ fontSize: 11, color: MUTED }}>Length (cm)</span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          placeholder="L"
-                          value={enteredLength}
-                          onChange={(e) => setEnteredLength(e.target.value)}
-                          style={dimInputStyle}
-                        />
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 11, color: MUTED }}>Width (cm)</span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          placeholder="W"
-                          value={enteredWidth}
-                          onChange={(e) => setEnteredWidth(e.target.value)}
-                          style={dimInputStyle}
-                        />
-                      </div>
-                      <div>
-                        <span style={{ fontSize: 11, color: MUTED }}>Height (cm)</span>
-                        <input
-                          type="number"
-                          step="0.1"
-                          placeholder="H"
-                          value={enteredHeight}
-                          onChange={(e) => setEnteredHeight(e.target.value)}
-                          style={dimInputStyle}
-                        />
-                      </div>
-                    </div>
                   </div>
 
                   {/* Operator Notes (Optional) */}
@@ -1695,6 +1756,208 @@ function AuditLogsView() {
             </div>
           )}
         </>
+      )}
+
+      {/* ── 3-Second Dimensions Pop-Up Modal ────────────────────────────── */}
+      {dimPromptState === 'asking' && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 20, maxWidth: 460, width: '100%',
+            padding: '28px 30px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+            border: '1px solid #E2E8F0', textAlign: 'center'
+          }}>
+            <div style={{
+              width: 56, height: 56, borderRadius: 16, background: '#EFF6FF',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              marginBottom: 16, border: '1px solid #BFDBFE'
+            }}>
+              <Ruler size={28} color={ACCENT} />
+            </div>
+
+            <h3 style={{ fontSize: 20, fontWeight: 800, color: TITLE, margin: '0 0 8px 0' }}>
+              Would you like to enter new dimensions?
+            </h3>
+
+            <p style={{ fontSize: 13.5, color: MUTED, margin: '0 0 18px 0', lineHeight: 1.5 }}>
+              Scale locked at <strong style={{ color: TITLE }}>{enteredWeight} {unit}</strong>.
+              Auto-saving weight in <strong style={{ color: ACCENT, fontSize: 16 }}>{dimCountdown}s</strong>...
+            </p>
+
+            {/* Countdown Bar */}
+            <div style={{
+              width: '100%', height: 6, background: '#F1F5F9', borderRadius: 999,
+              overflow: 'hidden', marginBottom: 22
+            }}>
+              <div style={{
+                width: `${(dimCountdown / 3) * 100}%`, height: '100%',
+                background: ACCENT, transition: 'width 0.25s linear'
+              }} />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <button
+                type="button"
+                autoFocus
+                onClick={handleAcceptDims}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  background: ACCENT, color: '#fff', border: 'none', borderRadius: 12,
+                  padding: '13px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(0, 86, 251, 0.3)'
+                }}
+              >
+                <span>Yes</span>
+                <span style={{
+                  fontSize: 11, background: 'rgba(255,255,255,0.25)', padding: '2px 7px',
+                  borderRadius: 4, fontWeight: 700
+                }}>↵ Enter</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDeclineDims}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  background: '#F1F5F9', color: TITLE, border: '1px solid #CBD5E1',
+                  borderRadius: 12, padding: '13px 18px', fontSize: 15, fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                <span>No (Skip)</span>
+                <span style={{
+                  fontSize: 11, background: '#E2E8F0', padding: '2px 7px',
+                  borderRadius: 4, fontWeight: 700, color: MUTED
+                }}>Esc</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dimPromptState === 'entering' && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(4px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 20, maxWidth: 480, width: '100%',
+            padding: '28px 30px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+            border: '1px solid #E2E8F0'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Ruler size={22} color={ACCENT} />
+                <h3 style={{ fontSize: 19, fontWeight: 800, color: TITLE, margin: 0 }}>
+                  Enter Package Dimensions
+                </h3>
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 700, color: ACCENT, background: '#EFF6FF', padding: '3px 8px', borderRadius: 6 }}>
+                cm
+              </span>
+            </div>
+
+            <p style={{ fontSize: 13, color: MUTED, margin: '0 0 18px 0' }}>
+              Weight locked at <strong style={{ color: TITLE }}>{enteredWeight} {unit}</strong>. Press <strong style={{ color: TITLE }}>Enter ↵</strong> to save to Helm.
+            </p>
+
+            <form onSubmit={handleSaveWithDims}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 20 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
+                    Length (cm)
+                  </label>
+                  <input
+                    ref={dimLengthRef}
+                    type="number"
+                    step="0.1"
+                    placeholder="L"
+                    value={enteredLength}
+                    onChange={(e) => setEnteredLength(e.target.value)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
+                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
+                      fontWeight: 700, color: TITLE, outline: 'none'
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
+                    Width (cm)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="W"
+                    value={enteredWidth}
+                    onChange={(e) => setEnteredWidth(e.target.value)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
+                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
+                      fontWeight: 700, color: TITLE, outline: 'none'
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
+                    Height (cm)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="H"
+                    value={enteredHeight}
+                    onChange={(e) => setEnteredHeight(e.target.value)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
+                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
+                      fontWeight: 700, color: TITLE, outline: 'none'
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <button
+                  type="submit"
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    background: '#059669', color: '#fff', border: 'none', borderRadius: 12,
+                    padding: '13px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                    boxShadow: '0 4px 14px rgba(5, 150, 105, 0.3)'
+                  }}
+                >
+                  <span>Save to Helm</span>
+                  <span style={{
+                    fontSize: 11, background: 'rgba(255,255,255,0.25)', padding: '2px 7px',
+                    borderRadius: 4, fontWeight: 700
+                  }}>↵ Enter</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDeclineDims}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    background: '#F1F5F9', color: TITLE, border: '1px solid #CBD5E1',
+                    borderRadius: 12, padding: '13px 18px', fontSize: 15, fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <span>Save Weight Only</span>
+                  <span style={{
+                    fontSize: 11, background: '#E2E8F0', padding: '2px 7px',
+                    borderRadius: 4, fontWeight: 700, color: MUTED
+                  }}>Esc</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );
