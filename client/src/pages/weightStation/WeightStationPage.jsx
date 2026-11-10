@@ -434,8 +434,36 @@ export default function WeightStationPage() {
         setSearchError(`No product found with barcode "${query}". If this is a newly added item, click "Reset & Re-sync" above.`);
       } else if (items.length === 1) {
         const prod = items[0];
-        // Open product spotlight immediately
-        selectProduct(prod);
+        // If this product was already flagged as already-weighed and the user scans it again,
+        // treat the second scan as confirmation to re-weigh!
+        if (prod.already_weighed && alreadyScannedNotice?.sku === prod.sku) {
+          if (alreadyScannedTimerRef.current) clearTimeout(alreadyScannedTimerRef.current);
+          setAlreadyScannedNotice(null);
+          scaleMustClearRef.current = false;
+          setScaleMustClear(false);
+          selectProduct(prod);
+          return;
+        }
+
+        if (prod.already_weighed) {
+          playWarningBeep();
+          setAlreadyScannedNotice({
+            sku: prod.sku,
+            name: prod.name,
+            customer: prod.customer_name,
+            weight: prod.last_logged_weight != null ? prod.last_logged_weight : prod.weight_g,
+            unit: prod.last_logged_unit || 'g',
+            user: prod.last_weighed_by,
+            date: prod.last_weighed_at ? new Date(prod.last_weighed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'previously',
+            prod: prod
+          });
+          setBarcodeInput('');
+          setTimeout(() => {
+            if (barcodeInputRef.current) barcodeInputRef.current.focus();
+          }, 50);
+        } else {
+          selectProduct(prod);
+        }
       } else {
         // Multiple products match (e.g. across multiple customers)
         setSearchResults(items);
@@ -1240,7 +1268,33 @@ export default function WeightStationPage() {
 
           {/* 3. PRODUCT SPOTLIGHT & SCALE WEIGHT CAPTURE STAGE */}
           {selectedProduct && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) minmax(420px, 1.4fr)', gap: 24 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {selectedProduct.already_weighed && (
+                <div style={{
+                  background: '#FEF3C7', border: '2px solid #F59E0B', color: '#92400E',
+                  borderRadius: 14, padding: '14px 18px',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  boxShadow: '0 4px 12px rgba(245, 158, 11, 0.12)'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <AlertTriangle size={22} color="#D97706" style={{ flexShrink: 0 }} />
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: '#B45309' }}>
+                        ALREADY WEIGHED RECENTLY
+                      </div>
+                      <div style={{ fontSize: 13, color: '#78350F', marginTop: 2 }}>
+                        Recorded as <strong>{selectedProduct.last_logged_weight != null ? selectedProduct.last_logged_weight : selectedProduct.weight_g} {selectedProduct.last_logged_unit || 'g'}</strong>
+                        {selectedProduct.last_weighed_by ? ` by ${selectedProduct.last_weighed_by}` : ''} on {selectedProduct.last_weighed_at ? new Date(selectedProduct.last_weighed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'recently'}.
+                      </div>
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 700, background: '#FDE68A', color: '#78350F', padding: '4px 10px', borderRadius: 8 }}>
+                    Re-weigh active
+                  </span>
+                </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) minmax(420px, 1.4fr)', gap: 24 }}>
               {/* Left Column: Product Spotlight Details */}
               <div style={{ background: '#fff', borderRadius: 16, padding: 26, boxShadow: SHADOW, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
@@ -1496,6 +1550,7 @@ export default function WeightStationPage() {
                 </form>
               </div>
             </div>
+            </div>
           )}
 
           {/* Idle Warehouse Prompt */}
@@ -1519,6 +1574,221 @@ export default function WeightStationPage() {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── 3-Second Dimensions Pop-Up Modal ────────────────────────────── */}
+      {dimPromptState === 'asking' && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 99999,
+          background: 'rgba(15, 23, 42, 0.72)', backdropFilter: 'blur(5px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 24, maxWidth: 460, width: '100%',
+            padding: '30px 32px 26px', boxShadow: '0 25px 60px -12px rgba(0,0,0,0.35)',
+            border: '2px solid #E2E8F0', textAlign: 'center'
+          }}>
+            <div style={{
+              width: 58, height: 58, borderRadius: 18, background: '#EFF6FF',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              marginBottom: 14, border: '1px solid #BFDBFE'
+            }}>
+              <Ruler size={30} color={ACCENT} />
+            </div>
+
+            <h2 style={{ fontSize: 22, fontWeight: 800, color: TITLE, margin: '0 0 6px 0' }}>
+              Do you want to enter dimensions?
+            </h2>
+
+            <p style={{ fontSize: 13.5, color: MUTED, margin: '0 0 16px 0' }}>
+              Weight locked at <strong style={{ color: TITLE }}>{enteredWeight} {unit}</strong>
+            </p>
+
+            {/* Prominent Countdown Timer */}
+            <div style={{
+              background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 16,
+              padding: '14px 20px', marginBottom: 20
+            }}>
+              <div style={{
+                fontSize: 54, fontWeight: 900, color: ACCENT, lineHeight: 1,
+                fontVariantNumeric: 'tabular-nums'
+              }}>
+                {dimCountdown}
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: MUTED, marginTop: 4 }}>
+                seconds until auto-saving weight
+              </div>
+              <div style={{
+                width: '100%', height: 6, background: '#E2E8F0', borderRadius: 999,
+                overflow: 'hidden', marginTop: 10
+              }}>
+                <div style={{
+                  width: `${(dimCountdown / 3) * 100}%`, height: '100%',
+                  background: ACCENT, transition: 'width 0.2s linear'
+                }} />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 12 }}>
+              <button
+                type="button"
+                autoFocus
+                onClick={handleAcceptDims}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  background: '#059669', color: '#fff', border: 'none', borderRadius: 14,
+                  padding: '14px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(5, 150, 105, 0.35)'
+                }}
+              >
+                <span>Yes — Enter Dims</span>
+                <span style={{
+                  fontSize: 11, background: 'rgba(255,255,255,0.25)', padding: '2px 7px',
+                  borderRadius: 4, fontWeight: 700
+                }}>↵ Enter</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDeclineDims}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                  background: '#F1F5F9', color: TITLE, border: '1px solid #CBD5E1',
+                  borderRadius: 14, padding: '14px 16px', fontSize: 14.5, fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                <span>Skip</span>
+                <span style={{
+                  fontSize: 11, background: '#E2E8F0', padding: '2px 7px',
+                  borderRadius: 4, fontWeight: 700, color: MUTED
+                }}>Esc</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dimPromptState === 'entering' && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 99999,
+          background: 'rgba(15, 23, 42, 0.72)', backdropFilter: 'blur(5px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div style={{
+            background: '#fff', borderRadius: 20, maxWidth: 480, width: '100%',
+            padding: '28px 30px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
+            border: '1px solid #E2E8F0'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Ruler size={22} color={ACCENT} />
+                <h3 style={{ fontSize: 19, fontWeight: 800, color: TITLE, margin: 0 }}>
+                  Enter Package Dimensions
+                </h3>
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 700, color: ACCENT, background: '#EFF6FF', padding: '3px 8px', borderRadius: 6 }}>
+                cm
+              </span>
+            </div>
+
+            <p style={{ fontSize: 13, color: MUTED, margin: '0 0 18px 0' }}>
+              Weight locked at <strong style={{ color: TITLE }}>{enteredWeight} {unit}</strong>. Press <strong style={{ color: TITLE }}>Enter ↵</strong> to save to Helm.
+            </p>
+
+            <form onSubmit={handleSaveWithDims}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 20 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
+                    Length (cm)
+                  </label>
+                  <input
+                    ref={dimLengthRef}
+                    type="number"
+                    step="0.1"
+                    placeholder="L"
+                    value={enteredLength}
+                    onChange={(e) => setEnteredLength(e.target.value)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
+                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
+                      fontWeight: 700, color: TITLE, outline: 'none'
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
+                    Width (cm)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="W"
+                    value={enteredWidth}
+                    onChange={(e) => setEnteredWidth(e.target.value)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
+                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
+                      fontWeight: 700, color: TITLE, outline: 'none'
+                    }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
+                    Height (cm)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    placeholder="H"
+                    value={enteredHeight}
+                    onChange={(e) => setEnteredHeight(e.target.value)}
+                    style={{
+                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
+                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
+                      fontWeight: 700, color: TITLE, outline: 'none'
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <button
+                  type="submit"
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    background: '#059669', color: '#fff', border: 'none', borderRadius: 12,
+                    padding: '13px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                    boxShadow: '0 4px 14px rgba(5, 150, 105, 0.3)'
+                  }}
+                >
+                  <span>Save to Helm</span>
+                  <span style={{
+                    fontSize: 11, background: 'rgba(255,255,255,0.25)', padding: '2px 7px',
+                    borderRadius: 4, fontWeight: 700
+                  }}>↵ Enter</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDeclineDims}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    background: '#F1F5F9', color: TITLE, border: '1px solid #CBD5E1',
+                    borderRadius: 12, padding: '13px 18px', fontSize: 15, fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <span>Save Weight Only</span>
+                  <span style={{
+                    fontSize: 11, background: '#E2E8F0', padding: '2px 7px',
+                    borderRadius: 4, fontWeight: 700, color: MUTED
+                  }}>Esc</span>
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
@@ -1789,221 +2059,6 @@ function AuditLogsView() {
             </div>
           )}
         </>
-      )}
-
-      {/* ── 3-Second Dimensions Pop-Up Modal ────────────────────────────── */}
-      {dimPromptState === 'asking' && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 99999,
-          background: 'rgba(15, 23, 42, 0.72)', backdropFilter: 'blur(5px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
-        }}>
-          <div style={{
-            background: '#fff', borderRadius: 24, maxWidth: 460, width: '100%',
-            padding: '30px 32px 26px', boxShadow: '0 25px 60px -12px rgba(0,0,0,0.35)',
-            border: '2px solid #E2E8F0', textAlign: 'center'
-          }}>
-            <div style={{
-              width: 58, height: 58, borderRadius: 18, background: '#EFF6FF',
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              marginBottom: 14, border: '1px solid #BFDBFE'
-            }}>
-              <Ruler size={30} color={ACCENT} />
-            </div>
-
-            <h2 style={{ fontSize: 22, fontWeight: 800, color: TITLE, margin: '0 0 6px 0' }}>
-              Do you want to enter dimensions?
-            </h2>
-
-            <p style={{ fontSize: 13.5, color: MUTED, margin: '0 0 16px 0' }}>
-              Weight locked at <strong style={{ color: TITLE }}>{enteredWeight} {unit}</strong>
-            </p>
-
-            {/* Prominent Countdown Timer */}
-            <div style={{
-              background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 16,
-              padding: '14px 20px', marginBottom: 20
-            }}>
-              <div style={{
-                fontSize: 54, fontWeight: 900, color: ACCENT, lineHeight: 1,
-                fontVariantNumeric: 'tabular-nums'
-              }}>
-                {dimCountdown}
-              </div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: MUTED, marginTop: 4 }}>
-                seconds until auto-saving weight
-              </div>
-              <div style={{
-                width: '100%', height: 6, background: '#E2E8F0', borderRadius: 999,
-                overflow: 'hidden', marginTop: 10
-              }}>
-                <div style={{
-                  width: `${(dimCountdown / 3) * 100}%`, height: '100%',
-                  background: ACCENT, transition: 'width 0.2s linear'
-                }} />
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 12 }}>
-              <button
-                type="button"
-                autoFocus
-                onClick={handleAcceptDims}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  background: '#059669', color: '#fff', border: 'none', borderRadius: 14,
-                  padding: '14px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer',
-                  boxShadow: '0 4px 14px rgba(5, 150, 105, 0.35)'
-                }}
-              >
-                <span>Yes — Enter Dims</span>
-                <span style={{
-                  fontSize: 11, background: 'rgba(255,255,255,0.25)', padding: '2px 7px',
-                  borderRadius: 4, fontWeight: 700
-                }}>↵ Enter</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleDeclineDims}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  background: '#F1F5F9', color: TITLE, border: '1px solid #CBD5E1',
-                  borderRadius: 14, padding: '14px 16px', fontSize: 14.5, fontWeight: 700,
-                  cursor: 'pointer'
-                }}
-              >
-                <span>Skip</span>
-                <span style={{
-                  fontSize: 11, background: '#E2E8F0', padding: '2px 7px',
-                  borderRadius: 4, fontWeight: 700, color: MUTED
-                }}>Esc</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {dimPromptState === 'entering' && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(4px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
-        }}>
-          <div style={{
-            background: '#fff', borderRadius: 20, maxWidth: 480, width: '100%',
-            padding: '28px 30px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
-            border: '1px solid #E2E8F0'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Ruler size={22} color={ACCENT} />
-                <h3 style={{ fontSize: 19, fontWeight: 800, color: TITLE, margin: 0 }}>
-                  Enter Package Dimensions
-                </h3>
-              </div>
-              <span style={{ fontSize: 12, fontWeight: 700, color: ACCENT, background: '#EFF6FF', padding: '3px 8px', borderRadius: 6 }}>
-                cm
-              </span>
-            </div>
-
-            <p style={{ fontSize: 13, color: MUTED, margin: '0 0 18px 0' }}>
-              Weight locked at <strong style={{ color: TITLE }}>{enteredWeight} {unit}</strong>. Press <strong style={{ color: TITLE }}>Enter ↵</strong> to save to Helm.
-            </p>
-
-            <form onSubmit={handleSaveWithDims}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 20 }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
-                    Length (cm)
-                  </label>
-                  <input
-                    ref={dimLengthRef}
-                    type="number"
-                    step="0.1"
-                    placeholder="L"
-                    value={enteredLength}
-                    onChange={(e) => setEnteredLength(e.target.value)}
-                    style={{
-                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
-                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
-                      fontWeight: 700, color: TITLE, outline: 'none'
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
-                    Width (cm)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    placeholder="W"
-                    value={enteredWidth}
-                    onChange={(e) => setEnteredWidth(e.target.value)}
-                    style={{
-                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
-                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
-                      fontWeight: 700, color: TITLE, outline: 'none'
-                    }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 11.5, fontWeight: 700, color: TITLE, marginBottom: 5 }}>
-                    Height (cm)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    placeholder="H"
-                    value={enteredHeight}
-                    onChange={(e) => setEnteredHeight(e.target.value)}
-                    style={{
-                      width: '100%', boxSizing: 'border-box', padding: '10px 12px',
-                      borderRadius: 10, border: '2px solid #CBD5E1', fontSize: 15,
-                      fontWeight: 700, color: TITLE, outline: 'none'
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                <button
-                  type="submit"
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    background: '#059669', color: '#fff', border: 'none', borderRadius: 12,
-                    padding: '13px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer',
-                    boxShadow: '0 4px 14px rgba(5, 150, 105, 0.3)'
-                  }}
-                >
-                  <span>Save to Helm</span>
-                  <span style={{
-                    fontSize: 11, background: 'rgba(255,255,255,0.25)', padding: '2px 7px',
-                    borderRadius: 4, fontWeight: 700
-                  }}>↵ Enter</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleDeclineDims}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    background: '#F1F5F9', color: TITLE, border: '1px solid #CBD5E1',
-                    borderRadius: 12, padding: '13px 18px', fontSize: 15, fontWeight: 700,
-                    cursor: 'pointer'
-                  }}
-                >
-                  <span>Save Weight Only</span>
-                  <span style={{
-                    fontSize: 11, background: '#E2E8F0', padding: '2px 7px',
-                    borderRadius: 4, fontWeight: 700, color: MUTED
-                  }}>Esc</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
       )}
     </div>
   );
