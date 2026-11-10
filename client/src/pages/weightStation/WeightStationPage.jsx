@@ -120,10 +120,13 @@ export default function WeightStationPage() {
 
   // Dimensions Pop-Up Prompt State (3s prompt on scale stabilization)
   const [dimPromptState, setDimPromptState] = useState(null); // null | 'asking' | 'entering'
+  const dimPromptStateRef = useRef(null);
   const [dimCountdown, setDimCountdown] = useState(3);
   const dimTimerRef = useRef(null);
   const dimIntervalRef = useRef(null);
   const dimLengthRef = useRef(null);
+  const stabilizingRef = useRef(false);
+  const stabilizedRef = useRef(false);
 
   // ── WebHID & WebSerial USB Scale Integration (My Weigh UltraShip U2) ──────
   const [serialPort, setSerialPort] = useState(null);
@@ -273,51 +276,48 @@ export default function WeightStationPage() {
     } catch { /* not ascii */ }
 
     // 2. Standard USB POS Scale Report (HID Usage Page 0x8D)
-    // Supports 5-byte and 6-byte packets (with or without Report ID byte 0x03)
-    let weightVal = null;
-    let foundPos = false;
-
-    for (let offset = 0; offset <= Math.min(2, data.byteLength - 4); offset++) {
-      const status = data.getUint8(offset);
-      const uCode = data.getUint8(offset + 1);
-
-      // POS Scale unit codes: 2=g, 3=kg, 11/0x0B=oz, 12/0x0C=lbs
-      if ([2, 3, 11, 12, 0x02, 0x03, 0x0B, 0x0C].includes(uCode)) {
-        foundPos = true;
-        const exp = data.getInt8(offset + 2);
-        const raw = data.getUint16(offset + 3, true);
-
-        // Standard POS Status: 1=Fault, 2=Center of Zero, 3=In Motion, 4=Stable, 5=Under Zero
-        // If center of zero (2), under zero (5), or raw weight is 0, weight is strictly 0g!
-        if (status === 2 || status === 5 || raw === 0) {
-          weightVal = 0;
-          break;
-        }
-
-        if (exp >= -4 && exp <= 3) {
-          let calc = raw * Math.pow(10, exp);
-          if (uCode === 11 || uCode === 0x0B) calc *= 28.3495;
-          else if (uCode === 12 || uCode === 0x0C) calc *= 453.592;
-          else if (uCode === 3 || uCode === 0x03) calc *= 1000;
-
-          if (calc >= 0 && calc < 500000) {
-            weightVal = calc;
-            break;
-          }
-        }
-      }
+    // Detect whether Report ID is byte 0 (offset 1) or omitted (offset 0)
+    let bestOffset = -1;
+    if (
+      data.byteLength >= 6 &&
+      [1, 2, 3, 4, 5, 6, 7, 8].includes(data.getUint8(1)) &&
+      [2, 3, 11, 12, 0x02, 0x03, 0x0B, 0x0C].includes(data.getUint8(2))
+    ) {
+      bestOffset = 1;
+    } else if (
+      data.byteLength >= 5 &&
+      [1, 2, 3, 4, 5, 6, 7, 8].includes(data.getUint8(0)) &&
+      [2, 3, 11, 12, 0x02, 0x03, 0x0B, 0x0C].includes(data.getUint8(1))
+    ) {
+      bestOffset = 0;
     }
 
-    if (foundPos && weightVal !== null) {
-      if (weightVal <= 0) {
+    if (bestOffset !== -1) {
+      const status = data.getUint8(bestOffset);
+      const uCode = data.getUint8(bestOffset + 1);
+      const exp = data.getInt8(bestOffset + 2);
+      const raw = data.getUint16(bestOffset + 3, true);
+
+      // Status: 2 = Center of Zero, 5 = Under Zero, or raw weight is 0
+      if (status === 2 || status === 5 || raw === 0) {
         setLastRawPacket(`${hexStr} -> 0${unit}`);
         handleWeightChange('0');
-      } else {
-        const finalDisplayVal = unit === 'kg' ? (weightVal / 1000).toFixed(3) : Math.round(weightVal);
-        setLastRawPacket(`${hexStr} -> ${finalDisplayVal}${unit}`);
-        handleWeightChange(String(finalDisplayVal));
+        return;
       }
-      return;
+
+      if (exp >= -4 && exp <= 3) {
+        let calc = raw * Math.pow(10, exp);
+        if (uCode === 11 || uCode === 0x0B) calc *= 28.3495;
+        else if (uCode === 12 || uCode === 0x0C) calc *= 453.592;
+        else if (uCode === 3 || uCode === 0x03) calc *= 1000;
+
+        if (calc >= 0 && calc < 500000) {
+          const finalDisplayVal = unit === 'kg' ? (calc / 1000).toFixed(3) : Math.round(calc);
+          setLastRawPacket(`${hexStr} -> ${finalDisplayVal}${unit}`);
+          handleWeightChange(String(finalDisplayVal));
+          return;
+        }
+      }
     }
 
     setLastRawPacket(`${hexStr} (${data.byteLength} bytes)`);
@@ -459,6 +459,8 @@ export default function WeightStationPage() {
     setStabilized(false);
     setIsAutoSyncing(false);
     setCountdown(0);
+    stabilizingRef.current = false;
+    stabilizedRef.current = false;
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
     if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
@@ -471,6 +473,8 @@ export default function WeightStationPage() {
     if (autoSyncTimeoutRef.current) clearTimeout(autoSyncTimeoutRef.current);
 
     candidateWeightRef.current = targetNum;
+    stabilizingRef.current = true;
+    stabilizedRef.current = false;
     setStabilized(false);
     setStabilizing(true);
     setCountdown('3.0');
@@ -488,9 +492,14 @@ export default function WeightStationPage() {
     }, 100);
 
     debounceTimerRef.current = setTimeout(() => {
+      stabilizingRef.current = false;
+      stabilizedRef.current = true;
       setStabilizing(false);
       setStabilized(true);
       setCountdown(0);
+
+      // 3 seconds complete: directly pop up "Do you want to enter dimensions?"!
+      triggerDimPrompt();
     }, totalDuration);
   }
 
@@ -510,13 +519,11 @@ export default function WeightStationPage() {
     setEnteredHeight(prod.height ? String(prod.height) : '');
 
     // Reset weight and stabilization state completely when a barcode is entered.
-    // It MUST NOT immediately sync! We wait for the physical item to be weighed.
     clearStabilization();
     closeDimPrompt();
     setEnteredWeight('');
 
-    // If an item is ALREADY physically on the scale before scanning,
-    // initialize the weight and start the full 3.0s stabilization countdown so it NEVER submits immediately.
+    // If an item is ALREADY physically on the scale before scanning
     const liveWeight = parseFloat(currentLiveWeightRef.current);
     const hasLiveWeight = !isNaN(liveWeight) && liveWeight > (unit === 'kg' ? 0.002 : 2);
     if (hasLiveWeight) {
@@ -533,7 +540,7 @@ export default function WeightStationPage() {
     }, 80);
   }
 
-  // Weight input handler with USB scale 3.0s stabilization
+  // Weight input handler with 3.0s stabilization
   function handleWeightChange(val) {
     currentLiveWeightRef.current = val;
     const num = parseFloat(val);
@@ -561,19 +568,40 @@ export default function WeightStationPage() {
       return;
     }
 
+    // CRITICAL: If the dimensions dialog is already active (asking or entering),
+    // incoming scale jitter MUST NOT touch it or close it!
+    if (dimPromptStateRef.current !== null) {
+      return;
+    }
+
     // Product is selected and a valid item is on the scale:
     setEnteredWeight(val);
     setUpdateError(null);
 
-    // Tolerance for stability (±2 grams or ±0.002 kg)
-    const tolerance = unit === 'kg' ? 0.002 : 2;
-    const isClose = candidateWeightRef.current !== null && Math.abs(num - candidateWeightRef.current) <= tolerance;
-
-    if (!isClose) {
-      // Weight shifted or item just placed: close any prompt and restart 3.0s stabilization countdown
-      closeDimPrompt();
-      startStabilization(num);
+    // If we are currently stabilizing, update the candidate weight to track settling,
+    // but DO NOT restart the 3.0s timer for micro-jitter!
+    // Only restart if the weight changed drastically (e.g. item swapped, > 100g or > 50%).
+    if (stabilizingRef.current) {
+      const prev = candidateWeightRef.current;
+      const isHugeChange = prev !== null && Math.abs(num - prev) > Math.max(100, prev * 0.5);
+      if (isHugeChange) {
+        startStabilization(num);
+      }
+      return;
     }
+
+    // If already stabilized, don't restart unless item was swapped for a different weight
+    if (stabilizedRef.current) {
+      const prev = candidateWeightRef.current;
+      const isHugeChange = prev !== null && Math.abs(num - prev) > Math.max(100, prev * 0.5);
+      if (isHugeChange) {
+        startStabilization(num);
+      }
+      return;
+    }
+
+    // Item placed on scale: start the 3.0s stabilization countdown
+    startStabilization(num);
   }
 
   // Update Mutation
@@ -643,10 +671,13 @@ export default function WeightStationPage() {
   function closeDimPrompt() {
     if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
     if (dimIntervalRef.current) clearInterval(dimIntervalRef.current);
+    dimPromptStateRef.current = null;
     setDimPromptState(null);
   }
 
   function triggerDimPrompt() {
+    if (dimPromptStateRef.current !== null) return;
+    dimPromptStateRef.current = 'asking';
     setDimPromptState('asking');
     setDimCountdown(3);
 
@@ -673,8 +704,10 @@ export default function WeightStationPage() {
   }
 
   function handleAcceptDims() {
+    // Interrupted by Enter! Stop the 3-second countdown timer immediately
     if (dimTimerRef.current) clearTimeout(dimTimerRef.current);
     if (dimIntervalRef.current) clearInterval(dimIntervalRef.current);
+    dimPromptStateRef.current = 'entering';
     setDimPromptState('entering');
     setTimeout(() => {
       if (dimLengthRef.current) {
@@ -696,7 +729,7 @@ export default function WeightStationPage() {
   }
 
   // Keyboard shortcut listener when asking for dimensions:
-  // "Enter" / "Return" = Yes (open dimensions fields)
+  // "Enter" / "Return" = Interrupt countdown and open dimensions fields
   // "Escape" = No (save weight only)
   useEffect(() => {
     if (dimPromptState !== 'asking') return;
@@ -1761,56 +1794,69 @@ function AuditLogsView() {
       {/* ── 3-Second Dimensions Pop-Up Modal ────────────────────────────── */}
       {dimPromptState === 'asking' && (
         <div style={{
-          position: 'fixed', inset: 0, zIndex: 9999,
-          background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(4px)',
+          position: 'fixed', inset: 0, zIndex: 99999,
+          background: 'rgba(15, 23, 42, 0.72)', backdropFilter: 'blur(5px)',
           display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
         }}>
           <div style={{
-            background: '#fff', borderRadius: 20, maxWidth: 460, width: '100%',
-            padding: '28px 30px', boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)',
-            border: '1px solid #E2E8F0', textAlign: 'center'
+            background: '#fff', borderRadius: 24, maxWidth: 460, width: '100%',
+            padding: '30px 32px 26px', boxShadow: '0 25px 60px -12px rgba(0,0,0,0.35)',
+            border: '2px solid #E2E8F0', textAlign: 'center'
           }}>
             <div style={{
-              width: 56, height: 56, borderRadius: 16, background: '#EFF6FF',
+              width: 58, height: 58, borderRadius: 18, background: '#EFF6FF',
               display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              marginBottom: 16, border: '1px solid #BFDBFE'
+              marginBottom: 14, border: '1px solid #BFDBFE'
             }}>
-              <Ruler size={28} color={ACCENT} />
+              <Ruler size={30} color={ACCENT} />
             </div>
 
-            <h3 style={{ fontSize: 20, fontWeight: 800, color: TITLE, margin: '0 0 8px 0' }}>
-              Would you like to enter new dimensions?
-            </h3>
+            <h2 style={{ fontSize: 22, fontWeight: 800, color: TITLE, margin: '0 0 6px 0' }}>
+              Do you want to enter dimensions?
+            </h2>
 
-            <p style={{ fontSize: 13.5, color: MUTED, margin: '0 0 18px 0', lineHeight: 1.5 }}>
-              Scale locked at <strong style={{ color: TITLE }}>{enteredWeight} {unit}</strong>.
-              Auto-saving weight in <strong style={{ color: ACCENT, fontSize: 16 }}>{dimCountdown}s</strong>...
+            <p style={{ fontSize: 13.5, color: MUTED, margin: '0 0 16px 0' }}>
+              Weight locked at <strong style={{ color: TITLE }}>{enteredWeight} {unit}</strong>
             </p>
 
-            {/* Countdown Bar */}
+            {/* Prominent Countdown Timer */}
             <div style={{
-              width: '100%', height: 6, background: '#F1F5F9', borderRadius: 999,
-              overflow: 'hidden', marginBottom: 22
+              background: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 16,
+              padding: '14px 20px', marginBottom: 20
             }}>
               <div style={{
-                width: `${(dimCountdown / 3) * 100}%`, height: '100%',
-                background: ACCENT, transition: 'width 0.25s linear'
-              }} />
+                fontSize: 54, fontWeight: 900, color: ACCENT, lineHeight: 1,
+                fontVariantNumeric: 'tabular-nums'
+              }}>
+                {dimCountdown}
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: MUTED, marginTop: 4 }}>
+                seconds until auto-saving weight
+              </div>
+              <div style={{
+                width: '100%', height: 6, background: '#E2E8F0', borderRadius: 999,
+                overflow: 'hidden', marginTop: 10
+              }}>
+                <div style={{
+                  width: `${(dimCountdown / 3) * 100}%`, height: '100%',
+                  background: ACCENT, transition: 'width 0.2s linear'
+                }} />
+              </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr', gap: 12 }}>
               <button
                 type="button"
                 autoFocus
                 onClick={handleAcceptDims}
                 style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                  background: ACCENT, color: '#fff', border: 'none', borderRadius: 12,
-                  padding: '13px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer',
-                  boxShadow: '0 4px 14px rgba(0, 86, 251, 0.3)'
+                  background: '#059669', color: '#fff', border: 'none', borderRadius: 14,
+                  padding: '14px 18px', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                  boxShadow: '0 4px 14px rgba(5, 150, 105, 0.35)'
                 }}
               >
-                <span>Yes</span>
+                <span>Yes — Enter Dims</span>
                 <span style={{
                   fontSize: 11, background: 'rgba(255,255,255,0.25)', padding: '2px 7px',
                   borderRadius: 4, fontWeight: 700
@@ -1823,11 +1869,11 @@ function AuditLogsView() {
                 style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                   background: '#F1F5F9', color: TITLE, border: '1px solid #CBD5E1',
-                  borderRadius: 12, padding: '13px 18px', fontSize: 15, fontWeight: 700,
+                  borderRadius: 14, padding: '14px 16px', fontSize: 14.5, fontWeight: 700,
                   cursor: 'pointer'
                 }}
               >
-                <span>No (Skip)</span>
+                <span>Skip</span>
                 <span style={{
                   fontSize: 11, background: '#E2E8F0', padding: '2px 7px',
                   borderRadius: 4, fontWeight: 700, color: MUTED
